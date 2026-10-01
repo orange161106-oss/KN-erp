@@ -9,6 +9,7 @@ from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging
 from app.db.session import create_db_engine, create_session_factory
 from app.security.passwords import PasswordService
+from app.api.production import router as production_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -33,7 +34,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(title="KN Consumable ERP", version="0.1.0", lifespan=lifespan)
     register_error_handlers(application)
+    
+    # Existing router
     application.include_router(api_router)
+    
+    # Attach your new production router here!
+    application.include_router(production_router, prefix="/api/v1")
+    
     return application
 
 
