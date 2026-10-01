@@ -7,6 +7,14 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.db.session import get_db
 from app.main import create_app
+from app.security.passwords import PasswordService
+
+TEST_SIGNING_KEY = "synthetic-test-key-never-use-in-production-0123456789"
+
+
+@pytest.fixture(scope="session")
+def passwords():
+    return PasswordService()
 
 
 @pytest.fixture
@@ -14,6 +22,7 @@ def settings():
     return Settings(
         _env_file=None, app_env="test",
         database_url="postgresql+psycopg://test_user@127.0.0.1/kn_unit_test",
+        auth_secret_key=TEST_SIGNING_KEY,
     )
 
 

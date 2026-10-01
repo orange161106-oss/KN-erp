@@ -2,6 +2,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings, load_settings
+from app.main import create_app
+from fastapi.testclient import TestClient
 
 URL = "postgresql://test_user:test_password@127.0.0.1/kn_unit_test"
 
@@ -49,3 +51,25 @@ def test_database_url_is_required(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("secret", ["short-sensitive-key", " " * 32])
+def test_invalid_signing_keys_are_rejected_and_hidden(secret):
+    with pytest.raises(ValidationError) as error:
+        Settings(_env_file=None, database_url=URL, auth_secret_key=secret)
+    assert secret not in str(error.value)
+
+
+def test_missing_signing_key_blocks_app_but_not_schema_settings(monkeypatch):
+    monkeypatch.delenv("AUTH_SECRET_KEY", raising=False)
+    configuration = Settings(_env_file=None, database_url=URL)
+    assert configuration.sqlalchemy_url.drivername == "postgresql+psycopg"
+    with pytest.raises(RuntimeError, match="auth_secret_key"):
+        with TestClient(create_app(configuration)):
+            pass
+
+
+@pytest.mark.parametrize("minutes", [0, -1, 61])
+def test_invalid_token_lifetimes_are_rejected(minutes):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, database_url=URL, auth_access_token_expire_minutes=minutes)
