@@ -38,6 +38,25 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     database_url: SecretStr
     db_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
+    # Schema-only Alembic operations do not need the application's signing key.
+    auth_secret_key: SecretStr | None = None
+    auth_access_token_expire_minutes: int = Field(default=15, ge=1, le=60)
+    auth_token_issuer: str = Field(default="kn-consumable-erp", min_length=1)
+    auth_token_audience: str = Field(default="kn-consumable-web", min_length=1)
+
+    @field_validator("auth_secret_key")
+    @classmethod
+    def validate_auth_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None:
+            secret = value.get_secret_value()
+            if len(secret.encode("utf-8")) < 32 or not secret.strip():
+                raise ValueError("Use an operator-generated signing secret of at least 32 UTF-8 bytes")
+        return value
+
+    def signing_key(self) -> str:
+        if self.auth_secret_key is None:
+            raise RuntimeError("Invalid backend settings: auth_secret_key")
+        return self.auth_secret_key.get_secret_value()
 
     @field_validator("database_url")
     @classmethod

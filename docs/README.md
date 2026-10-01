@@ -33,3 +33,8 @@ If code and documentation disagree, stop and resolve the conflict before continu
 
 ## Golden rule
 AI must never invent a manufacturing/business rule. Unknown rules must be marked `TBD`.
+
+## Shared implementation contracts
+
+- [M1.3 authentication and RBAC](13_AUTH_RBAC_CONTRACT.md): schema, login/current-user
+  API, centralized permission checks, token configuration and remaining authority TBDs.

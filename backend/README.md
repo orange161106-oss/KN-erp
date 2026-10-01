@@ -1,6 +1,9 @@
 # KN Consumable ERP backend
 
-M1.1 backend and database foundation. Owner: Munees. Reviewer: Yathish.
+Backend and database foundation (M1.1) plus authentication/RBAC foundation (M1.3).
+Owner: Munees. M1.1 reviewer: Yathish. M1.3 reviewer: Keerthi.
+
+The shared auth schema/API contract is in [docs/13_AUTH_RBAC_CONTRACT.md](../docs/13_AUTH_RBAC_CONTRACT.md).
 
 ## Requirements and installation
 
@@ -22,7 +25,9 @@ and repeat the complete validation before review.
 
 Edit the ignored `backend/.env` locally, or supply process environment variables.
 The example file deliberately contains names with blank values only. Blank optional
-values use defaults; `DATABASE_URL` is required and cannot remain blank.
+values use defaults; `DATABASE_URL` and `AUTH_SECRET_KEY` are required for application
+startup and cannot remain blank. Schema-only Alembic commands require the database
+URL but do not require a signing key.
 
 | Name | Meaning / default |
 | --- | --- |
@@ -32,6 +37,10 @@ values use defaults; `DATABASE_URL` is required and cannot remain blank.
 | `DATABASE_URL` | Required PostgreSQL URL; no default |
 | `DB_CONNECT_TIMEOUT_SECONDS` | Connection/pool acquisition timeout; integer 1–60, default 5 |
 | `TEST_DATABASE_URL` | Test-only disposable PostgreSQL database; read by integration tests |
+| `AUTH_SECRET_KEY` | Required operator-generated secret, at least 32 UTF-8 bytes; no default |
+| `AUTH_ACCESS_TOKEN_EXPIRE_MINUTES` | Access-token lifetime, integer 1–60; default 15 |
+| `AUTH_TOKEN_ISSUER` | Expected JWT issuer; default `kn-consumable-erp` |
+| `AUTH_TOKEN_AUDIENCE` | Expected JWT audience; default `kn-consumable-web` |
 
 Connection URL format:
 `postgresql+psycopg://<username>:<url-encoded-password>@<host>:<port>/<database>`.
@@ -48,6 +57,9 @@ Unknown dotenv entries are ignored so shared local configuration can coexist.
 Database URLs use a secret type and are omitted from application logs/errors.
 Invalid startup settings report field names only. No real credentials belong in
 tracked files. Sessions configure the PostgreSQL timezone to UTC.
+Generate the signing key with a cryptographic secret generator, then supply it
+through the local environment/secret store. Do not reuse sample values or database
+passwords as signing keys. Startup fails when the key is missing or too short.
 
 ## Database migrations
 
@@ -64,8 +76,10 @@ this backend does not create databases or provision system services.
 On Linux/macOS, replace `.venv/Scripts/python.exe` with `.venv/bin/python`.
 Alternatively, `uv run --frozen --no-sync` can invoke the installed tools.
 
-The single `0001_backend_foundation` revision is intentionally empty. An upgrade
-creates only Alembic's `alembic_version` table. There are no business tables.
+The existing `0001_backend_foundation` revision remains unchanged and intentionally
+empty. The new `0002_auth_rbac` head adds `users`, `roles`, `permissions`, `user_roles`
+and `role_permissions`. It seeds only the seven approved role categories; no accounts,
+permissions or grants are seeded. ADMIN has no automatic permission bypass.
 Application startup never runs migrations or `metadata.create_all()`.
 
 For future models, use `app.db.base.Base`, import model modules in
@@ -98,9 +112,62 @@ database readiness check, so successful startup alone does not prove connectivit
 - HTTP 503: `{"code":"DATABASE_UNAVAILABLE","message":"Database is unavailable.","details":{}}`.
 
 The endpoint is public and exposes no credentials, hostnames or database names.
-Business endpoints, authentication, permission checks, frontend screens, audit
-tables and domain rules are outside M1.1. Future business routes must enforce
-server-side authorization.
+Business endpoints, frontend screens, audit tables and domain rules remain outside
+this foundation. The authentication endpoints described below are added in M1.3.
+Future business routes must enforce server-side authorization and approved resource
+scope checks.
+
+## Authentication and permissions
+
+`POST /api/v1/auth/login` accepts JSON `{username, password}`. Usernames are trimmed
+and case-folded; passwords are preserved exactly. Argon2id hashes are verified with
+`pwdlib`. Unknown users, wrong passwords and inactive accounts share the same 401
+`INVALID_CREDENTIALS` response. There are no default users or passwords.
+
+A successful login returns `access_token`, `token_type: "bearer"`, and `expires_in`
+in seconds. Send the token as `Authorization: Bearer <access_token>` when calling
+`GET /api/v1/auth/me`. It returns `id`, `username`, sorted `roles`, and sorted
+effective `permissions`; password hashes are excluded. Successful auth responses
+send `Cache-Control: no-store` and `Pragma: no-cache`.
+
+HTTP bearer authentication is documented in OpenAPI. The login accepts JSON rather
+than an OAuth2 password form. In Swagger UI, obtain a token through the login endpoint
+and paste it into the bearer Authorize field.
+
+JWT access tokens use a fixed HS256 algorithm and require validated `sub`, `iat`,
+`exp`, `iss`, `aud`, and `token_type=access` claims. No permission grants are stored
+in the token. The backend reloads the active user and current grants from PostgreSQL
+on every authenticated request. Invalid/missing tokens, missing users or inactive
+users produce 401 `NOT_AUTHENTICATED`; missing required permissions produce
+403 `PERMISSION_DENIED`. Database failures produce 503 `DATABASE_UNAVAILABLE`.
+
+Future routes can use the centralized dependencies:
+
+```python
+from typing import Annotated
+from fastapi import Depends
+from app.schemas.auth import CurrentUser
+from app.security.dependencies import get_current_user
+from app.security.permissions import require_permissions
+
+# Authentication-only route parameter:
+user: Annotated[CurrentUser, Depends(get_current_user)]
+
+# Permission-protected route parameter, using approved permission codes:
+user: Annotated[CurrentUser, Depends(require_permissions("<approved-permission-code>"))]
+```
+
+`require_permissions` requires every supplied code. Empty requirements are rejected;
+unknown/unconfigured permissions deny access. Role/permission assignments remain
+data configuration. Initial account provisioning and audited role administration
+are TBD, with no public registration or user/role/grant mutation endpoint in M1.3.
+
+Plant access and approval authority remain TBD and need separate resource checks.
+Client logout discards the token; there is no refresh or logout-revocation endpoint.
+A copied token remains usable until expiry unless its user is deactivated. HTTPS,
+login throttling, account recovery and deployment session policy remain deployment
+decisions. Keerthi's M1.4 frontend should consume `/auth/me` for navigation permissions
+and continue to rely on backend enforcement.
 
 ## Shared conventions
 
@@ -115,8 +182,9 @@ server-side authorization.
   (500) with a generic message. HTTP exception headers are preserved.
 - Application log events are JSON with UTC timestamp, level, logger and event.
   PostgreSQL failures log a fixed event, without exception text or SQL parameters.
-- Business-domain and worker directories are placeholders. No Celery/Redis,
-  inventory/purchasing logic or business tables are introduced.
+- Business-domain and worker directories are placeholders. Authentication has its
+  own thin module router, schemas, services, repository and security helpers.
+  No Celery/Redis or inventory/purchasing logic is introduced.
 
 ## Tests
 
@@ -136,19 +204,24 @@ For full validation, provision a separate, disposable database whose name ends i
 Integration tests read `TEST_DATABASE_URL` from the process environment, rather than
 loading it from `.env`. Without it they explicitly skip. A configured but unreachable
 test server causes failure, not a skip. The test database must differ from the
-application database and contain no public tables except an existing Alembic version
-table. These safeguards support repeated local validation; use a dedicated test user
-with access only to the disposable database.
+application database. Tests create a uniquely named `m13_test_*` schema, apply
+migrations there, and remove only that schema at teardown. Synthetic user/grant
+changes run inside rollback-only test transactions. Use a dedicated test user with
+schema-creation permissions only in the disposable database.
 
 The tests cover settings, secret-safe error responses, health success/failure,
 session cleanup, engine shutdown, PostgreSQL connectivity/UTC, uncommitted write
 rollback using temporary tables, and baseline upgrade/check/downgrade/re-upgrade.
-Migration round trips modify only the disposable database. Never point these tests
-at shared, production, or business-data databases.
+They also cover auth login/me, malformed/expired/tampered tokens, required claims,
+hash exclusion, permission allow/deny, no ADMIN bypass, live grant removal and user
+deactivation, authentication constraints, and auth migration upgrade/downgrade.
+Migration round trips modify only the isolated test schema in the disposable database.
+Never point these tests at shared or production databases.
 
 ## Troubleshooting and remaining decisions
 
-- `Invalid backend settings`: set the named fields, particularly `DATABASE_URL`.
+- `Invalid backend settings`: set the named fields, particularly `DATABASE_URL` and
+  `AUTH_SECRET_KEY` for application startup.
 - HTTP 503: check PostgreSQL availability, URL, credentials, database privileges and
   network/TLS configuration. The API intentionally does not echo driver diagnostics.
 - `alembic check` reports changes: review model registration/schema drift and add a
@@ -156,9 +229,11 @@ at shared, production, or business-data databases.
 - Integration tests skip: set a process-level `TEST_DATABASE_URL`.
 - On Windows, an inaccessible shared pytest temp/cache directory can be avoided with
   `.venv/Scripts/python.exe -m pytest --basetemp=.cache/pytest-tmp -p no:cacheprovider`.
-  Reserve that directory for pytest; pytest clears its temporary directory on each run.
+  Create the `.cache` parent directory first. Reserve the temp directory for pytest;
+  pytest clears that directory on each run.
 - Deployment PostgreSQL version, shared database provisioning, production secrets/TLS,
-  and authentication contracts remain TBD with the team.
+  account provisioning, audited role administration, permission matrix and session
+  requirements remain TBD with the team.
 
 ## Framework references
 
@@ -166,3 +241,5 @@ at shared, production, or business-data databases.
 - [SQLAlchemy Psycopg 3 dialect](https://docs.sqlalchemy.org/en/20/dialects/postgresql.html#module-sqlalchemy.dialects.postgresql.psycopg)
 - [Alembic tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html)
 - [Pydantic settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/)
+- [FastAPI password hashing and JWT](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/)
+- [PyJWT validation](https://pyjwt.readthedocs.io/en/latest/usage.html)
