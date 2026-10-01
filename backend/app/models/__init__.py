@@ -3,3 +3,4 @@
 from app.models.auth import Permission, Role, User, role_permissions, user_roles
 
 __all__ = ["Permission", "Role", "User", "role_permissions", "user_roles"]
+from app.models.production import Plant, Process, Route, RouteStep
