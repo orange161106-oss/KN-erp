@@ -1,44 +1,25 @@
 import { useState } from 'react';
-
-export type Role = 'ADMIN' | 'PLANNER' | 'PLANT_INCHARGE' | 'STORE' | 'PURCHASE' | null;
-
-export default function Login({ onLogin }: { onLogin: (role: Role) => void }) {
-  const [selectedRole, setSelectedRole] = useState<Role>('ADMIN');
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onLogin(selectedRole);
-  };
-
-  return (
-    <div className="flex h-screen w-screen items-center justify-center bg-brand-offwhite">
-      <div className="w-full max-w-md bg-white p-8 rounded-lg shadow-md border border-gray-200">
-        <h1 className="text-2xl font-bold text-brand-navy text-center mb-6">KN Consumable ERP</h1>
-        <p className="text-sm text-gray-500 text-center mb-6">M1.4 Persona Login (Mock Auth)</p>
-        
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-brand-charcoal mb-1">Select Persona</label>
-            <select 
-              value={selectedRole || 'ADMIN'}
-              onChange={(e) => setSelectedRole(e.target.value as Role)}
-              className="w-full border border-gray-300 rounded p-2 text-brand-charcoal focus:outline-none focus:border-brand-steel"
-            >
-              <option value="ADMIN">System Admin</option>
-              <option value="PLANNER">Planner (Yathish)</option>
-              <option value="PLANT_INCHARGE">Plant Incharge (Keerthi)</option>
-              <option value="STORE">Store Manager (Munees)</option>
-              <option value="PURCHASE">Purchase Dept</option>
-            </select>
-          </div>
-          <button 
-            type="submit" 
-            className="w-full bg-brand-navy text-white font-semibold py-2 px-4 rounded hover:bg-brand-steel transition-colors"
-          >
-            Enter System
-          </button>
-        </form>
-      </div>
-    </div>
-  );
+import { useAuth } from '../features/auth/context';
+export default function Login() {
+  const { login } = useAuth();
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  async function submit(event: React.FormEvent) {
+    event.preventDefault(); setPending(true); setError('');
+    try { await login(username, password); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : 'Sign-in failed.'); }
+    finally { setPassword(''); setPending(false); }
+  }
+  return <div className="min-h-screen flex items-center justify-center px-4">
+    <form onSubmit={submit} className="w-full max-w-md rounded-lg border border-gray-200 bg-white p-8 shadow-sm space-y-5">
+      <h1 className="text-2xl font-semibold text-brand-navy">KN Consumable ERP</h1>
+      <p className="text-sm text-gray-600">Sign in with your ERP account.</p>
+      {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
+      <label className="block text-sm font-medium">Username<input autoComplete="username" required value={username} maxLength={128} onChange={e => setUsername(e.target.value)} className="mt-1 w-full border rounded p-2" /></label>
+      <label className="block text-sm font-medium">Password<input type="password" autoComplete="current-password" required value={password} maxLength={1024} onChange={e => setPassword(e.target.value)} className="mt-1 w-full border rounded p-2" /></label>
+      <button disabled={pending} className="w-full bg-brand-navy text-white rounded p-2 disabled:opacity-50">{pending ? 'Signing in…' : 'Sign in'}</button>
+    </form>
+  </div>;
 }

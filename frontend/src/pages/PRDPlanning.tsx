@@ -61,7 +61,11 @@ export default function PRDPlanning() {
   const [loadingItems, setLoadingItems] = useState(false);
 
   useEffect(() => {
-    fetchPlanningVersions();
+    let cancelled = false;
+    apiClient.get<PlanningVersion[]>('/api/v1/prd/planning-versions')
+      .then(versions => { if (!cancelled) setPlanningVersions(versions); })
+      .catch(() => { /* Keep the existing offline behavior. */ });
+    return () => { cancelled = true; };
   }, []);
 
   const fetchPlanningVersions = async () => {
@@ -119,8 +123,8 @@ export default function PRDPlanning() {
         const errs = await apiClient.get<ImportError[]>(`/api/v1/prd/batches/${batch.id}/errors`);
         setBatchErrors(errs);
       }
-    } catch (err: any) {
-      setUploadMessage({ type: 'error', text: err.message || 'Upload failed' });
+    } catch (err) {
+      setUploadMessage({ type: 'error', text: err instanceof Error ? err.message : 'Upload failed' });
     } finally {
       setIsUploading(false);
     }
@@ -135,15 +139,15 @@ export default function PRDPlanning() {
     formData.append('revision_label', revisionLabel);
 
     try {
-      const res = await apiClient.postFormData<any>(`/api/v1/prd/batches/${activeBatch.id}/promote`, formData);
+      const res = await apiClient.postFormData<{ revision_label: string; total_line_items: number }>(`/api/v1/prd/batches/${activeBatch.id}/promote`, formData);
       setUploadMessage({
         type: 'success',
         text: `Batch promoted successfully to Planning Version ${res.revision_label}! (${res.total_line_items} canonical items created).`,
       });
       setActiveBatch({ ...activeBatch, status: 'PROMOTED' });
       fetchPlanningVersions();
-    } catch (err: any) {
-      setUploadMessage({ type: 'error', text: err.message || 'Promotion failed' });
+    } catch (err) {
+      setUploadMessage({ type: 'error', text: err instanceof Error ? err.message : 'Promotion failed' });
     } finally {
       setIsPromoting(false);
     }

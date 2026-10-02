@@ -8,12 +8,14 @@ from app.core.config import BACKEND_ROOT
 from app.db.base import Base
 
 
-def test_single_auth_head_preserves_existing_baseline():
+def test_single_master_head_preserves_existing_branches():
     scripts = ScriptDirectory.from_config(Config(str(BACKEND_ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["0002_auth_rbac"]
-    assert scripts.get_revision("head").down_revision == "0001_backend_foundation"
+    assert scripts.get_heads() == ["0005_inventory_masters"]
+    assert scripts.get_revision("head").down_revision == "0004_merge_master_heads"
+    assert set(scripts.get_revision("0004_merge_master_heads").down_revision) == {"0003_product_customer_prd_staging", "acfaead772de"}
+    assert scripts.get_revision("0002_auth_rbac").down_revision == "0001_backend_foundation"
     assert scripts.get_revision("0001_backend_foundation").down_revision is None
-    assert set(Base.metadata.tables) == {"users", "roles", "permissions", "user_roles", "role_permissions"}
+    assert {"users", "roles", "permissions", "user_roles", "role_permissions", "units", "consumables", "suppliers", "supplier_consumables", "audit_logs", "products", "plants", "prd_order_items"} <= set(Base.metadata.tables)
 
 
 def test_offline_auth_migration_sql_and_no_secret_required(monkeypatch):
@@ -24,7 +26,18 @@ def test_offline_auth_migration_sql_and_no_secret_required(monkeypatch):
     command.upgrade(config, "head", sql=True)
     sql = output.getvalue()
     assert "CREATE TABLE alembic_version" in sql
-    assert sql.count("CREATE TABLE") == 6
+    assert sql.count("CREATE TABLE") == len(Base.metadata.tables) + 1
     assert "0001_backend_foundation" in sql
     assert "0002_auth_rbac" in sql
+    assert "0005_inventory_masters" in sql
+    assert "version_num VARCHAR(128)" in sql
     assert "private_password" not in sql
+
+
+def test_offline_upgrade_from_existing_foundation_widens_version_column(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test_user@127.0.0.1/kn_unit_test")
+    output = StringIO()
+    config = Config(str(BACKEND_ROOT / "alembic.ini"), output_buffer=output)
+    command.upgrade(config, "0002_auth_rbac:head", sql=True)
+    sql = output.getvalue()
+    assert sql.index("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(128)") < sql.index("0003_product_customer_prd_staging")

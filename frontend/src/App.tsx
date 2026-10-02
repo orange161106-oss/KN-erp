@@ -1,16 +1,17 @@
-import { useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import SystemStatus from './pages/SystemStatus';
 import Login from './pages/Login';
-import type { Role } from './pages/Login';
 import Sidebar from './components/Sidebar';
+import AuthProvider from './features/auth/AuthProvider';
+import { useAuth } from './features/auth/context';
+import Masters from './features/masters/Masters';
 
-function AppShell({ children, role, onLogout }: { children: React.ReactNode, role: Role, onLogout: () => void }) {
+function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen w-screen overflow-hidden">
-      <Sidebar role={role} onLogout={onLogout} />
+      <Sidebar />
       
-      <div className="flex-1 flex flex-col">
+      <div className="min-w-0 flex-1 flex flex-col">
         <header className="h-16 bg-white border-b border-gray-200 flex items-center px-6 shadow-sm">
           <h1 className="text-xl font-semibold text-brand-charcoal">KN ERP Platform</h1>
         </header>
@@ -23,19 +24,19 @@ function AppShell({ children, role, onLogout }: { children: React.ReactNode, rol
   );
 }
 
-export default function App() {
-  const [role, setRole] = useState<Role>(null);
+function Application() {
+  const { user } = useAuth();
 
-  if (!role) {
-    return <Login onLogin={setRole} />;
+  if (!user) {
+    return <Login />;
   }
 
   return (
     <BrowserRouter>
-      <AppShell role={role} onLogout={() => setRole(null)}>
+      <AppShell>
         <Routes>
           <Route path="/" element={<div>Dashboard Placeholder</div>} />
-          <Route path="/masters" element={<div>Masters Placeholder</div>} />
+          <Route path="/masters/*" element={<Masters />} />
           <Route path="/prd" element={<div>PRD / Planning Placeholder</div>} />
           <Route path="/requirements" element={<div>Requirements Placeholder</div>} />
           <Route path="/inventory" element={<div>Inventory Placeholder</div>} />
@@ -49,4 +50,8 @@ export default function App() {
       </AppShell>
     </BrowserRouter>
   );
+}
+
+export default function App() {
+  return <AuthProvider><Application /></AuthProvider>;
 }

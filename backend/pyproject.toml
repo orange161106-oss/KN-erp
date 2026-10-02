@@ -19,6 +19,8 @@ dependencies = [
   "alembic>=1.14,<2",
   "pwdlib[argon2]>=0.3,<1",
   "PyJWT>=2.10,<3",
+  "openpyxl>=3.1,<4",
+  "python-multipart>=0.0.20,<1",
 ]
 
 [project.optional-dependencies]
