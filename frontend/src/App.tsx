@@ -7,6 +7,7 @@ import { useAuth } from './features/auth/context';
 import Masters from './features/masters/Masters';
 import ProductionMappings from './features/mappings/ProductionMappings';
 import ConsumptionNorms from './features/rules/ConsumptionNorms';
+import PlantWorkflow from './features/plant_workflow/PlantWorkflow';
 
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
@@ -43,6 +44,10 @@ function Application() {
           <Route path="/rules/*" element={<ConsumptionNorms />} />
           <Route path="/prd" element={<div>PRD / Planning Placeholder</div>} />
           <Route path="/requirements" element={<div>Requirements Placeholder</div>} />
+          <Route
+            path="/plant-workflow/*"
+            element={<PlantWorkflow currentUserId={user.id} />}
+          />
           <Route path="/inventory" element={<div>Inventory Placeholder</div>} />
           <Route path="/purchase" element={<div>Purchase Placeholder</div>} />
           <Route path="/alerts" element={<div>Alerts Placeholder</div>} />
