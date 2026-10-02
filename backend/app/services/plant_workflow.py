@@ -13,23 +13,27 @@ Rules enforced:
   - Every mutation writes to audit_logs
 """
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApplicationError
 from app.models.audit import AuditLog
 from app.models.inventory_masters import Consumable, Unit
 from app.models.plant_workflow import PlantConfirmation, RequirementAdjustment, UserPlant
+from app.models.production import Plant
 from app.models.requirements import CalculatedRequirement
 from app.schemas.auth import CurrentUser
 from app.schemas.plant_workflow import (
     ConfirmRequirementRequest,
+    FinalRequirementItemResponse,
     PlantConfirmationResponse,
     RequirementAdjustmentResponse,
+    ReviewAdjustmentRequest,
     SubmitAdjustmentRequest,
     UserPlantAssignRequest,
     UserPlantResponse,
@@ -460,3 +464,194 @@ def withdraw_adjustment(
     )
     session.delete(adjustment)
     session.commit()
+
+
+def review_adjustment(
+    session: Session,
+    adjustment_id: UUID,
+    req: ReviewAdjustmentRequest,
+    current_user: CurrentUser,
+) -> RequirementAdjustmentResponse:
+    """Approve or reject a pending additional requirement adjustment.
+
+    Rules:
+      - Adjustment must exist and be PENDING.
+      - User cannot approve/reject their own request (prevent self-approval).
+      - Original requested_qty and reason are IMMUTABLE.
+      - Audit log is written.
+    """
+    adjustment = session.get(RequirementAdjustment, adjustment_id)
+    if not adjustment:
+        raise ApplicationError("ADJUSTMENT_NOT_FOUND", "Adjustment not found.", 404)
+
+    if adjustment.status != "PENDING":
+        raise ApplicationError(
+            "ADJUSTMENT_ALREADY_REVIEWED",
+            f"Adjustment has already been reviewed (status: '{adjustment.status}').",
+            409,
+        )
+
+    # Self-approval prohibition
+    if adjustment.requested_by == current_user.id:
+        raise ApplicationError(
+            "SELF_APPROVAL_DENIED",
+            "You cannot approve or reject your own additional requirement request.",
+            403,
+        )
+
+    adjustment.status = req.status
+    adjustment.reviewed_by = current_user.id
+    adjustment.reviewed_at = datetime.now(timezone.utc)
+    adjustment.reviewer_comment = req.reviewer_comment
+
+    _write_audit(
+        session,
+        actor_id=current_user.id,
+        action="REVIEW",
+        entity_type="requirement_adjustment",
+        entity_id=adjustment.id,
+        old_values={"status": "PENDING"},
+        new_values={
+            "status": req.status,
+            "reviewer_comment": req.reviewer_comment,
+        },
+        reason=f"Additional requirement {req.status.lower()} by reviewer.",
+    )
+    session.commit()
+    session.refresh(adjustment)
+    return _adjustment_to_response(adjustment)
+
+
+def get_final_requirements(
+    session: Session,
+    *,
+    planning_version_id: UUID,
+    plant_id: Optional[UUID] = None,
+    consumable_id: Optional[UUID] = None,
+) -> list[FinalRequirementItemResponse]:
+    """Calculate and return the authoritative Final Requirements for a planning version.
+
+    Final Requirement = Calculated Production Requirement + Approved Adjustments.
+    Only requirement adjustments with status = 'APPROVED' are included.
+    """
+    # 1. Fetch calculated requirement totals grouped by (plant_id, consumable_id)
+    calc_stmt = (
+        select(
+            CalculatedRequirement.plant_id,
+            CalculatedRequirement.consumable_id,
+            func.sum(CalculatedRequirement.calculated_qty).label("total_calc_qty"),
+            func.count(CalculatedRequirement.id).label("total_calc_count"),
+        )
+        .where(CalculatedRequirement.planning_version_id == planning_version_id)
+    )
+    if plant_id:
+        calc_stmt = calc_stmt.where(CalculatedRequirement.plant_id == plant_id)
+    if consumable_id:
+        calc_stmt = calc_stmt.where(CalculatedRequirement.consumable_id == consumable_id)
+    calc_stmt = calc_stmt.group_by(CalculatedRequirement.plant_id, CalculatedRequirement.consumable_id)
+    calc_rows = session.execute(calc_stmt).all()
+
+    calc_map: dict[tuple[UUID, UUID], tuple[Decimal, int]] = {
+        (row.plant_id, row.consumable_id): (Decimal(str(row.total_calc_qty)), row.total_calc_count)
+        for row in calc_rows
+    }
+
+    # 2. Fetch confirmations count grouped by (plant_id, consumable_id)
+    conf_stmt = (
+        select(
+            PlantConfirmation.plant_id,
+            CalculatedRequirement.consumable_id,
+            func.count(PlantConfirmation.id).label("confirmed_count"),
+        )
+        .join(CalculatedRequirement, PlantConfirmation.calculated_requirement_id == CalculatedRequirement.id)
+        .where(PlantConfirmation.planning_version_id == planning_version_id)
+    )
+    if plant_id:
+        conf_stmt = conf_stmt.where(PlantConfirmation.plant_id == plant_id)
+    if consumable_id:
+        conf_stmt = conf_stmt.where(CalculatedRequirement.consumable_id == consumable_id)
+    conf_stmt = conf_stmt.group_by(PlantConfirmation.plant_id, CalculatedRequirement.consumable_id)
+    conf_rows = session.execute(conf_stmt).all()
+
+    conf_map: dict[tuple[UUID, UUID], int] = {
+        (row.plant_id, row.consumable_id): row.confirmed_count
+        for row in conf_rows
+    }
+
+    # 3. Fetch approved adjustments grouped by (plant_id, consumable_id)
+    adj_stmt = (
+        select(
+            RequirementAdjustment.plant_id,
+            RequirementAdjustment.consumable_id,
+            func.sum(RequirementAdjustment.requested_qty).label("total_adj_qty"),
+        )
+        .where(
+            RequirementAdjustment.planning_version_id == planning_version_id,
+            RequirementAdjustment.status == "APPROVED",
+        )
+    )
+    if plant_id:
+        adj_stmt = adj_stmt.where(RequirementAdjustment.plant_id == plant_id)
+    if consumable_id:
+        adj_stmt = adj_stmt.where(RequirementAdjustment.consumable_id == consumable_id)
+    adj_stmt = adj_stmt.group_by(RequirementAdjustment.plant_id, RequirementAdjustment.consumable_id)
+    adj_rows = session.execute(adj_stmt).all()
+
+    adj_map: dict[tuple[UUID, UUID], Decimal] = {
+        (row.plant_id, row.consumable_id): Decimal(str(row.total_adj_qty))
+        for row in adj_rows
+    }
+
+    # Combine all unique (plant_id, consumable_id) pairs
+    all_keys = set(calc_map.keys()) | set(adj_map.keys())
+
+    # Pre-fetch plants and consumables for metadata
+    plant_ids = {k[0] for k in all_keys}
+    consumable_ids = {k[1] for k in all_keys}
+
+    plants: dict[UUID, str] = {}
+    if plant_ids:
+        p_rows = session.execute(select(Plant).where(Plant.id.in_(plant_ids))).scalars().all()
+        plants = {p.id: p.name for p in p_rows}
+
+    consumables: dict[UUID, Consumable] = {}
+    if consumable_ids:
+        c_rows = session.execute(select(Consumable).where(Consumable.id.in_(consumable_ids))).scalars().all()
+        consumables = {c.id: c for c in c_rows}
+
+    units: dict[UUID, str] = {}
+    unit_ids = {c.unit_id for c in consumables.values() if c.unit_id}
+    if unit_ids:
+        u_rows = session.execute(select(Unit).where(Unit.id.in_(unit_ids))).scalars().all()
+        units = {u.id: u.code for u in u_rows}
+
+    results: list[FinalRequirementItemResponse] = []
+    for p_id, c_id in sorted(all_keys, key=lambda k: (plants.get(k[0], ""), consumables[k[1]].code if k[1] in consumables else "")):
+        calc_qty, calc_count = calc_map.get((p_id, c_id), (Decimal("0"), 0))
+        adj_qty = adj_map.get((p_id, c_id), Decimal("0"))
+        final_qty = calc_qty + adj_qty
+
+        confirmed_count = conf_map.get((p_id, c_id), 0)
+        is_fully_confirmed = (calc_count > 0) and (confirmed_count == calc_count)
+
+        c_obj = consumables.get(c_id)
+        uom_str = units.get(c_obj.unit_id, "UNK") if c_obj else "UNK"
+
+        results.append(
+            FinalRequirementItemResponse(
+                planning_version_id=planning_version_id,
+                plant_id=p_id,
+                plant_name=plants.get(p_id),
+                consumable_id=c_id,
+                consumable_code=c_obj.code if c_obj else None,
+                consumable_name=c_obj.name if c_obj else None,
+                uom=uom_str,
+                calculated_qty=calc_qty,
+                approved_adjustment_qty=adj_qty,
+                final_required_qty=final_qty,
+                is_fully_confirmed=is_fully_confirmed,
+            )
+        )
+
+    return results
+

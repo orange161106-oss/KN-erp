@@ -5,8 +5,10 @@ import type {
   AdjustmentStatus,
   CalculatedRequirementItem,
   ConfirmRequirementRequest,
+  FinalRequirementItemResponse,
   PlantConfirmationResponse,
   RequirementAdjustmentResponse,
+  ReviewAdjustmentRequest,
   SubmitAdjustmentRequest,
 } from './types';
 
@@ -312,6 +314,23 @@ function AdjustmentsTab({
     }
   };
 
+  const handleReview = async (id: string, status: 'APPROVED' | 'REJECTED') => {
+    setError(null);
+    setSuccess(null);
+    const comment = window.prompt(`Optional comment for ${status.toLowerCase()}:`);
+    try {
+      const payload: ReviewAdjustmentRequest = {
+        status,
+        reviewer_comment: comment || null,
+      };
+      await apiClient.patch(`/api/v1/plant-workflow/adjustments/${id}/review`, payload);
+      setSuccess(`Adjustment ${status.toLowerCase()}.`);
+      await fetchAdjustments();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Review action failed.');
+    }
+  };
+
   if (!planningVersionId) {
     return <p className="text-gray-500 text-sm">Enter a planning version ID above to load adjustments.</p>;
   }
@@ -464,6 +483,11 @@ function AdjustmentsTab({
                     <span className="text-xs text-gray-700 line-clamp-2" title={adj.reason}>
                       {adj.reason}
                     </span>
+                    {adj.reviewer_comment && (
+                      <span className="block text-[11px] text-gray-500 italic mt-0.5">
+                        Comment: {adj.reviewer_comment}
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-xs">{adj.requested_by_username ?? adj.requested_by}</td>
                   <td className="px-3 py-2">
@@ -478,6 +502,115 @@ function AdjustmentsTab({
                         Withdraw
                       </button>
                     )}
+                    {adj.status === 'PENDING' && adj.requested_by !== currentUserId && (
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => handleReview(adj.id, 'APPROVED')}
+                          className="text-xs bg-green-600 text-white px-2 py-0.5 rounded hover:bg-green-700"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          onClick={() => handleReview(adj.id, 'REJECTED')}
+                          className="text-xs bg-red-600 text-white px-2 py-0.5 rounded hover:bg-red-700"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    )}
+                    {adj.status !== 'PENDING' && (
+                      <span className="text-xs text-gray-400">Reviewed</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Tab 3: Final Requirements Handoff ──────────────────────────────────────────
+
+function FinalRequirementsTab({ planningVersionId }: { planningVersionId: string }) {
+  const [items, setItems] = useState<FinalRequirementItemResponse[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchData = useCallback(async () => {
+    if (!planningVersionId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiClient.get<FinalRequirementItemResponse[]>(
+        `/api/v1/plant-workflow/final-requirements?planning_version_id=${planningVersionId}`
+      );
+      setItems(data);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to load final requirements.');
+    } finally {
+      setLoading(false);
+    }
+  }, [planningVersionId]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  if (!planningVersionId) {
+    return <p className="text-gray-500 text-sm">Enter a planning version ID above to view final requirements.</p>;
+  }
+
+  if (loading) return <p className="text-gray-500 text-sm">Calculating final requirements…</p>;
+
+  return (
+    <div>
+      {error && <AlertBox message={error} type="error" />}
+
+      {items.length === 0 ? (
+        <p className="text-gray-500 text-sm">No requirement data available for this planning version.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-gray-50 border-b">
+                <th className="px-3 py-2 text-left font-medium text-gray-600">Plant</th>
+                <th className="px-3 py-2 text-left font-medium text-gray-600">Consumable</th>
+                <th className="px-3 py-2 text-right font-medium text-gray-600">Calculated Qty</th>
+                <th className="px-3 py-2 text-right font-medium text-gray-600">Approved Adjustments</th>
+                <th className="px-3 py-2 text-right font-semibold text-blue-900 bg-blue-50">Final Requirement Qty</th>
+                <th className="px-3 py-2 text-left font-medium text-gray-600">UOM</th>
+                <th className="px-3 py-2 text-left font-medium text-gray-600">Confirmation Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item, idx) => (
+                <tr key={`${item.plant_id}-${item.consumable_id}-${idx}`} className="border-b hover:bg-gray-50">
+                  <td className="px-3 py-2 font-medium">{item.plant_name ?? item.plant_id}</td>
+                  <td className="px-3 py-2">
+                    <span className="font-mono text-xs text-gray-500">{item.consumable_code}</span>
+                    <span className="ml-1">{item.consumable_name}</span>
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono">{item.calculated_qty}</td>
+                  <td className="px-3 py-2 text-right font-mono text-green-700">
+                    +{item.approved_adjustment_qty}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono font-bold text-blue-900 bg-blue-50">
+                    {item.final_required_qty}
+                  </td>
+                  <td className="px-3 py-2">{item.uom}</td>
+                  <td className="px-3 py-2">
+                    {item.is_fully_confirmed ? (
+                      <span className="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-800">
+                        Fully Confirmed
+                      </span>
+                    ) : (
+                      <span className="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-gray-100 text-gray-600">
+                        Unconfirmed / Partial
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -491,7 +624,7 @@ function AdjustmentsTab({
 
 // ── Main PlantWorkflow screen ──────────────────────────────────────────────────
 
-type TabKey = 'confirmations' | 'adjustments';
+type TabKey = 'confirmations' | 'adjustments' | 'final-requirements';
 
 interface PlantWorkflowProps {
   currentUserId: string;
@@ -504,13 +637,14 @@ export default function PlantWorkflow({ currentUserId }: PlantWorkflowProps) {
   const tabs: { key: TabKey; label: string }[] = [
     { key: 'confirmations', label: 'Confirmations' },
     { key: 'adjustments', label: 'Additional Requirements' },
+    { key: 'final-requirements', label: 'Final Requirements (Handoff)' },
   ];
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <h1 className="text-xl font-bold text-gray-800 mb-1">Plant Workflow</h1>
       <p className="text-sm text-gray-500 mb-5">
-        Review calculated requirements and manage additional demand for your plant.
+        Review calculated requirements, manage additional demand, and inspect Final Requirements handoff.
       </p>
 
       <PlanningVersionSelector value={planningVersionId} onChange={setPlanningVersionId} />
@@ -539,6 +673,9 @@ export default function PlantWorkflow({ currentUserId }: PlantWorkflowProps) {
       )}
       {activeTab === 'adjustments' && (
         <AdjustmentsTab planningVersionId={planningVersionId} currentUserId={currentUserId} />
+      )}
+      {activeTab === 'final-requirements' && (
+        <FinalRequirementsTab planningVersionId={planningVersionId} />
       )}
     </div>
   );
