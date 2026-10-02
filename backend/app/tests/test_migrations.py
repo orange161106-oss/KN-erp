@@ -10,14 +10,15 @@ from app.db.base import Base
 
 def test_single_master_head_preserves_existing_branches():
     scripts = ScriptDirectory.from_config(Config(str(BACKEND_ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["0007_consumption_norms"]
-    assert scripts.get_revision("head").down_revision == "0006_production_consumable_mappings"
+    assert scripts.get_heads() == ["0008_calculated_requirements"]
+    assert scripts.get_revision("head").down_revision == "0007_consumption_norms"
+    assert scripts.get_revision("0007_consumption_norms").down_revision == "0006_production_consumable_mappings"
     assert scripts.get_revision("0006_production_consumable_mappings").down_revision == "0005_inventory_masters"
     assert scripts.get_revision("0005_inventory_masters").down_revision == "0004_merge_master_heads"
     assert set(scripts.get_revision("0004_merge_master_heads").down_revision) == {"0003_product_customer_prd_staging", "acfaead772de"}
     assert scripts.get_revision("0002_auth_rbac").down_revision == "0001_backend_foundation"
     assert scripts.get_revision("0001_backend_foundation").down_revision is None
-    assert {"users", "roles", "permissions", "user_roles", "role_permissions", "units", "consumables", "suppliers", "supplier_consumables", "audit_logs", "products", "plants", "prd_order_items", "consumption_norms"} <= set(Base.metadata.tables)
+    assert {"users", "roles", "permissions", "user_roles", "role_permissions", "units", "consumables", "suppliers", "supplier_consumables", "audit_logs", "products", "plants", "prd_order_items", "consumption_norms", "calculated_requirements", "requirement_calculation_errors"} <= set(Base.metadata.tables)
 
 
 def test_offline_auth_migration_sql_and_no_secret_required(monkeypatch):
@@ -33,6 +34,7 @@ def test_offline_auth_migration_sql_and_no_secret_required(monkeypatch):
     assert "0002_auth_rbac" in sql
     assert "0005_inventory_masters" in sql
     assert "0007_consumption_norms" in sql
+    assert "0008_calculated_requirements" in sql
     assert "version_num VARCHAR(128)" in sql
     assert "private_password" not in sql
 

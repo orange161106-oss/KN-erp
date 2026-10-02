@@ -7,6 +7,7 @@ from app.models.mappings import ProductPlant, ProductProcessConsumable
 from app.models.masters import Customer, Product
 from app.models.prd import ImportBatch, ImportError, PlanningVersion, PRDOrderHeader, PRDOrderItem
 from app.models.production import Plant, Process, Route, RouteStep
+from app.models.requirements import CalculatedRequirement, RequirementCalculationError
 from app.models.rules import ConsumptionNorm
 
 __all__ = [
@@ -34,4 +35,6 @@ __all__ = [
     "Route",
     "RouteStep",
     "ConsumptionNorm",
+    "CalculatedRequirement",
+    "RequirementCalculationError",
 ]
