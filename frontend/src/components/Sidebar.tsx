@@ -40,6 +40,10 @@ export default function Sidebar() {
           <Link to="/requirements" className="block hover:text-brand-steel transition-colors">Requirements</Link>
         )}
         
+        {canSee(['PLANT_INCHARGE']) && (
+          <Link to="/plant-workflow" className="block hover:text-brand-steel transition-colors">Plant Workflow</Link>
+        )}
+        
         {canSee(['STORE']) && (
           <Link to="/inventory" className="block hover:text-brand-steel transition-colors">Inventory</Link>
         )}
