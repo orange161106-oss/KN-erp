@@ -1,13 +1,11 @@
 import { Link } from 'react-router-dom';
-import type { Role } from '../pages/Login';
+import { useAuth } from '../features/auth/context';
 
-interface SidebarProps {
-  role: Role;
-  onLogout: () => void;
-}
-
-export default function Sidebar({ role, onLogout }: SidebarProps) {
-  const canSee = (allowedRoles: Role[]) => role === 'ADMIN' || allowedRoles.includes(role);
+export default function Sidebar() {
+  const { user, logout } = useAuth();
+  if (!user) return null;
+  const canSee = (allowedRoles: string[]) => user.roles.includes('ADMIN') || allowedRoles.some(role => user.roles.includes(role));
+  const canReadMasters = ['units', 'consumables', 'suppliers'].some(resource => user.permissions.includes(`masters.${resource}.read`));
 
   return (
     <aside className="w-64 bg-brand-navy text-white flex flex-col">
@@ -16,13 +14,13 @@ export default function Sidebar({ role, onLogout }: SidebarProps) {
       </div>
       
       <div className="p-3 bg-brand-steel text-xs font-semibold uppercase tracking-wider">
-        Active Role: {role?.replace('_', ' ')}
+        {user.username}
       </div>
 
       <nav className="flex-1 p-4 space-y-2 flex flex-col overflow-y-auto">
         <Link to="/" className="block hover:text-brand-steel transition-colors">Dashboard</Link>
         
-        {canSee(['PURCHASE']) && (
+        {canReadMasters && (
           <Link to="/masters" className="block hover:text-brand-steel transition-colors">Masters</Link>
         )}
         
@@ -51,12 +49,12 @@ export default function Sidebar({ role, onLogout }: SidebarProps) {
         )}
 
         <div className="mt-auto pt-4 border-t border-brand-steel flex flex-col space-y-2">
-          {role === 'ADMIN' && (
+          {user.roles.includes('ADMIN') && (
              <Link to="/admin" className="block hover:text-brand-steel transition-colors">Administration</Link>
           )}
           <Link to="/status" className="block hover:text-brand-steel transition-colors text-sm text-gray-300">System Status</Link>
           <button 
-            onClick={onLogout}
+            onClick={logout}
             className="text-left text-red-400 hover:text-red-300 transition-colors text-sm mt-4 font-semibold"
           >
             Logout

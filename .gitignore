@@ -11,3 +11,5 @@ dist/
 .cache/
 .local/
 *.log
+.vitest/
+coverage/

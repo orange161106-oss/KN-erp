@@ -1,9 +1,12 @@
 # KN Consumable ERP backend
 
-Backend and database foundation (M1.1) plus authentication/RBAC foundation (M1.3).
+Backend/database foundation (M1.1), authentication/RBAC (M1.3), and purchasing
+master-data foundation (M2.3).
 Owner: Munees. M1.1 reviewer: Yathish. M1.3 reviewer: Keerthi.
 
 The shared auth schema/API contract is in [docs/13_AUTH_RBAC_CONTRACT.md](../docs/13_AUTH_RBAC_CONTRACT.md).
+The master-data contract is in [docs/15_CONSUMABLE_SUPPLIER_MASTER_CONTRACT.md](../docs/15_CONSUMABLE_SUPPLIER_MASTER_CONTRACT.md).
+Actual M2.3 validation and reviewer notes are in [M2_3_REVIEW.md](M2_3_REVIEW.md).
 
 ## Requirements and installation
 
@@ -78,9 +81,19 @@ Alternatively, `uv run --frozen --no-sync` can invoke the installed tools.
 
 The existing `0001_backend_foundation` revision remains unchanged and intentionally
 empty. The new `0002_auth_rbac` head adds `users`, `roles`, `permissions`, `user_roles`
-and `role_permissions`. It seeds only the seven approved role categories; no accounts,
-permissions or grants are seeded. ADMIN has no automatic permission bypass.
+and `role_permissions`. That auth revision seeds only seven role categories.
+The M2.3 revision registers eight master permission codes without assigning them
+to any role or creating user accounts. ADMIN has no automatic permission bypass.
 Application startup never runs migrations or `metadata.create_all()`.
+
+The current head is `0005_inventory_masters`, following an additive merge of the
+existing PRD and plant/process/route migration branches. M2.3 adds `units`,
+`consumables`, `suppliers`, `supplier_consumables`, and `audit_logs`. It seeds no
+company master records. Existing migration files and business fields are unchanged.
+The PostgreSQL Alembic environment accommodates long shared revision IDs with a
+128-character version column, widening existing shorter tracking columns. Business
+table discovery includes all existing models; product/customer index declarations
+match their existing migration rather than generating accidental schema changes.
 
 For future models, use `app.db.base.Base`, import model modules in
 `app/models/__init__.py`, then generate a new revision:
@@ -168,6 +181,36 @@ A copied token remains usable until expiry unless its user is deactivated. HTTPS
 login throttling, account recovery and deployment session policy remain deployment
 decisions. Keerthi's M1.4 frontend should consume `/auth/me` for navigation permissions
 and continue to rely on backend enforcement.
+
+## Consumable, unit and supplier masters
+
+Under `/api/v1/masters`, resources `units`, `consumables`, `suppliers`, and
+`supplier-consumables` expose paginated GET collections, GET details, POST create,
+PATCH edit, and PATCH `/{id}/status`. Collections return `{items,total,limit,offset}`;
+filters include `q`, `is_active`, and mapping supplier/consumable UUIDs.
+No DELETE endpoints exist. Every mutation requires `change_reason`; status changes
+also require a strict boolean `is_active`. Unknown fields are rejected.
+
+Codes are trimmed/uppercased and unique across active/inactive records. Consumables
+require an active unit. Units cannot become inactive while active consumables use
+them. Supplier mappings require active suppliers, consumables and units for new use
+or reactivation. Inactivation retains references and history. Unit changes on mapped
+consumables are blocked pending the approved conversion/history policy.
+
+Each API requires an explicit `masters.<resource>.read` or `.write` grant; use
+`supplier_consumables` in permission codes. Permissions are registered by migration
+but no role gets them automatically. Read-only users cannot mutate. Provisioning ERP
+users and assigning approved grants remains an operator/team prerequisite; there is
+no default ERP login or public registration endpoint.
+
+Master writes and audit snapshots commit together. Audit entries record the actor,
+action, entity, old/new state, reason, and UTC time. No audit mutation API exists.
+Services own transactions; routes remain thin. Supplier lead time, MOQ, pack size,
+order multiple, MSQ, conversions and purchase calculations remain TBD/out of scope.
+
+The existing product/customer and PRD routers are now registered in the shared API
+router, correcting their pre-existing 404 responses without changing domain logic.
+`openpyxl` and `python-multipart` are declared/locked for those existing imports.
 
 ## Shared conventions
 

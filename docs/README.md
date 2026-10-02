@@ -38,3 +38,5 @@ AI must never invent a manufacturing/business rule. Unknown rules must be marked
 
 - [M1.3 authentication and RBAC](13_AUTH_RBAC_CONTRACT.md): schema, login/current-user
   API, centralized permission checks, token configuration and remaining authority TBDs.
+- [M2.3 consumable, unit and supplier masters](15_CONSUMABLE_SUPPLIER_MASTER_CONTRACT.md):
+  master APIs, inactive behavior, audit records, permissions, UI and supplier-field TBDs.
