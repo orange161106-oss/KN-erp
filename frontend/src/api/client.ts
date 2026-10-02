@@ -38,6 +38,8 @@ async function request<T>(endpoint: string, method: string, data?: unknown): Pro
 export const apiClient = {
   get: <T>(endpoint: string) => request<T>(endpoint, 'GET'),
   post: <T>(endpoint: string, data: unknown) => request<T>(endpoint, 'POST', data),
+  put: <T>(endpoint: string, data: unknown) => request<T>(endpoint, 'PUT', data),
   patch: <T>(endpoint: string, data: unknown) => request<T>(endpoint, 'PATCH', data),
+  delete: <T>(endpoint: string) => request<T>(endpoint, 'DELETE'),
   postFormData: <T>(endpoint: string, data: FormData) => request<T>(endpoint, 'POST', data),
 };
