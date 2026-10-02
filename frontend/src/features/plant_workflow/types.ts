@@ -89,3 +89,23 @@ export interface CalculatedRequirementItem {
   rule_type: string;
   explanation_payload: Record<string, unknown>;
 }
+
+export interface ReviewAdjustmentRequest {
+  status: 'APPROVED' | 'REJECTED';
+  reviewer_comment?: string | null;
+}
+
+export interface FinalRequirementItemResponse {
+  planning_version_id: string;
+  plant_id: string;
+  plant_name: string | null;
+  consumable_id: string;
+  consumable_code: string | null;
+  consumable_name: string | null;
+  uom: string;
+  calculated_qty: string;
+  approved_adjustment_qty: string;
+  final_required_qty: string;
+  is_fully_confirmed: boolean;
+}
+

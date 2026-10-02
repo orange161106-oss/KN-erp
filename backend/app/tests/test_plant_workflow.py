@@ -538,3 +538,152 @@ class TestAdjustmentSchemaValidation:
             reason="  need extra  ",
         )
         assert req.reason == "need extra"
+
+
+class TestReviewAdjustment:
+    """review_adjustment service function (M3.5)."""
+
+    def _make_adj(self, requested_by, plant_id, status="PENDING"):
+        adj = MagicMock(spec=RequirementAdjustment)
+        adj.id = uuid4()
+        adj.plant_id = plant_id
+        adj.requested_by = requested_by
+        adj.status = status
+        adj.consumable_id = uuid4()
+        adj.requested_qty = Decimal("5.0")
+        adj.reason = "test"
+        return adj
+
+    def test_approve_adjustment_success(self):
+        from app.services.plant_workflow import review_adjustment
+        from app.schemas.plant_workflow import ReviewAdjustmentRequest
+
+        requester_id = uuid4()
+        approver_id = uuid4()
+        plant_id = uuid4()
+        adj = self._make_adj(requester_id, plant_id, "PENDING")
+        current_user = _make_current_user(user_id=approver_id, permissions=["plant_workflow:approve"])
+
+        session = MagicMock()
+        session.get.return_value = adj
+
+        req = ReviewAdjustmentRequest(status="APPROVED", reviewer_comment="Looks good")
+
+        with patch("app.services.plant_workflow._adjustment_to_response") as mock_resp:
+            mock_resp.return_value = MagicMock(spec=RequirementAdjustmentResponse)
+            review_adjustment(session, adj.id, req, current_user)
+
+        assert adj.status == "APPROVED"
+        assert adj.reviewed_by == approver_id
+        assert adj.reviewer_comment == "Looks good"
+        session.commit.assert_called_once()
+
+    def test_self_approval_prohibited(self):
+        from app.services.plant_workflow import review_adjustment
+        from app.schemas.plant_workflow import ReviewAdjustmentRequest
+
+        user_id = uuid4()
+        plant_id = uuid4()
+        adj = self._make_adj(requested_by=user_id, plant_id=plant_id, status="PENDING")
+        current_user = _make_current_user(user_id=user_id, permissions=["plant_workflow:approve"])
+
+        session = MagicMock()
+        session.get.return_value = adj
+
+        req = ReviewAdjustmentRequest(status="APPROVED")
+
+        with pytest.raises(ApplicationError) as exc_info:
+            review_adjustment(session, adj.id, req, current_user)
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.code == "SELF_APPROVAL_DENIED"
+
+    def test_already_reviewed_prohibited(self):
+        from app.services.plant_workflow import review_adjustment
+        from app.schemas.plant_workflow import ReviewAdjustmentRequest
+
+        requester_id = uuid4()
+        approver_id = uuid4()
+        plant_id = uuid4()
+        adj = self._make_adj(requester_id, plant_id, status="APPROVED")
+        current_user = _make_current_user(user_id=approver_id, permissions=["plant_workflow:approve"])
+
+        session = MagicMock()
+        session.get.return_value = adj
+
+        req = ReviewAdjustmentRequest(status="REJECTED")
+
+        with pytest.raises(ApplicationError) as exc_info:
+            review_adjustment(session, adj.id, req, current_user)
+
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.code == "ADJUSTMENT_ALREADY_REVIEWED"
+
+
+class TestFinalRequirements:
+    """get_final_requirements service function (M3.5 contract)."""
+
+    def test_final_requirements_calculation(self):
+        from app.services.plant_workflow import get_final_requirements
+
+        version_id = uuid4()
+        plant_id = uuid4()
+        consumable_id = uuid4()
+
+        # Mock calc requirements query result
+        calc_row = MagicMock()
+        calc_row.plant_id = plant_id
+        calc_row.consumable_id = consumable_id
+        calc_row.total_calc_qty = Decimal("100.0000")
+        calc_row.total_calc_count = 2
+
+        # Mock confirmations query result
+        conf_row = MagicMock()
+        conf_row.plant_id = plant_id
+        conf_row.consumable_id = consumable_id
+        conf_row.confirmed_count = 2
+
+        # Mock approved adjustments query result
+        adj_row = MagicMock()
+        adj_row.plant_id = plant_id
+        adj_row.consumable_id = consumable_id
+        adj_row.total_adj_qty = Decimal("25.5000")
+
+        # Mock plant, consumable, unit objects
+        plant_obj = MagicMock()
+        plant_obj.id = plant_id
+        plant_obj.name = "Plant A"
+
+        unit_obj = MagicMock()
+        unit_obj.id = uuid4()
+        unit_obj.code = "PCS"
+
+        consumable_obj = MagicMock()
+        consumable_obj.id = consumable_id
+        consumable_obj.code = "BOX01"
+        consumable_obj.name = "Box"
+        consumable_obj.unit_id = unit_obj.id
+
+        session = MagicMock()
+
+        # Chain execute results for: calc_stmt, conf_stmt, adj_stmt, plant query, consumable query, unit query
+        exec_mock = session.execute
+        exec_mock.side_effect = [
+            MagicMock(all=lambda: [calc_row]),
+            MagicMock(all=lambda: [conf_row]),
+            MagicMock(all=lambda: [adj_row]),
+            MagicMock(scalars=lambda: MagicMock(all=lambda: [plant_obj])),
+            MagicMock(scalars=lambda: MagicMock(all=lambda: [consumable_obj])),
+            MagicMock(scalars=lambda: MagicMock(all=lambda: [unit_obj])),
+        ]
+
+        res = get_final_requirements(session, planning_version_id=version_id)
+
+        assert len(res) == 1
+        item = res[0]
+        assert item.calculated_qty == Decimal("100.0000")
+        assert item.approved_adjustment_qty == Decimal("25.5000")
+        assert item.final_required_qty == Decimal("125.5000")
+        assert item.is_fully_confirmed is True
+        assert item.uom == "PCS"
+

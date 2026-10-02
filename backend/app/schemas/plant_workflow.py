@@ -97,3 +97,25 @@ class RequirementAdjustmentResponse(BaseModel):
     reviewed_by: Optional[UUID] = None
     reviewed_at: Optional[datetime] = None
     reviewer_comment: Optional[str] = None
+
+
+class ReviewAdjustmentRequest(BaseModel):
+    status: Literal["APPROVED", "REJECTED"]
+    reviewer_comment: Optional[str] = Field(default=None, max_length=2000)
+
+
+class FinalRequirementItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    planning_version_id: UUID
+    plant_id: UUID
+    plant_name: Optional[str] = None
+    consumable_id: UUID
+    consumable_code: Optional[str] = None
+    consumable_name: Optional[str] = None
+    uom: str
+    calculated_qty: Decimal
+    approved_adjustment_qty: Decimal
+    final_required_qty: Decimal
+    is_fully_confirmed: bool = False
+

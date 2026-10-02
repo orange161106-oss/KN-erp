@@ -20,8 +20,10 @@ from app.db.session import get_db
 from app.schemas.auth import CurrentUser
 from app.schemas.plant_workflow import (
     ConfirmRequirementRequest,
+    FinalRequirementItemResponse,
     PlantConfirmationResponse,
     RequirementAdjustmentResponse,
+    ReviewAdjustmentRequest,
     SubmitAdjustmentRequest,
     UserPlantAssignRequest,
     UserPlantResponse,
@@ -30,11 +32,13 @@ from app.security.permissions import require_permissions
 from app.services.plant_workflow import (
     assign_user_to_plant,
     confirm_requirement,
+    get_final_requirements,
     list_adjustments,
     list_confirmations,
     list_user_plants,
     remove_user_from_plant,
     retract_confirmation,
+    review_adjustment,
     submit_adjustment,
     withdraw_adjustment,
 )
@@ -178,3 +182,40 @@ def delete_adjustment(
     current_user: Annotated[CurrentUser, Depends(require_permissions("plant_workflow:request"))],
 ) -> None:
     withdraw_adjustment(session, adjustment_id, current_user)
+
+
+@router.patch(
+    "/adjustments/{adjustment_id}/review",
+    response_model=RequirementAdjustmentResponse,
+    summary="Approve or reject a pending additional requirement adjustment",
+)
+def patch_review_adjustment(
+    adjustment_id: UUID,
+    req: ReviewAdjustmentRequest,
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(require_permissions("plant_workflow:approve"))],
+) -> RequirementAdjustmentResponse:
+    return review_adjustment(session, adjustment_id, req, current_user)
+
+
+# ── Final Requirements ─────────────────────────────────────────────────────────
+
+@router.get(
+    "/final-requirements",
+    response_model=list[FinalRequirementItemResponse],
+    summary="Get authoritative Final Requirements (Calculated + Approved Adjustments)",
+)
+def get_final_requirements_endpoint(
+    planning_version_id: UUID,
+    session: Annotated[Session, Depends(get_db)],
+    _: Annotated[CurrentUser, Depends(require_permissions("plant_workflow:view"))],
+    plant_id: Optional[UUID] = Query(None),
+    consumable_id: Optional[UUID] = Query(None),
+) -> list[FinalRequirementItemResponse]:
+    return get_final_requirements(
+        session,
+        planning_version_id=planning_version_id,
+        plant_id=plant_id,
+        consumable_id=consumable_id,
+    )
+
