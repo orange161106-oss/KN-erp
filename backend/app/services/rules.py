@@ -16,15 +16,26 @@ from app.domain.rules import (
     validate_rule_parameters,
 )
 from app.models.inventory_masters import Consumable, Unit
+from app.models.mappings import ProductPlant, ProductProcessConsumable
 from app.models.masters import Product
+from app.models.prd import PlanningVersion, PRDOrderItem
 from app.models.production import Plant, Process
 from app.models.rules import ConsumptionNorm
 from app.schemas.rules import (
+    ConsumableRef,
     ConsumptionNormCreate,
     ConsumptionNormResponse,
     ConsumptionNormUpdate,
     EvaluationRequest,
     EvaluationResponse,
+    ItemCalculationRequest,
+    PlanningVersionRef,
+    PlantRef,
+    ProcessRef,
+    ProductionSourceRef,
+    ProductRef,
+    RuleRef,
+    SingleRequirementCalculationResponse,
 )
 
 
@@ -306,3 +317,190 @@ def evaluate_consumption_norm(
         raise ApplicationError(e.code, e.message, status_code=400)
 
     return EvaluationResponse(norm_id=selected_norm.id, calculation=calc_result)
+
+
+def calculate_single_item_requirement(
+    db: Session, req: ItemCalculationRequest
+) -> SingleRequirementCalculationResponse:
+    # 1. Production Source (PRDOrderItem)
+    prd_item = db.get(PRDOrderItem, req.prd_item_id)
+    if not prd_item:
+        raise ApplicationError("NOT_FOUND", f"PRD order item '{req.prd_item_id}' not found", 404)
+
+    # 2. Planning Version
+    plan_version = db.get(PlanningVersion, prd_item.planning_version_id)
+    if not plan_version:
+        raise ApplicationError("NOT_FOUND", f"Planning version '{prd_item.planning_version_id}' not found", 404)
+
+    # 3. Product Resolution
+    product = (
+        db.get(Product, prd_item.product_id)
+        if prd_item.product_id
+        else db.scalars(select(Product).where(Product.code == prd_item.product_code)).first()
+    )
+    if not product:
+        raise ApplicationError("NOT_FOUND", f"Product '{prd_item.product_code}' not found", 404)
+
+    # 4. Consumable Resolution
+    consumable = db.get(Consumable, req.consumable_id)
+    if not consumable:
+        raise ApplicationError("NOT_FOUND", f"Consumable '{req.consumable_id}' not found", 404)
+    consumable_unit = db.get(Unit, consumable.unit_id)
+    consumable_unit_code = consumable_unit.code if consumable_unit else "PCS"
+
+    # 5. Plant Resolution
+    plant = None
+    if req.plant_id:
+        plant = db.get(Plant, req.plant_id)
+        if not plant:
+            raise ApplicationError("NOT_FOUND", f"Plant '{req.plant_id}' not found", 404)
+    else:
+        plant_mapping = db.scalars(
+            select(ProductPlant)
+            .options(joinedload(ProductPlant.plant))
+            .where(ProductPlant.product_id == product.id, ProductPlant.is_active == True)
+            .order_by(ProductPlant.is_primary.desc())
+        ).first()
+        if plant_mapping and plant_mapping.plant:
+            plant = plant_mapping.plant
+        else:
+            raise ApplicationError("NOT_FOUND", f"No active plant mapping found for product '{product.code}'", 404)
+
+    # 6. Process Resolution via ProductProcessConsumable mapping
+    mapping = db.scalars(
+        select(ProductProcessConsumable)
+        .options(joinedload(ProductProcessConsumable.process))
+        .where(
+            ProductProcessConsumable.product_id == product.id,
+            ProductProcessConsumable.consumable_id == consumable.id,
+            ProductProcessConsumable.is_active == True,
+        )
+    ).first()
+    if not mapping or not mapping.process:
+        raise ApplicationError(
+            "NOT_FOUND",
+            f"Consumable '{consumable.code}' is not mapped to any process step for product '{product.code}'",
+            404,
+        )
+    process = mapping.process
+
+    # 7. Rule / Consumption Norm Resolution
+    target_date = req.as_of_date or date.today()
+    candidate_queries = [
+        # Exact: consumable + product + process + plant
+        select(ConsumptionNorm).where(
+            ConsumptionNorm.consumable_id == consumable.id,
+            ConsumptionNorm.product_id == product.id,
+            ConsumptionNorm.process_id == process.id,
+            ConsumptionNorm.plant_id == plant.id,
+        ),
+        # Plant-independent for product & process
+        select(ConsumptionNorm).where(
+            ConsumptionNorm.consumable_id == consumable.id,
+            ConsumptionNorm.product_id == product.id,
+            ConsumptionNorm.process_id == process.id,
+            ConsumptionNorm.plant_id == None,
+        ),
+        # Process-independent for product
+        select(ConsumptionNorm).where(
+            ConsumptionNorm.consumable_id == consumable.id,
+            ConsumptionNorm.product_id == product.id,
+            ConsumptionNorm.process_id == None,
+            ConsumptionNorm.plant_id == None,
+        ),
+        # Global fallback for consumable
+        select(ConsumptionNorm).where(
+            ConsumptionNorm.consumable_id == consumable.id,
+            ConsumptionNorm.product_id == None,
+            ConsumptionNorm.process_id == None,
+            ConsumptionNorm.plant_id == None,
+        ),
+    ]
+
+    selected_norm: Optional[ConsumptionNorm] = None
+    for q in candidate_queries:
+        q = q.options(joinedload(ConsumptionNorm.unit)).order_by(ConsumptionNorm.version.desc())
+        norms = db.scalars(q).all()
+        for n in norms:
+            if not n.is_active:
+                continue
+            if n.effective_from <= target_date and (n.effective_to is None or n.effective_to >= target_date):
+                selected_norm = n
+                break
+        if selected_norm:
+            break
+
+    if not selected_norm:
+        raise ApplicationError(
+            "MISSING_RULE",
+            f"No active, effective consumption rule found for consumable '{consumable.code}' as of {target_date}",
+            status_code=404,
+        )
+
+    # 8. Deterministic Calculation via Domain Engine
+    unit_code = (
+        selected_norm.unit.code
+        if selected_norm.unit
+        else consumable_unit_code
+    )
+    rule_input = RuleCalculationInput(
+        rule_type=RuleType(selected_norm.rule_type),
+        rule_version=selected_norm.version,
+        parameters=selected_norm.parameters,
+        production_quantity=prd_item.planned_quantity,
+        rounding_policy=RoundingPolicy(selected_norm.rounding_policy),
+        rounding_precision=selected_norm.rounding_precision,
+        unit=unit_code,
+    )
+
+    try:
+        calc_result = evaluate_rule(rule_input)
+    except RuleDomainError as e:
+        raise ApplicationError(e.code, e.message, status_code=400)
+
+    # 9. Fully Explainable Contract Assembly
+    return SingleRequirementCalculationResponse(
+        planning_version=PlanningVersionRef(
+            id=plan_version.id,
+            planning_period=plan_version.planning_period,
+            version_number=plan_version.version_number,
+            revision_label=plan_version.revision_label,
+            status=plan_version.status,
+        ),
+        production_source=ProductionSourceRef(
+            item_id=prd_item.id,
+            row_number=prd_item.source_row_number,
+            planned_quantity=prd_item.planned_quantity,
+            uom=prd_item.uom,
+            target_period=prd_item.target_period,
+        ),
+        product=ProductRef(
+            id=product.id,
+            code=product.code,
+            name=product.name,
+        ),
+        plant=PlantRef(
+            id=plant.id,
+            name=plant.name,
+            location=plant.location,
+        ),
+        process=ProcessRef(
+            id=process.id,
+            name=process.name,
+            description=process.description,
+        ),
+        consumable=ConsumableRef(
+            id=consumable.id,
+            code=consumable.code,
+            name=consumable.name,
+            unit=consumable_unit_code,
+        ),
+        rule=RuleRef(
+            norm_id=selected_norm.id,
+            rule_type=selected_norm.rule_type,
+            version=selected_norm.version,
+            parameters=selected_norm.parameters,
+        ),
+        calculation=calc_result,
+    )
+

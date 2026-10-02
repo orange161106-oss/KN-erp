@@ -12,9 +12,12 @@ from app.schemas.rules import (
     ConsumptionNormUpdate,
     EvaluationRequest,
     EvaluationResponse,
+    ItemCalculationRequest,
+    SingleRequirementCalculationResponse,
 )
 from app.security.dependencies import get_current_user
 from app.services.rules import (
+    calculate_single_item_requirement,
     create_consumption_norm,
     evaluate_consumption_norm,
     get_consumption_norm,
@@ -80,3 +83,13 @@ def post_evaluate_norm(
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> EvaluationResponse:
     return evaluate_consumption_norm(session, req)
+
+
+@router.post("/calculate-item", response_model=SingleRequirementCalculationResponse)
+def post_calculate_item(
+    req: ItemCalculationRequest,
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> SingleRequirementCalculationResponse:
+    return calculate_single_item_requirement(session, req)
+

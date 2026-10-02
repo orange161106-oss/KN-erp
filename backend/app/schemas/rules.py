@@ -66,3 +66,72 @@ class EvaluationRequest(BaseModel):
 class EvaluationResponse(BaseModel):
     norm_id: UUID
     calculation: CalculationResult
+
+
+# --- M3.2 Explainable Single Requirement Calculation Models ---
+
+class PlanningVersionRef(BaseModel):
+    id: UUID
+    planning_period: str
+    version_number: int
+    revision_label: str
+    status: str
+
+
+class ProductionSourceRef(BaseModel):
+    item_id: UUID
+    row_number: int
+    planned_quantity: Decimal
+    uom: str
+    target_period: str
+
+
+class ProductRef(BaseModel):
+    id: UUID
+    code: str
+    name: str
+
+
+class PlantRef(BaseModel):
+    id: UUID
+    name: str
+    location: Optional[str] = None
+
+
+class ProcessRef(BaseModel):
+    id: UUID
+    name: str
+    description: Optional[str] = None
+
+
+class ConsumableRef(BaseModel):
+    id: UUID
+    code: str
+    name: str
+    unit: str
+
+
+class RuleRef(BaseModel):
+    norm_id: UUID
+    rule_type: str
+    version: int
+    parameters: dict[str, Any]
+
+
+class ItemCalculationRequest(BaseModel):
+    prd_item_id: UUID
+    consumable_id: UUID
+    plant_id: Optional[UUID] = None
+    as_of_date: Optional[date] = None
+
+
+class SingleRequirementCalculationResponse(BaseModel):
+    planning_version: PlanningVersionRef
+    production_source: ProductionSourceRef
+    product: ProductRef
+    plant: PlantRef
+    process: ProcessRef
+    consumable: ConsumableRef
+    rule: RuleRef
+    calculation: CalculationResult
+
