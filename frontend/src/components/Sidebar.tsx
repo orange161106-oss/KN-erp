@@ -23,6 +23,14 @@ export default function Sidebar() {
         {canReadMasters && (
           <Link to="/masters" className="block hover:text-brand-steel transition-colors">Masters</Link>
         )}
+
+        {(canReadMasters || canSee(['PLANNER'])) && (
+          <Link to="/mappings" className="block hover:text-brand-steel transition-colors">Production Mappings</Link>
+        )}
+
+        {(canReadMasters || canSee(['PLANNER'])) && (
+          <Link to="/rules" className="block hover:text-brand-steel transition-colors">Consumption Norms</Link>
+        )}
         
         {canSee(['PLANNER']) && (
           <Link to="/prd" className="block hover:text-brand-steel transition-colors">PRD / Planning</Link>

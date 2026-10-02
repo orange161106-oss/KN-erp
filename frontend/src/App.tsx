@@ -5,6 +5,8 @@ import Sidebar from './components/Sidebar';
 import AuthProvider from './features/auth/AuthProvider';
 import { useAuth } from './features/auth/context';
 import Masters from './features/masters/Masters';
+import ProductionMappings from './features/mappings/ProductionMappings';
+import ConsumptionNorms from './features/rules/ConsumptionNorms';
 
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
@@ -37,6 +39,8 @@ function Application() {
         <Routes>
           <Route path="/" element={<div>Dashboard Placeholder</div>} />
           <Route path="/masters/*" element={<Masters />} />
+          <Route path="/mappings/*" element={<ProductionMappings />} />
+          <Route path="/rules/*" element={<ConsumptionNorms />} />
           <Route path="/prd" element={<div>PRD / Planning Placeholder</div>} />
           <Route path="/requirements" element={<div>Requirements Placeholder</div>} />
           <Route path="/inventory" element={<div>Inventory Placeholder</div>} />
