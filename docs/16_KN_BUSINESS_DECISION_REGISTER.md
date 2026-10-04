@@ -461,3 +461,15 @@ Unrelated later milestones can remain TBD while the current milestone is develop
 - `14_PRD_REQUIREMENT_CONTRACT.md`: existing PRD, formula and revision TBDs.
 - `15_CONSUMABLE_SUPPLIER_MASTER_CONTRACT.md`: unit/supplier constraint TBDs.
 - `KN_Consumable_ERP_AI_Build_Execution_Guide.md`: milestone dependencies and limits.
+
+
+## M4.2 development approval and operational limits
+
+Munees approved the M4.2 foundation plan with Yathish as reviewer. See
+`18_PROJECTED_INVENTORY_CONTRACT.md`. This does not supply the unanswered PLAN-01
+through PLAN-05 company values/policies. The implementation accepts explicit dated,
+reconciled source evidence; monthly-only requirements report TIMING_UNCONFIRMED.
+Operational projection imports remain disabled until real source mapping, final
+release evidence, reservation/fulfilment reconciliation and incoming coverage are
+verified. MSL authority stays with the existing ERP. Exact equality/approach alert
+policy and lead-time calendars remain TBD; no daily spreading or buffer is assumed.

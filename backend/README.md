@@ -1,7 +1,7 @@
 # KNL Consumable ERP backend
 
 Backend/database foundation (M1.1), authentication/RBAC (M1.3), and purchasing
-master-data foundation (M2.3), and central inventory reporting (M4.1).
+master-data foundation (M2.3), central inventory reporting (M4.1), and projected inventory (M4.2).
 Owner: Munees. M1.1 reviewer: Yathish. M1.3 reviewer: Keerthi.
 
 The shared auth schema/API contract is in [docs/13_AUTH_RBAC_CONTRACT.md](../docs/13_AUTH_RBAC_CONTRACT.md).
@@ -291,7 +291,7 @@ Never point these tests at shared or production databases.
 
 Owner: Munees. Reviewer: Keerthi. The
 [inventory contract](../docs/17_CENTRAL_INVENTORY_CONTRACT.md) describes the KNL
-answers, normalized source format and remaining decisions. Migration head is
+answers, normalized source format and remaining decisions. The M4.1 revision is
 `0011_central_inventory` (parent `0010_requirement_approval`); three append-only source
 tables and two unassigned permissions are added. No production accounts or stock
 are seeded. Apply and check with the existing configured database:
@@ -336,3 +336,52 @@ Run `pytest app/tests/test_inventory.py` for API/precision/allow-deny cases and
 `pytest app/tests/integration/test_inventory.py` with a dedicated
 `TEST_DATABASE_URL` for real concurrent imports and database immutability checks.
 Actual results and shared migration fixes are in [M4.1 handoff](M4_1_REVIEW.md).
+
+
+## Projected inventory foundation (M4.2)
+
+Owner: Munees. Reviewer: Yathish. See the
+[projection contract](../docs/18_PROJECTED_INVENTORY_CONTRACT.md) for input semantics,
+reconciliation, missing-data behavior and the API explanation. Current Alembic head
+is `0012_projected_inventory`. It adds one immutable `projection_input_sets` evidence
+table and unassigned `inventory.projection.read` / `inventory.projection.import`
+permissions. No business defaults, MSL authority or purchase calculation is seeded.
+
+Use the standard `alembic upgrade head`, `alembic check` and `alembic current`
+commands documented above. `PROJECTION_IMPORT_ENABLED` defaults to false. Enable
+only after approved source mappings and named technical permissions are configured.
+
+GET `/api/v1/inventory/projections/status` describes capabilities. GET
+`/api/v1/inventory/projections` requires `consumable_id`, `planning_version_id` and an
+aware `cutoff` timestamp, with optional `source_set_id`. Without complete source
+inputs it returns monthly totals, source baseline and explicit limitations; it does
+not invent daily demand. An INCOMPLETE response has null projected stock/breach
+assessment. Source timestamps and `is_live=false` distinguish dated calculations.
+
+POST `/api/v1/inventory/projections/inputs` stores a normalized evidence set. Full
+Pydantic schemas are in OpenAPI. Inputs include source-set identity/reference,
+material/stock unit/version/snapshot IDs, reconciliation timestamp/reference and
+coverage end. Each plant's explicit fulfilled, reserved and dated remaining demand
+must reconcile to its final total. Incoming `scheduled_quantity` is the gross amount
+for a unique delivery-schedule identity; `received_quantity` and `cancelled_quantity`
+are deducted once. Incoming status and usable-availability time must be supplied.
+An empty incoming list confirms none; null means unknown. MSL revisions include
+source/approval references and effective times. Optional lead time needs an existing
+supplier/material mapping and an approved start-to-usable-availability interval.
+Lead time alone never creates incoming stock.
+
+Imports are atomic/audited, immutable and replayable. Conflicting identities return
+409. Reads use a consistent PostgreSQL snapshot, validate the current requirement
+fingerprint and latest stock identity, and require new reconciliation after either
+changes. Existing final-version approval fields must be populated by the upstream
+workflow; this module does not grant approval or populate them. Central projection
+permissions expose selected-version requirements across plants and must be granted
+explicitly to appropriate operators. There are no local MSL edit/delete endpoints.
+
+Run `pytest app/tests/test_projection.py` for the deterministic engine and API cases.
+With a dedicated `TEST_DATABASE_URL`, run
+`pytest app/tests/integration/test_projection.py` for PostgreSQL immutability,
+concurrent input imports and consistency during concurrent requirement changes.
+The full suite also validates migration round trips. Actual results are recorded in
+[M4.2 reviewer handoff](M4_2_REVIEW.md). M4.4 can consume these explanation APIs for
+planning screens and alert presentation after KNL's remaining policies are confirmed.

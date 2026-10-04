@@ -15,13 +15,13 @@ def test_auth_migration_round_trip_and_empty_grants(postgres_engine):
     with postgres_engine.begin() as connection:
         config.attributes["connection"] = connection
         command.upgrade(config, "head")
-        assert MigrationContext.configure(connection).get_current_heads() == ("0011_central_inventory",)
+        assert MigrationContext.configure(connection).get_current_heads() == ("0012_projected_inventory",)
         assert set(inspect(connection).get_table_names()) == {"alembic_version", *Base.metadata.tables}
         role_ids = dict(connection.execute(text("SELECT code, id FROM roles")).all())
         assert set(role_ids) == {"ADMIN", "PLANNER", "PLANT_INCHARGE", "STORE", "PURCHASE", "APPROVER", "MANAGEMENT"}
-        assert connection.execute(text("SELECT COUNT(*) FROM permissions")).scalar_one() == 14
-        assert set(connection.execute(text("SELECT code FROM permissions WHERE code LIKE 'inventory.%'")).scalars()) == {"inventory.stock.read", "inventory.stock.import"}
-        for table in ("users", "user_roles", "role_permissions", "units", "consumables", "suppliers", "supplier_consumables", "audit_logs", "stock_import_batches", "stock_transactions", "stock_snapshots"):
+        assert connection.execute(text("SELECT COUNT(*) FROM permissions")).scalar_one() == 16
+        assert set(connection.execute(text("SELECT code FROM permissions WHERE code LIKE 'inventory.%'")).scalars()) == {"inventory.stock.read", "inventory.stock.import", "inventory.projection.read", "inventory.projection.import"}
+        for table in ("users", "user_roles", "role_permissions", "units", "consumables", "suppliers", "supplier_consumables", "audit_logs", "stock_import_batches", "stock_transactions", "stock_snapshots", "projection_input_sets"):
             assert connection.execute(text("SELECT COUNT(*) FROM " + table)).scalar_one() == 0
         command.check(config)
         command.downgrade(config, "0001_backend_foundation")
@@ -34,6 +34,6 @@ def test_auth_migration_round_trip_and_empty_grants(postgres_engine):
         command.downgrade(config, "base")
         assert MigrationContext.configure(connection).get_current_heads() == ()
         command.upgrade(config, "head")
-        assert MigrationContext.configure(connection).get_current_heads() == ("0011_central_inventory",)
+        assert MigrationContext.configure(connection).get_current_heads() == ("0012_projected_inventory",)
         assert dict(connection.execute(text("SELECT code, id FROM roles")).all()) == role_ids
         command.check(config)
