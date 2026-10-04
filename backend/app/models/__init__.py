@@ -1,5 +1,6 @@
 """Import shared ORM models so Alembic can discover their metadata."""
 
+from app.models.alerts import InventoryAlert
 from app.models.audit import AuditLog
 from app.models.auth import Permission, Role, User, role_permissions, user_roles
 from app.models.inventory_masters import Consumable, Supplier, SupplierConsumable, Unit
@@ -47,5 +48,6 @@ __all__ = [
     "UserPlant",
     "PlantConfirmation",
     "RequirementAdjustment",
+    "InventoryAlert",
 ]
 

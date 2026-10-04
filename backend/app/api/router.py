@@ -12,6 +12,7 @@ from app.modules.rules.router import router as rules_router
 from app.modules.inventory.router import router as inventory_router
 from app.modules.inventory.projection_router import router as projection_router
 from app.modules.inventory.reorder_router import router as reorder_router
+from app.modules.alerts.router import router as alerts_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health_router)
@@ -26,3 +27,4 @@ api_router.include_router(plant_workflow_router)
 api_router.include_router(inventory_router)
 api_router.include_router(projection_router)
 api_router.include_router(reorder_router)
+api_router.include_router(alerts_router)
