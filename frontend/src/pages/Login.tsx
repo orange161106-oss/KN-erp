@@ -14,7 +14,7 @@ export default function Login() {
   }
   return <div className="min-h-screen flex items-center justify-center px-4">
     <form onSubmit={submit} className="w-full max-w-md rounded-lg border border-gray-200 bg-white p-8 shadow-sm space-y-5">
-      <h1 className="text-2xl font-semibold text-brand-navy">KN Consumable ERP</h1>
+      <h1 className="text-2xl font-semibold text-brand-navy">KNL Consumable ERP</h1>
       <p className="text-sm text-gray-600">Sign in with your ERP account.</p>
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
       <label className="block text-sm font-medium">Username<input autoComplete="username" required value={username} maxLength={128} onChange={e => setUsername(e.target.value)} className="mt-1 w-full border rounded p-2" /></label>

@@ -1,6 +1,6 @@
-# KN Consumable ERP — Documentation Index
+# KNL Consumable ERP — Documentation Index
 
-This `docs/` folder is the single source of truth for the KN Consumable ERP.
+This `docs/` folder is the single source of truth for the KNL Consumable ERP.
 
 If code and documentation disagree, stop and resolve the conflict before continuing.
 
@@ -40,3 +40,10 @@ AI must never invent a manufacturing/business rule. Unknown rules must be marked
   API, centralized permission checks, token configuration and remaining authority TBDs.
 - [M2.3 consumable, unit and supplier masters](15_CONSUMABLE_SUPPLIER_MASTER_CONTRACT.md):
   master APIs, inactive behavior, audit records, permissions, UI and supplier-field TBDs.
+- [KNL business decision register and questionnaire](16_KN_BUSINESS_DECISION_REGISTER.md):
+  Munees's stock-flow confirmations, remaining KNL questions and the milestone in
+  which each decision is needed.
+
+- [M4.1 central inventory](17_CENTRAL_INVENTORY_CONTRACT.md): KNL's existing-ERP
+  ownership, immutable source import, reported balances/history, exact conversion,
+  technical permissions and remaining integration decisions.

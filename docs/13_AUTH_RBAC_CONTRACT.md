@@ -17,7 +17,7 @@ and `role_permissions` after `0001_backend_foundation`. Entity identifiers are U
   MANAGEMENT as categories only. It seeds no permissions, grants or user accounts.
 - An ADMIN role is subject to the same explicit permission grants as every other role.
 - Approved configuration defines permission codes and role/user assignments. There
-  is no built-in KN approval matrix, monetary limit or plant-access policy.
+  is no built-in KNL approval matrix, monetary limit or plant-access policy.
 
 ## API
 
@@ -86,7 +86,7 @@ Test fixtures provision synthetic accounts only in isolated transactions. Future
 administration changes must record actor, action, entity, old/new state, reason and
 UTC timestamp under the project audit rules.
 
-Plant/resource scope, approval authority, limits and KN permission matrix remain TBD.
+Plant/resource scope, approval authority, limits and KNL permission matrix remain TBD.
 Generic permission checks do not imply access to a plant or business resource.
 Protected business APIs must add approved resource-scope checks when introduced.
 

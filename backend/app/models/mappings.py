@@ -2,6 +2,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, UniqueConstraint, Uuid, func, true
+from sqlalchemy.schema import conv
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -10,7 +11,7 @@ from app.db.base import Base
 class ProductPlant(Base):
     __tablename__ = "product_plants"
     __table_args__ = (
-        UniqueConstraint("product_id", "plant_id", name="uq_product_plant"),
+        UniqueConstraint("product_id", "plant_id", name=conv("uq_product_plants_product_id_plant_id")),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -30,7 +31,7 @@ class ProductPlant(Base):
 class ProductProcessConsumable(Base):
     __tablename__ = "product_process_consumables"
     __table_args__ = (
-        UniqueConstraint("product_id", "process_id", "consumable_id", name="uq_product_process_consumable"),
+        UniqueConstraint("product_id", "process_id", "consumable_id", name=conv("uq_product_process_consumables_product_id_process_id_consumable_id")),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)

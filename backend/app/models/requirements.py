@@ -40,22 +40,22 @@ class CalculatedRequirement(Base):
         Uuid, ForeignKey("planning_versions.id", ondelete="CASCADE"), nullable=False
     )
     prd_order_item_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("prd_order_items.id", ondelete="CASCADE"), nullable=False, index=True
+        Uuid, ForeignKey("prd_order_items.id", ondelete="CASCADE"), nullable=False
     )
     product_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("products.id", ondelete="RESTRICT"), nullable=False, index=True
+        Uuid, ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
     )
     plant_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("plants.id", ondelete="RESTRICT"), nullable=False, index=True
+        Uuid, ForeignKey("plants.id", ondelete="RESTRICT"), nullable=False
     )
     process_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("processes.id", ondelete="RESTRICT"), nullable=False, index=True
+        Uuid, ForeignKey("processes.id", ondelete="RESTRICT"), nullable=False
     )
     consumable_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("consumables.id", ondelete="RESTRICT"), nullable=False, index=True
+        Uuid, ForeignKey("consumables.id", ondelete="RESTRICT"), nullable=False
     )
     rule_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("consumption_norms.id", ondelete="RESTRICT"), nullable=False, index=True
+        Uuid, ForeignKey("consumption_norms.id", ondelete="RESTRICT"), nullable=False
     )
     rule_type: Mapped[str] = mapped_column(String(32), nullable=False)
     rule_version: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -103,16 +103,16 @@ class RequirementCalculationError(Base):
         Uuid, ForeignKey("planning_versions.id", ondelete="CASCADE"), nullable=False
     )
     prd_order_item_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("prd_order_items.id", ondelete="CASCADE"), nullable=False, index=True
+        Uuid, ForeignKey("prd_order_items.id", ondelete="CASCADE"), nullable=False
     )
     product_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("products.id", ondelete="RESTRICT"), nullable=False, index=True
+        Uuid, ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
     )
     plant_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid, ForeignKey("plants.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid, ForeignKey("plants.id", ondelete="SET NULL"), nullable=True
     )
     consumable_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid, ForeignKey("consumables.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid, ForeignKey("consumables.id", ondelete="SET NULL"), nullable=True
     )
     error_code: Mapped[str] = mapped_column(String(64), nullable=False)
     error_message: Mapped[str] = mapped_column(Text, nullable=False)

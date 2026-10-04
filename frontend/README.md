@@ -1,4 +1,4 @@
-# KN Consumable ERP frontend
+# KNL Consumable ERP frontend
 
 React + TypeScript + Vite. M2.3 adds units, consumables, suppliers and supplier mappings.
 The shared contract is [master-data contract](../docs/15_CONSUMABLE_SUPPLIER_MASTER_CONTRACT.md).
@@ -55,3 +55,15 @@ npm run lint
 Vitest + Testing Library cover login/logout, token handling, 401/403, read-only access,
 create/edit/status forms, inactive filtering/reactivation, units and supplier mappings.
 Build includes the TypeScript check. Tests use synthetic responses, no real accounts.
+
+## Central inventory (M4.1)
+
+Inventory navigation requires `inventory.stock.read`. The screen presents dated
+usable balances, missing-import state, material/movement/time history filters,
+exact four-place quantities and explicit source-unit conversion. It does not
+contain warehouse posting, reservation, opening or adjustment forms. Issues are
+dispatches, not automatically actual consumption. Source import is available only
+to `inventory.stock.import` holders while backend imports are enabled; submitting
+the same export again reports replay without duplicating rows. Backend enforcement
+is authoritative. See the [inventory contract](../docs/17_CENTRAL_INVENTORY_CONTRACT.md)
+and [M4.1 handoff](../backend/M4_1_REVIEW.md). Real export mapping remains TBD.

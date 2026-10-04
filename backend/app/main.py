@@ -32,7 +32,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             engine.dispose()
             logger.info("application_stopped")
 
-    application = FastAPI(title="KN Consumable ERP", version="0.1.0", lifespan=lifespan)
+    application = FastAPI(title="KNL Consumable ERP", version="0.1.0", lifespan=lifespan)
     register_error_handlers(application)
     
     # Existing router

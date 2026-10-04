@@ -41,8 +41,8 @@ Owns:
 - approvals workflow
 - plant issue workflow
 - emergency MSL draw workflow if approved
-- local/floor stock only if KN confirms it
-- inter-plant transfer only if KN confirms official plant stocks/transfers
+- local/floor stock only if KNL confirms it
+- inter-plant transfer only if KNL confirms official plant stocks/transfers
 - RBAC workflow coordination
 - alerts
 - dashboard/workflow visibility

@@ -3,6 +3,7 @@
 from app.models.audit import AuditLog
 from app.models.auth import Permission, Role, User, role_permissions, user_roles
 from app.models.inventory_masters import Consumable, Supplier, SupplierConsumable, Unit
+from app.models.inventory import StockImportBatch, StockSnapshot, StockTransaction
 from app.models.mappings import ProductPlant, ProductProcessConsumable
 from app.models.masters import Customer, Product
 from app.models.prd import ImportBatch, ImportError, PlanningVersion, PRDOrderHeader, PRDOrderItem
@@ -22,6 +23,9 @@ __all__ = [
     "Supplier",
     "SupplierConsumable",
     "Unit",
+    "StockImportBatch",
+    "StockSnapshot",
+    "StockTransaction",
     "ProductPlant",
     "ProductProcessConsumable",
     "Customer",
