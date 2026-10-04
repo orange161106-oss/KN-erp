@@ -483,3 +483,15 @@ This development approval does not resolve PLAN-01 through PLAN-05. Approval
 references in a calculation request do not verify company approval or install
 operational policy. Missing inputs remain undetermined. No buffer, purchase quantity,
 automatic order, local MSL authority or alternate company calendar is introduced.
+
+## M5.1 owner-authorized provisional rules
+
+Munees explicitly authorized proceeding with the proposed M5.1 assumptions while
+allowing later KNL confirmation/correction. Reviewer: Yathish. The versioned
+`20_PURCHASE_RECOMMENDATION_CONTRACT.md` records explicit target input, positive-need
+MOQ, simultaneous pack/order increments, maximum-conflict handling, caller-selected
+supplier and unknown-versus-not-applicable constraints. This is owner development
+authorization, not a claim that KNL supplied numeric values or golden examples.
+Targets, constraint values and calendar evidence remain explicit inputs; unknowns
+block recommendations. No PO is created. Corrections require a reviewed rule version
+and tests; supplied evidence must not silently change meaning.

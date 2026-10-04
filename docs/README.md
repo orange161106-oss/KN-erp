@@ -54,3 +54,6 @@ AI must never invent a manufacturing/business rule. Unknown rules must be marked
 
 - [M4.3 reorder timing](19_REORDER_TIMING_CONTRACT.md): supplied-policy assessment,
   lead-time deadlines, working-calendar boundaries, explanations and nullable results.
+
+- [M5.1 purchase recommendation](20_PURCHASE_RECOMMENDATION_CONTRACT.md): provisional
+  quantity rules, simultaneous supplier constraints, explicit targets and explanations.

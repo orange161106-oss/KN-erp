@@ -46,7 +46,7 @@ class InventoryAlert(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     consumable_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("consumables.id", ondelete="RESTRICT"), nullable=False, index=True
+        Uuid, ForeignKey("consumables.id", ondelete="RESTRICT"), nullable=False
     )
     alert_type: Mapped[str] = mapped_column(String(32), nullable=False)
     severity: Mapped[str] = mapped_column(String(16), nullable=False)

@@ -407,3 +407,24 @@ Alembic head remains `0012_projected_inventory`. Read the
 or treating outputs operationally. Run `pytest app/tests/test_reorder.py` and, with
 the existing disposable TEST_DATABASE_URL, `pytest app/tests/integration/test_reorder.py`.
 Actual results are recorded in [M4.3 reviewer handoff](M4_3_REVIEW.md).
+
+## Purchase recommendation (M5.1)
+
+Owner: Munees. Reviewer: Yathish. POST `/api/v1/purchasing/recommendations/assess`
+provides a read-only calculation using `inventory.projection.read`. Supply a selected
+active supplier/material mapping, stock unit, M4.2 source/version, initiation and
+receipt times, explicit target, supplier constraints and lead-time evidence. See
+OpenAPI for schemas and the [contract](../docs/20_PURCHASE_RECOMMENDATION_CONTRACT.md)
+for the owner-approved provisional rule and timing boundaries.
+
+The response explains final demand, stock, incoming, MSL, lead time, target, raw
+quantity and all rounding/maximum checks. APPLICABLE, NOT_APPLICABLE and UNKNOWN
+are distinct constraint states. Unknown is not zero. RECOMMENDED includes valid
+zero purchases; INCOMPLETE and CONFLICT return null recommended_quantity. There is
+no automatic PO, inferred supplier/target, float arithmetic or persisted approval.
+No migration or environment change is needed; existing imports remain gated.
+
+Run `pytest app/tests/test_purchase_recommendation.py` for engine/API validation;
+with the existing disposable TEST_DATABASE_URL run
+`pytest app/tests/integration/test_purchase_recommendation.py` for PostgreSQL
+consistency. Full validation is in [M5.1 handoff](M5_1_REVIEW.md).
