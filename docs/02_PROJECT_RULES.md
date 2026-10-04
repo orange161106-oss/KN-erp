@@ -9,10 +9,10 @@
 6. Critical changes require audit history.
 
 ## Central inventory
-- KN has one common central consumable store.
+- KNL has one common central consumable store.
 - Plant demand is plant-specific.
 - Purchase planning uses central inventory.
-- Do not create five independent purchase stores unless KN confirms separate controlled plant stock.
+- Do not create five independent purchase stores unless KNL confirms separate controlled plant stock.
 
 ## Requirements
 Where an approved formula exists:

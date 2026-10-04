@@ -10,7 +10,7 @@ export default function Sidebar() {
   return (
     <aside className="w-64 bg-brand-navy text-white flex flex-col">
       <div className="p-4 text-lg font-bold border-b border-brand-steel">
-        KN Consumable ERP
+        KNL Consumable ERP
       </div>
       
       <div className="p-3 bg-brand-steel text-xs font-semibold uppercase tracking-wider">
@@ -44,7 +44,7 @@ export default function Sidebar() {
           <Link to="/plant-workflow" className="block hover:text-brand-steel transition-colors">Plant Workflow</Link>
         )}
         
-        {canSee(['STORE']) && (
+        {user.permissions.includes('inventory.stock.read') && (
           <Link to="/inventory" className="block hover:text-brand-steel transition-colors">Inventory</Link>
         )}
         

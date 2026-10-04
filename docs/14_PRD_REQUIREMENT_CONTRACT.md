@@ -10,7 +10,7 @@ Branch: `feature/yathish/m1.5-prd-requirement-contract`.
 The **Production & Requirement Domain** is responsible for transforming raw production planning data (PRD) into deterministic, explainable, plant-specific calculated consumable requirements.
 
 ```text
-KN SaaS ERP PRD Export (.xlsx)
+KNL SaaS ERP PRD Export (.xlsx)
         ↓
 Staging & Validation (M2.1)
         ↓
@@ -29,7 +29,7 @@ Calculated Requirements with Deterministic Explanation
 
 ### Strict Boundaries (What this Domain DOES NOT do):
 - **NO Inventory / Purchase Concepts**: Does not track stock balances, MSL, incoming POs, lead times, safety stocks, or purchase quantities (owned exclusively by Munees in M4).
-- **NO Invented Fields**: Does not introduce speculative spreadsheet columns or company fields not confirmed by KN.
+- **NO Invented Fields**: Does not introduce speculative spreadsheet columns or company fields not confirmed by KNL.
 - **NO Unapproved Formulas**: Does not hardcode ad-hoc formulas or heuristics based on consumable names.
 - **NO Direct In-place Editing of Calculated Demand**: Plant users cannot overwrite engine-calculated quantities; additions are separate traceable records (M3.4).
 
@@ -37,7 +37,7 @@ Calculated Requirements with Deterministic Explanation
 
 ## 2. Canonical PRD Schema Proposal
 
-Excel data from KN's SaaS ERP export must never become active planning data directly. The ingestion pipeline separates **Staging** from **Canonical Planning Items**.
+Excel data from KNL's SaaS ERP export must never become active planning data directly. The ingestion pipeline separates **Staging** from **Canonical Planning Items**.
 
 ### 2.1 Staging Contract (`prd_staging_items`)
 Holds raw row data as uploaded, before validation.
@@ -284,10 +284,10 @@ Only additions with status `APPROVED` are included. Rejected or pending addition
 
 ## 8. Explicit TBD List
 
-The following items are unresolved business/technical decisions requiring confirmation with KN stakeholders and teammates:
+The following items are unresolved business/technical decisions requiring confirmation with KNL stakeholders and teammates:
 
 - **TBD-1: Real PRD Workbook Column Specifications**:
-  Exact spreadsheet layout from KN's SaaS ERP is not yet in the repository. We need confirmation of:
+  Exact spreadsheet layout from KNL's SaaS ERP is not yet in the repository. We need confirmation of:
   - Header names (e.g. `Part No`, `Description`, `Plant`, `Qty`, `Month`).
   - Whether Customer Code, Work Order Number, Model, Drawing No, or Delivery Dates are present.
 - **TBD-2: Multi-Plant Allocation Logic**:
@@ -295,7 +295,7 @@ The following items are unresolved business/technical decisions requiring confir
 - **TBD-3: Finished Assembly vs Child Parts (BOM Level)**:
   Does the SaaS ERP export contain finished product part numbers only, or already exploded component/child parts? If finished products only, is child-part BOM explosion required before consumable mapping?
 - **TBD-4: First Golden Rule Selection for M3.2**:
-  Which consumable and product will serve as the First Golden Rule? (Recommendation: Corrugated Box via `PACKING_RATIO` or Powder Coating via `AREA_COVERAGE`. CO2 is excluded per execution guide until KN confirms formula).
+  Which consumable and product will serve as the First Golden Rule? (Recommendation: Corrugated Box via `PACKING_RATIO` or Powder Coating via `AREA_COVERAGE`. CO2 is excluded per execution guide until KNL confirms formula).
 - **TBD-5: Rounding Norm Standards per Material Type**:
   Should rounding increments be stored at the Consumable Master level (e.g., Gas Cylinders = integer ceil; Chemicals = 2 decimal places; Granules = 25kg bag increments), or at the Business Rule level?
 - **TBD-6: Plant Confirmation SLA & Partial Finalization**:

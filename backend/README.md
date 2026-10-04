@@ -1,7 +1,7 @@
-# KN Consumable ERP backend
+# KNL Consumable ERP backend
 
 Backend/database foundation (M1.1), authentication/RBAC (M1.3), and purchasing
-master-data foundation (M2.3).
+master-data foundation (M2.3), and central inventory reporting (M4.1).
 Owner: Munees. M1.1 reviewer: Yathish. M1.3 reviewer: Keerthi.
 
 The shared auth schema/API contract is in [docs/13_AUTH_RBAC_CONTRACT.md](../docs/13_AUTH_RBAC_CONTRACT.md).
@@ -34,7 +34,7 @@ URL but do not require a signing key.
 
 | Name | Meaning / default |
 | --- | --- |
-| `APP_NAME` | Application title; `KN Consumable ERP` |
+| `APP_NAME` | Application title; `KNL Consumable ERP` |
 | `APP_ENV` | `local`, `test`, `staging`, or `production`; default `local` |
 | `LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; default `INFO` |
 | `DATABASE_URL` | Required PostgreSQL URL; no default |
@@ -227,7 +227,7 @@ router, correcting their pre-existing 404 responses without changing domain logi
   PostgreSQL failures log a fixed event, without exception text or SQL parameters.
 - Business-domain and worker directories are placeholders. Authentication has its
   own thin module router, schemas, services, repository and security helpers.
-  No Celery/Redis or inventory/purchasing logic is introduced.
+  No Celery/Redis or purchase recommendation logic is introduced.
 
 ## Tests
 
@@ -247,7 +247,7 @@ For full validation, provision a separate, disposable database whose name ends i
 Integration tests read `TEST_DATABASE_URL` from the process environment, rather than
 loading it from `.env`. Without it they explicitly skip. A configured but unreachable
 test server causes failure, not a skip. The test database must differ from the
-application database. Tests create a uniquely named `m13_test_*` schema, apply
+application database. Tests create uniquely named `m13_test_*` / `m41_test_*` schemas, apply
 migrations there, and remove only that schema at teardown. Synthetic user/grant
 changes run inside rollback-only test transactions. Use a dedicated test user with
 schema-creation permissions only in the disposable database.
@@ -286,3 +286,53 @@ Never point these tests at shared or production databases.
 - [Pydantic settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/)
 - [FastAPI password hashing and JWT](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/)
 - [PyJWT validation](https://pyjwt.readthedocs.io/en/latest/usage.html)
+
+## Central inventory foundation (M4.1)
+
+Owner: Munees. Reviewer: Keerthi. The
+[inventory contract](../docs/17_CENTRAL_INVENTORY_CONTRACT.md) describes the KNL
+answers, normalized source format and remaining decisions. Migration head is
+`0011_central_inventory` (parent `0010_requirement_approval`); three append-only source
+tables and two unassigned permissions are added. No production accounts or stock
+are seeded. Apply and check with the existing configured database:
+
+```powershell
+.venv/Scripts/python.exe -m alembic upgrade head
+.venv/Scripts/python.exe -m alembic check
+.venv/Scripts/python.exe -m alembic current
+```
+
+`INVENTORY_IMPORT_ENABLED` defaults to false. Enable it only after verifying the
+existing ERP export, usable-stock exclusions and unit/master mapping. There is no
+live source connector. The application never posts opening, warehouse movements,
+reservations or adjustments; these remain in the existing ERP. All displayed
+balances carry source/import timestamps and `is_live=false`. Missing reports are
+null, not zero. Source snapshot quantity is authoritative and is not increased
+again by source transaction history.
+
+GET `/api/v1/inventory/status`, `/balances`, `/balances/{consumable_id}` and
+`/transactions` require `inventory.stock.read`. POST `/api/v1/inventory/imports`
+requires `inventory.stock.import` and enabled import configuration. No role bypass
+or automatic grants exist. JSON input is limited to 500 movements and 500 snapshots
+per export. Each export requires `export_id`, aware `generated_at`, `import_reason`
+and at least one source record. Snapshot fields: `source_snapshot_id`, mapped
+`consumable_id`, stock `unit_id`, exact string `usable_quantity`, aware `as_of`,
+literal `nonusable_excluded=true` and `reservations_excluded=true`. Movement fields:
+`source_event_id`, mapped material/stock/source unit UUIDs, exact `source_quantity`,
+`movement` (RECEIPT/ISSUE/RETURN), aware `event_at`, `source_actor`, `condition=USABLE`,
+and `source_status=POSTED`. Different units also need approved `conversion_factor`
+and `conversion_reference`. No business document links are required locally.
+OpenAPI provides the full typed schemas. API decimals use strings; never convert
+quantities to float. Inexact conversion results are rejected without rounding.
+
+Imports are atomic and audited. Identical export retries return 200 with
+`replayed=true`; new imports return 201. Conflicting source identities/timestamps
+return 409, and disabled imports return 409. Consumable units cannot change once
+stock history/snapshots exist. PostgreSQL triggers reject direct UPDATE/DELETE on
+the three source tables. Review downgrade carefully: it drops their history and
+requires permission grants to be removed first. Use disposable schemas for tests.
+
+Run `pytest app/tests/test_inventory.py` for API/precision/allow-deny cases and
+`pytest app/tests/integration/test_inventory.py` with a dedicated
+`TEST_DATABASE_URL` for real concurrent imports and database immutability checks.
+Actual results and shared migration fixes are in [M4.1 handoff](M4_1_REVIEW.md).

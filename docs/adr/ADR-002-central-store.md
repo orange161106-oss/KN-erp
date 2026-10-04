@@ -3,9 +3,9 @@
 Status: Accepted with one open detail
 
 Decision:
-KN purchasing inventory is modeled as one central common consumable store.
+KNL purchasing inventory is modeled as one central common consumable store.
 Plant requirements remain plant-specific.
 Do not create five independent purchasing stores.
 
 Open:
-If KN confirms controlled plant floor-stock balances, add a separate floor-stock model without changing central purchase inventory.
+If KNL confirms controlled plant floor-stock balances, add a separate floor-stock model without changing central purchase inventory.

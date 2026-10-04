@@ -1,6 +1,6 @@
-# KN Consumable ERP — AI Build Execution Guide & Prompt Library
+# KNL Consumable ERP — AI Build Execution Guide & Prompt Library
 
-This guide is for the 3-member KN Consumable ERP team using Codex, Claude Code, Cursor, Antigravity, or another AI coding agent.
+This guide is for the 3-member KNL Consumable ERP team using Codex, Claude Code, Cursor, Antigravity, or another AI coding agent.
 
 The docs folder is the source of truth. AI-generated code is never allowed to invent company business rules.
 
@@ -156,7 +156,7 @@ Branch: `feature/munees/m1.1-backend-foundation`
 
 ### Prompt
 ```text
-You are the AI development agent for the KN Consumable ERP.
+You are the AI development agent for the KNL Consumable ERP.
 
 OWNER: Munees
 REVIEWER: Yathish
@@ -627,7 +627,7 @@ OBJECTIVE:
 Implement ONE approved rule end-to-end before expanding rule types.
 
 PREFERRED:
-Use an approved formula-driven example such as packing box or powder coating. Do not start with CO2 unless KN confirms its future formula.
+Use an approved formula-driven example such as packing box or powder coating. Do not start with CO2 unless KNL confirms its future formula.
 
 OUTPUT MUST EXPLAIN:
 planning version, production source, product, plant, process, consumable, rule type/version, parameters, calculation steps, raw result, rounding, final qty, unit.
@@ -1247,7 +1247,7 @@ If shared impact exists, sync before merge.
 Paste before any future AI coding task:
 
 ```text
-You are working on the KN Consumable ERP repository.
+You are working on the KNL Consumable ERP repository.
 This is a production-oriented manufacturing ERP, not a demo.
 
 Before doing anything:

@@ -10,6 +10,7 @@ from app.core.errors import ApplicationError
 from app.models.audit import AuditLog
 from app.models.inventory_masters import Consumable, Supplier, SupplierConsumable, Unit
 from app.repositories import inventory_masters as repository
+from app.repositories.inventory import has_stock_records
 from app.schemas import inventory_masters as schemas
 
 
@@ -115,6 +116,8 @@ def update_record(session: Session, resource: Resource, entity_id: UUID, data: B
         before = snapshot(resource, record)
         changes = data.model_dump(exclude_unset=True, exclude={"change_reason"})
         if isinstance(record, Consumable) and "unit_id" in changes and changes["unit_id"] != record.unit_id:
+            if has_stock_records(session, record.id):
+                raise ApplicationError("UNIT_CHANGE_CONFLICT", "Unit cannot change after stock history or a reported balance exists.", 409)
             if repository.has_supplier_mapping(session, record.id):
                 raise ApplicationError("UNIT_CHANGE_CONFLICT", "Unit cannot change after a supplier mapping exists.", 409)
             active_reference(session, Unit, changes["unit_id"])

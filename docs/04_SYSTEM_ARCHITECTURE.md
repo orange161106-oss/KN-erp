@@ -3,7 +3,7 @@
 ## Business flow
 
 ```text
-KN SaaS ERP
+KNL SaaS ERP
    ↓ Excel/CSV
 Import → Staging → Validation
    ↓

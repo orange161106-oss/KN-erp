@@ -10,8 +10,11 @@ from app.db.base import Base
 
 def test_single_master_head_preserves_existing_branches():
     scripts = ScriptDirectory.from_config(Config(str(BACKEND_ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["0008_calculated_requirements"]
-    assert scripts.get_revision("head").down_revision == "0007_consumption_norms"
+    assert scripts.get_heads() == ["0011_central_inventory"]
+    assert scripts.get_revision("head").down_revision == "0010_requirement_approval"
+    assert scripts.get_revision("0010_requirement_approval").down_revision == "0009_plant_workflow"
+    assert scripts.get_revision("0009_plant_workflow").down_revision == "0008_calculated_requirements"
+    assert scripts.get_revision("0008_calculated_requirements").down_revision == "0007_consumption_norms"
     assert scripts.get_revision("0007_consumption_norms").down_revision == "0006_production_consumable_mappings"
     assert scripts.get_revision("0006_production_consumable_mappings").down_revision == "0005_inventory_masters"
     assert scripts.get_revision("0005_inventory_masters").down_revision == "0004_merge_master_heads"
@@ -35,6 +38,8 @@ def test_offline_auth_migration_sql_and_no_secret_required(monkeypatch):
     assert "0005_inventory_masters" in sql
     assert "0007_consumption_norms" in sql
     assert "0008_calculated_requirements" in sql
+    assert "0011_central_inventory" in sql
+    assert "CREATE FUNCTION inventory_append_only" in sql
     assert "version_num VARCHAR(128)" in sql
     assert "private_password" not in sql
 

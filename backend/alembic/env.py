@@ -3,6 +3,7 @@
 from alembic import context
 from alembic.ddl.postgresql import PostgresqlImpl
 from sqlalchemy import String, inspect
+from sqlalchemy.sql.elements import ClauseElement
 
 from app import models  # noqa: F401 -- register future models here before autogeneration
 from app.core.config import load_settings
@@ -21,6 +22,16 @@ class KnPostgresqlImpl(PostgresqlImpl):
         table = super().version_table_impl(**kwargs)
         table.c.version_num.type = String(128)
         return table
+
+    def bulk_insert(self, table, rows, multiinsert=True):
+        # M3.4/M3.5 seed rows contain SQL UUID expressions. Psycopg cannot bind
+        # expressions as scalar parameters; compile them into INSERT values.
+        # Offline behavior already emits expressions and stays unchanged.
+        if not self.as_sql and any(isinstance(value, ClauseElement) for row in rows for value in row.values()):
+            for row in rows:
+                self._exec(table.insert().inline().values(**row))
+        else:
+            super().bulk_insert(table, rows, multiinsert=multiinsert)
 
 
 def run_migrations_offline() -> None:
