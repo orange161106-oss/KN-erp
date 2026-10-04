@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     database_url: SecretStr
     db_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
     inventory_import_enabled: bool = False
+    projection_import_enabled: bool = False
     # Schema-only Alembic operations do not need the application's signing key.
     auth_secret_key: SecretStr | None = None
     auth_access_token_expire_minutes: int = Field(default=15, ge=1, le=60)

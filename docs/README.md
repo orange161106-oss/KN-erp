@@ -47,3 +47,7 @@ AI must never invent a manufacturing/business rule. Unknown rules must be marked
 - [M4.1 central inventory](17_CENTRAL_INVENTORY_CONTRACT.md): KNL's existing-ERP
   ownership, immutable source import, reported balances/history, exact conversion,
   technical permissions and remaining integration decisions.
+
+- [M4.2 projected inventory](18_PROJECTED_INVENTORY_CONTRACT.md): exact event
+  projection, approved MSL evidence, lead-time interval integration, reconciled
+  source inputs, consistent reads and explicit timing limitations.
