@@ -473,3 +473,13 @@ Operational projection imports remain disabled until real source mapping, final
 release evidence, reservation/fulfilment reconciliation and incoming coverage are
 verified. MSL authority stays with the existing ERP. Exact equality/approach alert
 policy and lead-time calendars remain TBD; no daily spreading or buffer is assumed.
+
+## M4.3 development approval and operational limits
+
+Munees approved M4.3 reorder timing with Keerthi as reviewer. See
+`19_REORDER_TIMING_CONTRACT.md`. A read-only assessment accepts explicitly supplied
+policy/duration/calendar evidence and reuses M4.2's authoritative projection checks.
+This development approval does not resolve PLAN-01 through PLAN-05. Approval
+references in a calculation request do not verify company approval or install
+operational policy. Missing inputs remain undetermined. No buffer, purchase quantity,
+automatic order, local MSL authority or alternate company calendar is introduced.

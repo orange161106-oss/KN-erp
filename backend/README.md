@@ -385,3 +385,25 @@ concurrent input imports and consistency during concurrent requirement changes.
 The full suite also validates migration round trips. Actual results are recorded in
 [M4.2 reviewer handoff](M4_2_REVIEW.md). M4.4 can consume these explanation APIs for
 planning screens and alert presentation after KNL's remaining policies are confirmed.
+
+## Reorder timing foundation (M4.3)
+
+Owner: Munees. Reviewer: Keerthi. POST `/api/v1/inventory/reorder/assess` is a
+read-only assessment requiring `inventory.projection.read`. Supply material/version,
+source-set identity, aware evaluation/cutoff timestamps and explicit policy/lead-time
+evidence. OpenAPI exposes the typed body. The service reads M4.2's stored sources;
+it does not trust client-calculated projected stock or add incoming again.
+
+The response returns nullable reorder_required, expected crossing, latest order
+deadline/inclusivity and source explanation. Missing timing/policy/calendar/coverage
+returns INCOMPLETE, not false. No breach returns false only for a verified horizon
+covering the supplied lead time. Already-breached stock requires action without
+claiming an order can prevent a past breach. No purchase quantity is calculated.
+
+This is a supplied-evidence assessment, not a policy approval or automatic ordering
+endpoint. There is no new migration, environment setting, database write or UI.
+Alembic head remains `0012_projected_inventory`. Read the
+[timing contract](../docs/19_REORDER_TIMING_CONTRACT.md) before providing calendars
+or treating outputs operationally. Run `pytest app/tests/test_reorder.py` and, with
+the existing disposable TEST_DATABASE_URL, `pytest app/tests/integration/test_reorder.py`.
+Actual results are recorded in [M4.3 reviewer handoff](M4_3_REVIEW.md).

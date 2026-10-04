@@ -51,3 +51,6 @@ AI must never invent a manufacturing/business rule. Unknown rules must be marked
 - [M4.2 projected inventory](18_PROJECTED_INVENTORY_CONTRACT.md): exact event
   projection, approved MSL evidence, lead-time interval integration, reconciled
   source inputs, consistent reads and explicit timing limitations.
+
+- [M4.3 reorder timing](19_REORDER_TIMING_CONTRACT.md): supplied-policy assessment,
+  lead-time deadlines, working-calendar boundaries, explanations and nullable results.
