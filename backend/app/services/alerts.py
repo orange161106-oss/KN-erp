@@ -9,7 +9,7 @@ Business Rules:
   - Acknowledgements update status to ACKNOWLEDGED and write to audit_logs.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
@@ -20,8 +20,10 @@ from sqlalchemy.orm import Session
 from app.core.errors import ApplicationError
 from app.models.alerts import InventoryAlert
 from app.models.audit import AuditLog
+from app.models.grn import GRNItem
 from app.models.inventory import StockSnapshot
 from app.models.inventory_masters import Consumable, Unit
+from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem
 from app.schemas.alerts import (
     AlertEvaluationSummaryResponse,
     InventoryAlertResponse,
@@ -133,7 +135,7 @@ def acknowledge_alert(
 
 
 def evaluate_inventory_alerts(session: Session) -> AlertEvaluationSummaryResponse:
-    """Evaluate reported central stock balances against MSL thresholds.
+    """Evaluate reported central stock balances against MSL thresholds & PO delivery risks.
 
     Deduplication: Existing ACTIVE alerts for (consumable_id, alert_type) are
     updated in-place rather than creating duplicate rows.
@@ -205,6 +207,8 @@ def evaluate_inventory_alerts(session: Session) -> AlertEvaluationSummaryRespons
             condition_active=is_low_stock,
             counts=counts,
         )
+
+    _evaluate_po_delivery_alerts(session=session, counts=counts)
 
     session.commit()
 
@@ -281,3 +285,140 @@ def _process_alert_condition(
     else:
         if existing_alert and existing_alert.status == "ACTIVE":
             existing_alert.status = "RESOLVED"
+
+
+def _evaluate_po_delivery_alerts(session: Session, counts: dict) -> None:
+    """Evaluate ISSUED Purchase Orders for PO_OVERDUE and PO_DUE_SOON delivery risk alerts.
+
+    Business Rules:
+      - Query all ISSUED PO items.
+      - Calculate total accepted quantity received via GRNItems for each PO line.
+      - remaining_qty = ordered_quantity - sum(accepted_quantity)
+      - If remaining_qty > 0:
+        - If expected_delivery < now_utc -> PO_OVERDUE (CRITICAL)
+        - Else if expected_delivery <= now_utc + 3 days -> PO_DUE_SOON (WARNING)
+      - Active alerts automatically resolve when remaining_qty <= 0 or delivery date > 3 days out.
+    """
+    now_utc = datetime.now(timezone.utc)
+    due_soon_window = now_utc + timedelta(days=3)
+
+    consumables = session.execute(
+        select(Consumable).where(Consumable.is_active == True)  # noqa: E712
+    ).scalars().all()
+
+    units_map = {
+        u.id: u.code
+        for u in session.execute(select(Unit)).scalars().all()
+    }
+
+    # Fetch all items for ISSUED POs
+    po_items_stmt = (
+        select(PurchaseOrderItem, PurchaseOrder.po_number)
+        .join(PurchaseOrder, PurchaseOrderItem.purchase_order_id == PurchaseOrder.id)
+        .where(PurchaseOrder.status == "ISSUED")
+    )
+    po_items_result = session.execute(po_items_stmt).all()
+
+    # Calculate received accepted quantity per PO item
+    grn_sums_stmt = (
+        select(
+            GRNItem.purchase_order_item_id,
+            func.coalesce(func.sum(GRNItem.accepted_quantity), Decimal("0.0000")).label("total_accepted"),
+        )
+        .group_by(GRNItem.purchase_order_item_id)
+    )
+    grn_sums = dict(session.execute(grn_sums_stmt).all())
+
+    # Map PO lines per consumable
+    po_lines_by_consumable: dict[UUID, list[tuple[PurchaseOrderItem, str, Decimal]]] = {}
+    for item, po_number in po_items_result:
+        accepted_qty = grn_sums.get(item.id, Decimal("0.0000"))
+        remaining_qty = item.ordered_quantity - accepted_qty
+        if item.consumable_id not in po_lines_by_consumable:
+            po_lines_by_consumable[item.consumable_id] = []
+        po_lines_by_consumable[item.consumable_id].append((item, po_number, remaining_qty))
+
+    for c in consumables:
+        uom_str = units_map.get(c.unit_id, "UNK")
+        lines = po_lines_by_consumable.get(c.id, [])
+
+        overdue_lines = []
+        due_soon_lines = []
+
+        for item, po_number, rem_qty in lines:
+            if rem_qty <= Decimal("0.0000"):
+                continue
+            exp_date = item.expected_delivery
+            if exp_date.tzinfo is None:
+                exp_date = exp_date.replace(tzinfo=timezone.utc)
+
+            if exp_date < now_utc:
+                overdue_lines.append((item, po_number, rem_qty, exp_date))
+            elif exp_date <= due_soon_window:
+                due_soon_lines.append((item, po_number, rem_qty, exp_date))
+
+        # Evaluate PO_OVERDUE
+        is_overdue = len(overdue_lines) > 0
+        if is_overdue:
+            tot_rem = sum((r[2] for r in overdue_lines), Decimal("0.0000"))
+            tot_ord = sum((r[0].ordered_quantity for r in overdue_lines), Decimal("0.0000"))
+            po_nums = ", ".join(sorted(set(r[1] for r in overdue_lines)))
+            msg = f"CRITICAL: Delivery for {c.code} is overdue on PO(s) #{po_nums} ({tot_rem} {uom_str} remaining)."
+            _process_alert_condition(
+                session=session,
+                consumable=c,
+                alert_type="PO_OVERDUE",
+                severity="CRITICAL",
+                current_stock=tot_rem,
+                threshold_qty=tot_ord,
+                uom=uom_str,
+                message=msg,
+                condition_active=True,
+                counts=counts,
+            )
+        else:
+            _process_alert_condition(
+                session=session,
+                consumable=c,
+                alert_type="PO_OVERDUE",
+                severity="CRITICAL",
+                current_stock=Decimal("0.0000"),
+                threshold_qty=Decimal("0.0000"),
+                uom=uom_str,
+                message="",
+                condition_active=False,
+                counts=counts,
+            )
+
+        # Evaluate PO_DUE_SOON
+        is_due_soon = not is_overdue and len(due_soon_lines) > 0
+        if is_due_soon:
+            tot_rem = sum((r[2] for r in due_soon_lines), Decimal("0.0000"))
+            tot_ord = sum((r[0].ordered_quantity for r in due_soon_lines), Decimal("0.0000"))
+            po_nums = ", ".join(sorted(set(r[1] for r in due_soon_lines)))
+            msg = f"WARNING: Delivery for {c.code} is due soon on PO(s) #{po_nums} ({tot_rem} {uom_str} remaining)."
+            _process_alert_condition(
+                session=session,
+                consumable=c,
+                alert_type="PO_DUE_SOON",
+                severity="WARNING",
+                current_stock=tot_rem,
+                threshold_qty=tot_ord,
+                uom=uom_str,
+                message=msg,
+                condition_active=True,
+                counts=counts,
+            )
+        else:
+            _process_alert_condition(
+                session=session,
+                consumable=c,
+                alert_type="PO_DUE_SOON",
+                severity="WARNING",
+                current_stock=Decimal("0.0000"),
+                threshold_qty=Decimal("0.0000"),
+                uom=uom_str,
+                message="",
+                condition_active=False,
+                counts=counts,
+            )
