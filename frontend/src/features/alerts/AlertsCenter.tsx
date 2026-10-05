@@ -207,6 +207,8 @@ export default function AlertsCenter() {
               <option value="LOW_STOCK">Low Stock</option>
               <option value="REORDER_REQUIRED">Reorder Required</option>
               <option value="PO_DELAY">PO Delay</option>
+              <option value="PO_DUE_SOON">PO Due Soon</option>
+              <option value="PO_OVERDUE">PO Overdue</option>
             </select>
           </div>
         </div>

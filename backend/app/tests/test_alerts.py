@@ -102,11 +102,17 @@ class TestAlertEvaluation:
         exec_mock = session.execute
 
         exec_mock.side_effect = [
-            MagicMock(scalars=lambda: MagicMock(all=lambda: [c1])),  # consumables
-            MagicMock(scalars=lambda: MagicMock(all=lambda: [unit])),  # units
+            MagicMock(scalars=lambda: MagicMock(all=lambda: [c1])),  # MSL consumables
+            MagicMock(scalars=lambda: MagicMock(all=lambda: [unit])),  # MSL units
             MagicMock(scalars=lambda: MagicMock(all=lambda: [snap1])),  # latest snapshots
-            MagicMock(scalar_one_or_none=lambda: None),  # existing alert check 1
-            MagicMock(scalar_one_or_none=lambda: None),  # existing alert check 2
+            MagicMock(scalar_one_or_none=lambda: None),  # BELOW_MSL check
+            MagicMock(scalar_one_or_none=lambda: None),  # LOW_STOCK check
+            MagicMock(scalars=lambda: MagicMock(all=lambda: [c1])),  # PO consumables
+            MagicMock(scalars=lambda: MagicMock(all=lambda: [unit])),  # PO units
+            MagicMock(all=lambda: []),  # PO items
+            MagicMock(all=lambda: []),  # GRN sums
+            MagicMock(scalar_one_or_none=lambda: None),  # PO_OVERDUE check
+            MagicMock(scalar_one_or_none=lambda: None),  # PO_DUE_SOON check
             MagicMock(scalar_one=lambda: 1),  # active critical count
             MagicMock(scalar_one=lambda: 0),  # active warning count
             MagicMock(scalar_one=lambda: 0),  # active info count
@@ -115,3 +121,124 @@ class TestAlertEvaluation:
         summary = evaluate_inventory_alerts(session)
         assert summary.total_evaluated == 1
         assert summary.active_critical_count == 1
+
+
+class TestPODeliveryAlerts:
+    """_evaluate_po_delivery_alerts logic."""
+
+    def test_po_overdue_created(self):
+        from datetime import datetime, timedelta, timezone
+        from app.services.alerts import _evaluate_po_delivery_alerts
+
+        c1 = MagicMock()
+        c1.id = uuid4()
+        c1.code = "ITEM01"
+        c1.unit_id = uuid4()
+        c1.is_active = True
+
+        unit = MagicMock()
+        unit.id = c1.unit_id
+        unit.code = "PCS"
+
+        po_item = MagicMock()
+        po_item.id = uuid4()
+        po_item.consumable_id = c1.id
+        po_item.ordered_quantity = Decimal("50.0000")
+        po_item.expected_delivery = datetime.now(timezone.utc) - timedelta(days=2)
+
+        session = MagicMock()
+        session.execute.side_effect = [
+            MagicMock(scalars=lambda: MagicMock(all=lambda: [c1])),
+            MagicMock(scalars=lambda: MagicMock(all=lambda: [unit])),
+            MagicMock(all=lambda: [(po_item, "PO-001")]),  # po items
+            MagicMock(all=lambda: []),  # grn sums (0 received)
+            MagicMock(scalar_one_or_none=lambda: None),  # existing PO_OVERDUE check
+            MagicMock(scalar_one_or_none=lambda: None),  # existing PO_DUE_SOON check
+        ]
+
+        counts = {"created": 0, "updated": 0}
+        _evaluate_po_delivery_alerts(session, counts)
+
+        assert counts["created"] == 1
+        session.add.assert_called()
+        added_alert = session.add.call_args[0][0]
+        assert added_alert.alert_type == "PO_OVERDUE"
+        assert added_alert.severity == "CRITICAL"
+
+    def test_po_due_soon_created(self):
+        from datetime import datetime, timedelta, timezone
+        from app.services.alerts import _evaluate_po_delivery_alerts
+
+        c1 = MagicMock()
+        c1.id = uuid4()
+        c1.code = "ITEM02"
+        c1.unit_id = uuid4()
+        c1.is_active = True
+
+        unit = MagicMock()
+        unit.id = c1.unit_id
+        unit.code = "PCS"
+
+        po_item = MagicMock()
+        po_item.id = uuid4()
+        po_item.consumable_id = c1.id
+        po_item.ordered_quantity = Decimal("100.0000")
+        po_item.expected_delivery = datetime.now(timezone.utc) + timedelta(days=1)
+
+        session = MagicMock()
+        session.execute.side_effect = [
+            MagicMock(scalars=lambda: MagicMock(all=lambda: [c1])),
+            MagicMock(scalars=lambda: MagicMock(all=lambda: [unit])),
+            MagicMock(all=lambda: [(po_item, "PO-002")]),  # po items
+            MagicMock(all=lambda: []),  # grn sums (0 received)
+            MagicMock(scalar_one_or_none=lambda: None),  # existing PO_OVERDUE check
+            MagicMock(scalar_one_or_none=lambda: None),  # existing PO_DUE_SOON check
+        ]
+
+        counts = {"created": 0, "updated": 0}
+        _evaluate_po_delivery_alerts(session, counts)
+
+        assert counts["created"] == 1
+        session.add.assert_called()
+        added_alert = session.add.call_args[0][0]
+        assert added_alert.alert_type == "PO_DUE_SOON"
+        assert added_alert.severity == "WARNING"
+
+    def test_grn_full_receipt_resolves_active_po_alert(self):
+        from datetime import datetime, timedelta, timezone
+        from app.services.alerts import _evaluate_po_delivery_alerts
+
+        c1 = MagicMock()
+        c1.id = uuid4()
+        c1.code = "ITEM03"
+        c1.unit_id = uuid4()
+        c1.is_active = True
+
+        unit = MagicMock()
+        unit.id = c1.unit_id
+        unit.code = "PCS"
+
+        po_item = MagicMock()
+        po_item.id = uuid4()
+        po_item.consumable_id = c1.id
+        po_item.ordered_quantity = Decimal("50.0000")
+        po_item.expected_delivery = datetime.now(timezone.utc) - timedelta(days=5)
+
+        existing_alert = MagicMock()
+        existing_alert.status = "ACTIVE"
+
+        session = MagicMock()
+        session.execute.side_effect = [
+            MagicMock(scalars=lambda: MagicMock(all=lambda: [c1])),
+            MagicMock(scalars=lambda: MagicMock(all=lambda: [unit])),
+            MagicMock(all=lambda: [(po_item, "PO-003")]),  # po items
+            MagicMock(all=lambda: [(po_item.id, Decimal("50.0000"))]),  # grn sums (50/50 received)
+            MagicMock(scalar_one_or_none=lambda: existing_alert),  # existing PO_OVERDUE check
+            MagicMock(scalar_one_or_none=lambda: None),  # existing PO_DUE_SOON check
+        ]
+
+        counts = {"created": 0, "updated": 0}
+        _evaluate_po_delivery_alerts(session, counts)
+
+        assert existing_alert.status == "RESOLVED"
+

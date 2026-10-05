@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-AlertType = Literal["BELOW_MSL", "LOW_STOCK", "REORDER_REQUIRED", "PO_DELAY"]
+AlertType = Literal["BELOW_MSL", "LOW_STOCK", "REORDER_REQUIRED", "PO_DELAY", "PO_DUE_SOON", "PO_OVERDUE"]
 AlertSeverity = Literal["CRITICAL", "WARNING", "INFO"]
 AlertStatus = Literal["ACTIVE", "ACKNOWLEDGED", "RESOLVED"]
 
