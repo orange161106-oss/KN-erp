@@ -12,7 +12,7 @@ from app.core.config import Settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_app
-from app.models.auth import Role, User
+from app.models.auth import Permission, Role, User
 from app.models.inventory import StockImportBatch, StockTransaction
 from app.models.inventory_masters import Consumable, Unit
 from app.models.plant_workflow import RequirementAdjustment
@@ -42,7 +42,9 @@ def history_fixture():
     db = session_factory()
 
     # 1. User & Auth
-    admin_role = Role(id=uuid4(), code="ADMIN", name="Admin Role")
+    admin_role = Role(id=uuid4(), code="ADMIN", name="Admin Role", permissions=[
+        Permission(code="reports.inventory.read", description="Synthetic inventory report reader")
+    ])
     user = User(
         id=uuid4(),
         username="report_tester",

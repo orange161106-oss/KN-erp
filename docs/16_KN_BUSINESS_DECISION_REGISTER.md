@@ -518,3 +518,13 @@ PO pending and receipt status derive from imported accepted GRNs and are labelle
 as imported, non-live figures. Over-receipt policy remains unapproved; excess receipts
 are held without writes. Real ERP mapping, corrections/reversals, inspection-pending
 handling and issued cancellation remain TBD. Warehouse authority stays external.
+
+## M6.2 reporting boundary
+
+Munees approved the M6.2 report plan. Reviewer: Keerthi. Reports use existing
+inventory/purchase domain services and immutable source, approval, order and GRN
+records; they do not redefine formulas or infer missing recommendation evidence.
+Read permissions are explicit and have no default role grants. Stock and GRN coverage
+remains imported, dated and non-live. Operational freshness, historical stock-as-of,
+consolidated supplier-plan semantics, overdue delivery and missing operational MSL or
+lead-time authority remain TBD. See `23_INVENTORY_PURCHASE_REPORTS_CONTRACT.md`.
