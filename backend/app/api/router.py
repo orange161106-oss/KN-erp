@@ -14,6 +14,7 @@ from app.modules.inventory.projection_router import router as projection_router
 from app.modules.inventory.reorder_router import router as reorder_router
 from app.modules.alerts.router import router as alerts_router
 from app.modules.purchasing.recommendation_router import router as purchase_recommendation_router
+from app.modules.purchasing.approval_router import router as purchase_approval_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health_router)
@@ -30,3 +31,5 @@ api_router.include_router(projection_router)
 api_router.include_router(reorder_router)
 api_router.include_router(alerts_router)
 api_router.include_router(purchase_recommendation_router)
+api_router.include_router(purchase_approval_router)
+

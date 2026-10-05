@@ -10,6 +10,7 @@ import ConsumptionNorms from './features/rules/ConsumptionNorms';
 import PlantWorkflow from './features/plant_workflow/PlantWorkflow';
 import Inventory from './features/inventory/Inventory';
 import AlertsCenter from './features/alerts/AlertsCenter';
+import PurchaseApprovals from './features/purchasing/PurchaseApprovals';
 
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
@@ -51,7 +52,7 @@ function Application() {
             element={<PlantWorkflow currentUserId={user.id} />}
           />
           <Route path="/inventory" element={<Inventory />} />
-          <Route path="/purchase" element={<div>Purchase Placeholder</div>} />
+          <Route path="/purchase/*" element={<PurchaseApprovals currentUserId={user.id} />} />
           <Route path="/alerts/*" element={<AlertsCenter />} />
           <Route path="/reports" element={<div>Reports Placeholder</div>} />
           <Route path="/admin" element={<div>Administration Placeholder</div>} />
