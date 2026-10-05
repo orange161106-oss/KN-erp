@@ -18,6 +18,7 @@ from app.modules.purchasing.approval_router import router as purchase_approval_r
 
 from app.modules.po_grn.router import router as purchase_orders_router
 from app.modules.po_grn.grn_router import router as grn_router
+from app.modules.reports.router import router as reports_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(grn_router)
@@ -37,4 +38,5 @@ api_router.include_router(reorder_router)
 api_router.include_router(alerts_router)
 api_router.include_router(purchase_recommendation_router)
 api_router.include_router(purchase_approval_router)
+api_router.include_router(reports_router)
 
