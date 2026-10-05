@@ -63,3 +63,6 @@ AI must never invent a manufacturing/business rule. Unknown rules must be marked
 
 - [M5.4 GRNs and inventory](22_GRN_INVENTORY_CONTRACT.md): atomic posted-ERP receipt
   imports, accepted-only fulfilment, source stock links, permissions and retry rules.
+- [M6.2 inventory and purchase reports](23_INVENTORY_PURCHASE_REPORTS_CONTRACT.md):
+  authoritative domain report sources, filters, non-live coverage, permissions,
+  query performance and remaining definition questions.

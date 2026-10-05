@@ -58,7 +58,7 @@ export default function Sidebar() {
           <Link to="/alerts" className="block hover:text-brand-steel transition-colors">Alerts</Link>
         )}
         
-        {canSee(['PLANNER']) && (
+        {(user.permissions.includes('reports.inventory.read') || user.permissions.includes('reports.purchase.read')) && (
           <Link to="/reports" className="block hover:text-brand-steel transition-colors">Reports</Link>
         )}
 

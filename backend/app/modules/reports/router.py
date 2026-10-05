@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.schemas.auth import CurrentUser
 from app.schemas.reports import PlannedVsActualReportResponse
-from app.security.dependencies import get_current_user
+from app.security.permissions import require_permissions
 from app.services.reports import get_planned_vs_actual_report
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 )
 def get_planned_vs_actual(
     session: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    current_user: Annotated[CurrentUser, Depends(require_permissions('reports.inventory.read'))],
     period: Optional[str] = Query(None, description="Planning period in YYYY-MM format"),
     planning_version_id: Optional[UUID] = Query(None, description="Specific planning version ID"),
     plant_id: Optional[UUID] = Query(None, description="Filter by plant ID"),

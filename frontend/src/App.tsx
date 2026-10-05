@@ -13,6 +13,7 @@ import AlertsCenter from './features/alerts/AlertsCenter';
 import PurchaseApprovals from './features/purchasing/PurchaseApprovals';
 import PurchaseOrders from './features/purchasing/PurchaseOrders';
 import GRNs from './features/purchasing/GRNs';
+import InventoryPurchaseReports from './features/reports/InventoryPurchaseReports';
 
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
@@ -58,7 +59,7 @@ function Application() {
           <Route path="/purchase-orders" element={<PurchaseOrders />} />
           <Route path="/grns" element={<GRNs />} />
           <Route path="/alerts/*" element={<AlertsCenter />} />
-          <Route path="/reports" element={<div>Reports Placeholder</div>} />
+          <Route path="/reports" element={<InventoryPurchaseReports />} />
           <Route path="/admin" element={<div>Administration Placeholder</div>} />
           <Route path="/status" element={<SystemStatus />} />
           <Route path="*" element={<Navigate to="/" replace />} />

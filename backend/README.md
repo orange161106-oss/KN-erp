@@ -483,3 +483,21 @@ Run `pytest app/tests/test_purchase_recommendation.py` for engine/API validation
 with the existing disposable TEST_DATABASE_URL run
 `pytest app/tests/integration/test_purchase_recommendation.py` for PostgreSQL
 consistency. Full validation is in [M5.1 handoff](M5_1_REVIEW.md).
+
+## Inventory and purchase reports (M6.2)
+
+Owner: Munees. Reviewer: Keerthi. Migration head is `0017_report_permissions`,
+following `0016_grn_imports`. Apply with `alembic upgrade head`; validate schema
+agreement with `alembic check`. The migration seeds `reports.inventory.read` and
+`reports.purchase.read`, without granting either permission to a role by default.
+
+The `/api/v1/reports` API exposes material stock, M4.2 projected shortage, M4.3
+reorder assessment, supplier purchase plan, pending POs, GRN history and traced
+recommendation-to-receipt fulfilment. It delegates projections/reorder/recommendation
+to their domain services and reads approval, PO and imported GRN evidence for
+reconciliation. Existing-ERP stock and receipt results are explicitly non-live.
+No report table or business formula was added. Contract and open decisions are in
+[`docs/23_INVENTORY_PURCHASE_REPORTS_CONTRACT.md`](../docs/23_INVENTORY_PURCHASE_REPORTS_CONTRACT.md).
+
+Run `pytest app/tests/test_inventory_purchase_reports.py` and
+`pytest app/tests/test_planned_vs_actual_history.py` for report API validation.
