@@ -5,6 +5,10 @@ Branch: `feature/munees/m4.1-central-inventory`.
 Source: `INV_KN_Discussion_Answers_Updated.pdf`, supplied by Munees on 2026-10-04,
 INV-01 through INV-09. This replaces the earlier assumption of local stock posting.
 
+M5.4 adds [atomic posted-GRN import](22_GRN_INVENTORY_CONTRACT.md), linking ERP receipt
+events and snapshots to PO fulfilment. It reuses this source-import boundary and
+latest-snapshot balance strategy; no local warehouse posting is introduced.
+
 ## Authoritative boundary
 
 The existing ERP owns opening/cutover, reservations, warehouse approvals, issue/

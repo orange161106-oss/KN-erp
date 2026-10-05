@@ -12,6 +12,7 @@ import Inventory from './features/inventory/Inventory';
 import AlertsCenter from './features/alerts/AlertsCenter';
 import PurchaseApprovals from './features/purchasing/PurchaseApprovals';
 import PurchaseOrders from './features/purchasing/PurchaseOrders';
+import GRNs from './features/purchasing/GRNs';
 
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
@@ -55,6 +56,7 @@ function Application() {
           <Route path="/inventory" element={<Inventory />} />
           <Route path="/purchase/*" element={<PurchaseApprovals currentUserId={user.id} />} />
           <Route path="/purchase-orders" element={<PurchaseOrders />} />
+          <Route path="/grns" element={<GRNs />} />
           <Route path="/alerts/*" element={<AlertsCenter />} />
           <Route path="/reports" element={<div>Reports Placeholder</div>} />
           <Route path="/admin" element={<div>Administration Placeholder</div>} />

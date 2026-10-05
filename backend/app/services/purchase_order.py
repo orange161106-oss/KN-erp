@@ -7,11 +7,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.core.errors import ApplicationError
-from app.domain.purchase_engine.orders import line_value, satisfies_order_terms
+from app.domain.purchase_engine.orders import line_value, pending_quantity, satisfies_order_terms
 from app.models.audit import AuditLog
 from app.models.purchase_approval import PurchaseApproval
 from app.models.purchase_order import PurchaseDemandEvidence, PurchaseOrder, PurchaseOrderItem
 from app.repositories import purchase_order as repository
+from app.repositories import grn as receipts
 from app.schemas.purchase_order import EligibleDemand, OrderItemResponse, OrderResponse
 from app.services import purchase_recommendation
 from app.services.projection import digest, utc
@@ -115,11 +116,14 @@ def response(session, order, replayed=False):
     lines = []
     for item in repository.items(session, order.id):
         saved = session.get(PurchaseDemandEvidence, item.evidence_id)
+        received, accepted, rejected = receipts.totals(session, item.id)
         lines.append(OrderItemResponse(id=item.id, approval_id=item.approval_id, evidence_id=item.evidence_id,
                      consumable_id=item.consumable_id, planning_version_id=item.planning_version_id,
                      code=item.material_snapshot['code'], name=item.material_snapshot['name'], unit_id=item.unit_id,
                      unit_code=item.material_snapshot['unit_code'], ordered_quantity=item.ordered_quantity,
-                     pending_quantity=None if order.status == 'ISSUED' else Decimal('0'), expected_delivery=item.expected_delivery,
+                     pending_quantity=pending_quantity(item.ordered_quantity, Decimal('0'), accepted) if order.status == 'ISSUED' else Decimal('0'),
+                     received_quantity=received, accepted_quantity=accepted, rejected_quantity=rejected,
+                     expected_delivery=item.expected_delivery,
                      pricing=item.pricing, line_value=item.line_value, approval_snapshot=item.approval_snapshot,
                      recommendation_evidence=saved.report))
     with localcontext() as ctx:
@@ -130,7 +134,10 @@ def response(session, order, replayed=False):
                          po_date=order.po_date, status=order.status, created_at=order.created_at,
                          issued_at=order.issued_at, cancelled_at=order.cancelled_at, items=lines,
                          currency=next((line.pricing.currency for line in lines if line.pricing), None), total_value=total,
-                         pending_basis={'DRAFT': 'NOT_COMMITTED', 'ISSUED': 'FULFILMENT_NOT_CONNECTED', 'CANCELLED': 'CANCELLED_DRAFT'}[order.status],
+                         pending_basis={'DRAFT': 'NOT_COMMITTED', 'ISSUED': 'IMPORTED_ACCEPTED_GRNS', 'CANCELLED': 'CANCELLED_DRAFT'}[order.status],
+                         fulfilment_status=('NOT_APPLICABLE' if order.status != 'ISSUED' else
+                             'COMPLETE' if all(line.pending_quantity == 0 for line in lines) else
+                             'PARTIAL' if any(line.accepted_quantity > 0 for line in lines) else 'NOT_RECEIVED'),
                          replayed=replayed,
                          history=[{'action': row.action, 'at': row.created_at.isoformat(), 'actor_id': str(row.actor_id),
                                    'reason': row.reason} for row in repository.history(session, order.id)])

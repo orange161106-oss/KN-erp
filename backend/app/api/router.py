@@ -17,8 +17,10 @@ from app.modules.purchasing.recommendation_router import router as purchase_reco
 from app.modules.purchasing.approval_router import router as purchase_approval_router
 
 from app.modules.po_grn.router import router as purchase_orders_router
+from app.modules.po_grn.grn_router import router as grn_router
 
 api_router = APIRouter(prefix="/api/v1")
+api_router.include_router(grn_router)
 api_router.include_router(purchase_orders_router)
 api_router.include_router(health_router)
 api_router.include_router(auth_router)

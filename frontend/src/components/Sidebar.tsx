@@ -18,6 +18,7 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex-1 p-4 space-y-2 flex flex-col overflow-y-auto">
+        {user.permissions.includes('purchase.grns.read') && <Link to="/grns" className="block hover:text-brand-steel transition-colors">Goods receipts</Link>}
         {user.permissions.includes('purchase.orders.read') && <Link to="/purchase-orders" className="block hover:text-brand-steel transition-colors">Purchase orders</Link>}
         <Link to="/" className="block hover:text-brand-steel transition-colors">Dashboard</Link>
         
