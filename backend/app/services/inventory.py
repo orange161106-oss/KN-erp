@@ -35,67 +35,70 @@ def validate_replay(batch: StockImportBatch, digest: str):
         raise ApplicationError("SOURCE_CONFLICT", "The source identifier already has different content. Resolve the source export; stored history cannot be overwritten.", 409)
 
 
-def import_source(session: Session, data: SourceImport, actor_id: UUID, *, enabled: bool) -> ImportResult:
+def stage_source(session: Session, data: SourceImport, actor_id: UUID, *, enabled: bool) -> ImportResult:
+    """Validate and flush source data; the caller must own commit/rollback."""
     if not enabled:
         raise ApplicationError("INVENTORY_IMPORT_DISABLED", "Source import is not enabled. The source export mapping must be verified first.", 409)
     if data.generated_at > datetime.now(timezone.utc):
         raise ApplicationError("INVALID_SOURCE_TIME", "An already-posted source export cannot have a future generation time.", 422)
     digest = fingerprint(data)
+    ids = {row.consumable_id for row in [*data.movements, *data.snapshots]}
+    materials = repository.lock_consumables(session, ids)
+    if len(materials) != len(ids):
+        raise ApplicationError("INVALID_REFERENCE", "A source consumable is not present in the master data.", 409)
+    previous = repository.find_batch(session, data.export_id)
+    if previous is not None:
+        validate_replay(previous, digest)
+        return result(previous, True)
+    new_movements, new_snapshots = [], []
+    for rows, model, key_field, target in (
+        (data.movements, StockTransaction, "source_event_id", new_movements),
+        (data.snapshots, StockSnapshot, "source_snapshot_id", new_snapshots),
+    ):
+        for row in rows:
+            material = materials[row.consumable_id]
+            if row.unit_id != material.unit_id:
+                raise ApplicationError("UNIT_MISMATCH", "A source stock unit does not match its consumable's stock unit.", 409)
+            if model is StockTransaction and session.get(Unit, row.source_unit_id) is None:
+                raise ApplicationError("INVALID_REFERENCE", "A source unit is not present in the unit master.", 409)
+            row_hash = fingerprint(row)
+            existing = repository.find_source_record(session, model, getattr(row, key_field))
+            if existing is not None:
+                validate_replay(existing, row_hash)
+                continue
+            values = row.model_dump(exclude={"condition", "source_status"})
+            if model is StockTransaction:
+                values["quantity"] = stock_quantity(row.source_quantity, row.conversion_factor)
+                values["signed_quantity"] = signed_change(row.movement, values["quantity"])
+                values["movement"] = row.movement.value
+            target.append(model(**values, payload_hash=row_hash))
+    batch = StockImportBatch(export_id=data.export_id, payload_hash=digest, generated_at=data.generated_at,
+                             imported_by=actor_id, import_reason=data.import_reason,
+                             movement_count=len(new_movements), snapshot_count=len(new_snapshots))
+    session.add(batch)
+    session.flush()
+    for record in [*new_movements, *new_snapshots]:
+        record.batch_id = batch.id
+        session.add(record)
+    session.flush()
+    session.add(AuditLog(actor_id=actor_id, action="IMPORT_SOURCE_STOCK", entity_type="stock_import_batches",
+                         entity_id=batch.id, old_values=None, new_values={
+                             "export_id": batch.export_id, "payload_hash": digest,
+                             "generated_at": data.generated_at.isoformat(),
+                             "source": "EXISTING_ERP", "movement_count": batch.movement_count,
+                             "snapshot_count": batch.snapshot_count,
+                             "movement_ids": [str(row.id) for row in new_movements],
+                             "snapshot_ids": [str(row.id) for row in new_snapshots],
+                         }, reason=data.import_reason))
+    session.flush()
+    return result(batch, False)
+
+
+def import_source(session: Session, data: SourceImport, actor_id: UUID, *, enabled: bool) -> ImportResult:
     try:
-        # Source history, snapshots and audit share this request transaction.
-        # Authentication may already have begun it; this service owns the commit.
-        ids = {row.consumable_id for row in [*data.movements, *data.snapshots]}
-        materials = repository.lock_consumables(session, ids)
-        if len(materials) != len(ids):
-            raise ApplicationError("INVALID_REFERENCE", "A source consumable is not present in the master data.", 409)
-        previous = repository.find_batch(session, data.export_id)
-        if previous is not None:
-            validate_replay(previous, digest)
-            session.commit()
-            return result(previous, True)
-        new_movements, new_snapshots = [], []
-        for rows, model, key_field, target in (
-            (data.movements, StockTransaction, "source_event_id", new_movements),
-            (data.snapshots, StockSnapshot, "source_snapshot_id", new_snapshots),
-        ):
-            for row in rows:
-                material = materials[row.consumable_id]
-                if row.unit_id != material.unit_id:
-                    raise ApplicationError("UNIT_MISMATCH", "A source stock unit does not match its consumable's stock unit.", 409)
-                if model is StockTransaction and session.get(Unit, row.source_unit_id) is None:
-                    raise ApplicationError("INVALID_REFERENCE", "A source unit is not present in the unit master.", 409)
-                row_hash = fingerprint(row)
-                existing = repository.find_source_record(session, model, getattr(row, key_field))
-                if existing is not None:
-                    validate_replay(existing, row_hash)
-                    continue
-                values = row.model_dump(exclude={"condition", "source_status"})
-                if model is StockTransaction:
-                    values["quantity"] = stock_quantity(row.source_quantity, row.conversion_factor)
-                    values["signed_quantity"] = signed_change(row.movement, values["quantity"])
-                    values["movement"] = row.movement.value
-                target.append(model(**values, payload_hash=row_hash))
-        batch = StockImportBatch(export_id=data.export_id, payload_hash=digest, generated_at=data.generated_at,
-                                 imported_by=actor_id, import_reason=data.import_reason,
-                                 movement_count=len(new_movements), snapshot_count=len(new_snapshots))
-        session.add(batch)
-        session.flush()
-        for record in [*new_movements, *new_snapshots]:
-            record.batch_id = batch.id
-            session.add(record)
-        session.flush()
-        session.add(AuditLog(actor_id=actor_id, action="IMPORT_SOURCE_STOCK", entity_type="stock_import_batches",
-                             entity_id=batch.id, old_values=None, new_values={
-                                 "export_id": batch.export_id, "payload_hash": digest,
-                                 "generated_at": data.generated_at.isoformat(),
-                                 "source": "EXISTING_ERP", "movement_count": batch.movement_count,
-                                 "snapshot_count": batch.snapshot_count,
-                                 "movement_ids": [str(row.id) for row in new_movements],
-                                 "snapshot_ids": [str(row.id) for row in new_snapshots],
-                             }, reason=data.import_reason))
-        session.flush()
+        imported = stage_source(session, data, actor_id, enabled=enabled)
         session.commit()
-        return result(batch, False)
+        return imported
     except IntegrityError:
         session.rollback()
         raise ApplicationError("SOURCE_CONFLICT", "Source identifiers or snapshot timestamps conflict with stored history.", 409) from None

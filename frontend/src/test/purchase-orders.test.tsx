@@ -66,10 +66,10 @@ test('draft preserves decimal strings and retries unchanged creation key', async
   expect((bodies[0].items as { ordered_quantity: string }[])[0].ordered_quantity).toBe('1.0001');
 });
 
-test('issued PO shows pending as unknown and offers no unsafe cancellation', async () => {
-  source([], [{ ...order, status: 'ISSUED', pending_basis: 'FULFILMENT_NOT_CONNECTED' }]); show();
+test('issued PO explains imported fulfilment and offers no unsafe cancellation', async () => {
+  source([], [{ ...order, status: 'ISSUED', pending_basis: 'IMPORTED_ACCEPTED_GRNS' }]); show();
   await userEvent.click(await screen.findByRole('button', { name: 'View PO-TEST' }));
-  expect(await screen.findByText(/Pending quantity is unknown/)).toBeInTheDocument();
+  expect(await screen.findByText(/Pending quantity uses imported accepted usable GRNs/)).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Cancel draft' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Issue PO' })).not.toBeInTheDocument();
 });
@@ -85,12 +85,12 @@ test('loading and network errors remain visible', async () => {
 test('issuing a draft requires a reason and displays the returned commitment state', async () => {
   source([], [order], body => {
     expect(body).toEqual({ reason: 'Approved supplier commitment' });
-    return response({ ...order, status: 'ISSUED', pending_basis: 'FULFILMENT_NOT_CONNECTED' });
+    return response({ ...order, status: 'ISSUED', pending_basis: 'IMPORTED_ACCEPTED_GRNS' });
   }); show();
   await userEvent.click(await screen.findByRole('button', { name: 'View PO-TEST' }));
   expect(await screen.findByRole('button', { name: 'Issue PO' })).toBeDisabled();
   fireEvent.change(screen.getByLabelText('Action reason'), { target: { value: 'Approved supplier commitment' } });
   await userEvent.click(screen.getByRole('button', { name: 'Issue PO' }));
   expect(await screen.findByText('PO issued as a commitment. Stock is unchanged.')).toBeInTheDocument();
-  expect(screen.getByText(/Pending quantity is unknown/)).toBeInTheDocument();
+  expect(screen.getByText(/Pending quantity uses imported accepted usable GRNs/)).toBeInTheDocument();
 });

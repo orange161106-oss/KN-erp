@@ -60,3 +60,6 @@ AI must never invent a manufacturing/business rule. Unknown rules must be marked
 
 - [M5.3 purchase orders](21_PURCHASE_ORDER_CONTRACT.md): traced approved demand,
   transaction-safe PO commitments, pricing, API/UI and fulfilment limitations.
+
+- [M5.4 GRNs and inventory](22_GRN_INVENTORY_CONTRACT.md): atomic posted-ERP receipt
+  imports, accepted-only fulfilment, source stock links, permissions and retry rules.

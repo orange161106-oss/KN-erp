@@ -3,6 +3,11 @@
 Owner: Munees. Reviewer: Keerthi. Company: KNL.
 Branch: `feature/munees/m5.3-purchase-orders`.
 
+M5.4 update: [GRN integration](22_GRN_INVENTORY_CONTRACT.md) now supplies imported
+accepted-only fulfilment and a separate derived receipt status. It supersedes this
+milestone's original pending-unknown limitation. Commitment status and issued
+cancellation rules remain unchanged; existing ERP ownership is preserved.
+
 ## Commitment and approval boundary
 
 A PO is a purchase commitment, never a receipt or consumption transaction. Creating,
@@ -81,30 +86,30 @@ Implemented states:
   internal recording, not emailing or otherwise transmitting a PO to a supplier.
 - CANCELLED: a cancelled draft, with history retained and allocation released.
 
-PARTIALLY_RECEIVED/CLOSED and issued cancellation require a linked fulfilment and
-reversal contract. They are deliberately not manually selectable states in this
-milestone. Issued quantities/terms cannot be silently edited or cancelled while
-receipt status is unknown. No procurement authority is inferred from role names.
+M5.4 adds derived receipt status separately from these commitment states. Issued
+cancellation, amendments and financial/legal closure still require their own
+approved contract. They are not manually selectable states. Issued terms cannot
+be silently edited. No procurement authority is inferred from role names.
 
-## Pending quantity and future receipt integration
+## Pending quantity and receipt integration
 
-Proposed invariant:
+Invariant:
 `pending = ordered - cancelled - source-approved fulfilled quantity`.
 Exact arithmetic rejects overfulfilment/overcancellation. Unknown fulfilled quantity
 produces unknown pending, not zero and not the full ordered amount.
 
-This repository has no approved PO-linked receipt adapter yet. Consequently:
+M5.4 links posted ERP GRNs to PO items under the confirmed accepted-only rule:
 
 - Drafts/cancelled drafts report pending commitment 0 (NOT_COMMITTED/CANCELLED_DRAFT).
-- Issued items report pending_quantity=null with FULFILMENT_NOT_CONNECTED.
-- The UI explains the missing connection and never fabricates received quantities.
+- Issued items report ordered minus imported accepted quantity, with
+  IMPORTED_ACCEPTED_GRNS and fulfilment_is_live=false.
+- The UI explains that receipts not yet imported are not reflected in pending.
 
-The pure pending service is tested for zero, partial and complete fulfilment, but
-operational fulfilment is not claimed. KNL must confirm whether accepted quantity
-alone fulfils an order and how rejection/replacement/cancellation is reconciled.
-A future linked GRN/source adapter must supply that cumulative auditable evidence
-before receipt states and issued cancellation are enabled. It must also protect
-against duplicate source receipts. This is a material operational limitation.
+The pure pending service covers zero, partial, complete and unknown fulfilment.
+Rejected quantities remain pending for replacement. Derived receipt status uses
+immutable imported GRN lines; missing source coverage must not be represented as
+live receiving. See the M5.4 contract for atomic imports, retries and source mapping.
+Issued cancellation and source reversal rules remain unresolved.
 
 ## Pricing
 
@@ -174,8 +179,9 @@ changes and server permissions. Frontend tests cover grants, empty/loading/error
 legacy limitation, exact string submission, retry key reuse, issue reason and unknown
 pending. PostgreSQL migration upgrade/downgrade/metadata checks are required.
 
-KNL decisions still needed: linked accepted/rejected fulfilment, issued cancellation
-and amendment policy, external PO numbering and external price approval verification.
+KNL decisions still needed: issued cancellation and amendment policy, external PO
+numbering and external price approval verification. M5.4 resolves accepted-only
+fulfilment; live operational use still requires verified external source mapping.
 All test business values are synthetic. The implemented commitment workflow can be
-reviewed independently, but full receiving/pending reporting cannot be signed off
-until the fulfilment integration is supplied.
+reviewed independently; source reconciliation is required before operationally
+relying on receiving/pending reports.

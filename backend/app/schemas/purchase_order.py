@@ -75,6 +75,9 @@ class OrderItemResponse(BaseModel):
     unit_code: str
     ordered_quantity: Amount
     pending_quantity: Amount | None
+    received_quantity: Amount
+    accepted_quantity: Amount
+    rejected_quantity: Amount
     expected_delivery: datetime
     pricing: PriceTerms | None
     line_value: Money | None
@@ -96,7 +99,9 @@ class OrderResponse(BaseModel):
     items: list[OrderItemResponse]
     currency: str | None
     total_value: Money | None
-    pending_basis: Literal['NOT_COMMITTED', 'FULFILMENT_NOT_CONNECTED', 'CANCELLED_DRAFT']
+    pending_basis: Literal['NOT_COMMITTED', 'IMPORTED_ACCEPTED_GRNS', 'CANCELLED_DRAFT']
+    fulfilment_status: Literal['NOT_APPLICABLE', 'NOT_RECEIVED', 'PARTIAL', 'COMPLETE']
+    fulfilment_is_live: Literal[False] = False
     replayed: bool = False
     history: list[dict]
 

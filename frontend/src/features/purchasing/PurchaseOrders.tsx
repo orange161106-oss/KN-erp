@@ -7,12 +7,14 @@ type Demand = { approval_id: string; supplier_id: string; supplier_name: string;
   unit_code: string; approved_quantity: string | null; remaining_quantity: string | null; eligible: boolean; limitation: string | null };
 type Line = { id: string; approval_id: string; code: string; name: string; unit_code: string; ordered_quantity: string;
   pending_quantity: string | null; expected_delivery: string; line_value: string | null;
+  received_quantity: string; accepted_quantity: string; rejected_quantity: string;
   pricing: { unit_rate: string; currency: string; approval_reference: string } | null;
   approval_snapshot: { approved_qty: string; reviewed_by: string; reviewed_at: string; reason: string | null };
   recommendation_evidence: { engine_version: string; raw_quantity: string; recommended_quantity: string;
     projection: { source_set_id: string; stock_snapshot_id: string; requirement_fingerprint: string } } };
 type Order = { id: string; po_number: string; supplier_name: string; po_date: string; status: 'DRAFT' | 'ISSUED' | 'CANCELLED';
   total_value: string | null; currency: string | null; pending_basis: string; items: Line[];
+  fulfilment_status: string;
   history: { action: string; at: string; reason: string; actor_id: string }[] };
 type DraftLine = { approval_id: string; quantity: string; delivery: string; rate: string };
 const message = (error: unknown) => error instanceof Error ? error.message : 'The request failed. Please retry.';
@@ -146,9 +148,10 @@ export default function PurchaseOrders() {
     <div className="flex gap-4"><button disabled={offset === 0 || loading} onClick={() => { setLoading(true); setOffset(Math.max(0, offset - 25)); }}>Previous orders</button><button disabled={orders.length < 25 || loading} onClick={() => { setLoading(true); setOffset(offset + 25); }}>More orders</button></div>
     {selected && <article className="bg-white border rounded p-5 space-y-4"><h3 className="text-lg font-semibold">{selected.po_number} · {selected.status}</h3>
       <p>{selected.supplier_name} · PO date {selected.po_date}</p>
-      {selected.pending_basis === 'FULFILMENT_NOT_CONNECTED' && <p className="bg-amber-50 p-3">Pending quantity is unknown until approved receipt fulfilment is connected. No received quantity has been assumed.</p>}
+      {selected.pending_basis === 'IMPORTED_ACCEPTED_GRNS' && <p className="bg-amber-50 p-3">Receipt status: {selected.fulfilment_status}. Pending quantity uses imported accepted usable GRNs. ERP receipts not yet imported are not included; this is not a live fulfilment report.</p>}
       {selected.items.map(line => <section key={line.id} className="border-t pt-3 space-y-2"><h4 className="font-semibold">{line.code} — {line.name}</h4>
         <p>Ordered: {line.ordered_quantity} {line.unit_code} · Pending commitment: {line.pending_quantity ?? 'Unknown'} · Expected: {new Date(line.expected_delivery).toLocaleString()}</p>
+        <p>Received: {line.received_quantity} · Accepted usable: {line.accepted_quantity} · Rejected: {line.rejected_quantity}</p>
         <p>Unit rate: {line.pricing?.unit_rate ?? 'Not approved'} · Line value: {line.line_value ?? 'Unknown'} {line.pricing?.currency ?? ''}</p>
         <details><summary className="cursor-pointer">Approval and calculation traceability</summary><dl className="text-sm space-y-1 break-all">
           <dt>Approval</dt><dd>{line.approval_id} · Approved quantity: {line.approval_snapshot.approved_qty}</dd>

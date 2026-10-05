@@ -1,6 +1,7 @@
 """Import shared ORM models so Alembic can discover their metadata."""
 
 from app.models.alerts import InventoryAlert
+from app.models.grn import GRN, GRNItem
 from app.models.purchase_approval import PurchaseApproval
 from app.models.purchase_order import PurchaseDemandEvidence, PurchaseOrder, PurchaseOrderItem
 from app.models.audit import AuditLog
@@ -17,6 +18,8 @@ from app.models.requirements import CalculatedRequirement, RequirementCalculatio
 from app.models.rules import ConsumptionNorm
 
 __all__ = [
+    "GRN",
+    "GRNItem",
     "PurchaseDemandEvidence",
     "PurchaseOrder",
     "PurchaseOrderItem",

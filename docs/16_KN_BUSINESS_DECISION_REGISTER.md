@@ -505,3 +505,16 @@ consumption postings. Pricing has explicit terms/reference; missing rates stay u
 PO-linked accepted/rejected fulfilment, issued cancellation/reversal, company number
 sequence and external price approval verification remain TBD. Issued pending quantity
 is explicitly unknown until that receipt contract is connected; no GRN rule is invented.
+
+## M5.4 confirmed receiving integration (2026-10-05)
+
+Munees confirmed that the existing ERP posts GRNs and owns central stock; this app
+imports them. Only accepted usable quantity fulfils the PO. Rejected quantity remains
+pending for replacement. This resolves the accepted/rejected fulfilment TBD above.
+See `22_GRN_INVENTORY_CONTRACT.md`. Reviewer: Keerthi.
+
+GRNs, source stock events, authoritative usable snapshots and audits commit atomically.
+PO pending and receipt status derive from imported accepted GRNs and are labelled
+as imported, non-live figures. Over-receipt policy remains unapproved; excess receipts
+are held without writes. Real ERP mapping, corrections/reversals, inspection-pending
+handling and issued cancellation remain TBD. Warehouse authority stays external.

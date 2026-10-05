@@ -428,14 +428,40 @@ inventory.projection.read for submission), purchase.orders.read/create/issue/can
 They are independent of M5.2 review permission. Pricing requires explicit currency,
 rounding, rate and reference. Unpriced totals remain null. A PO never receives stock.
 
-Issued pending quantities remain unknown until the approved receipt-fulfilment
-adapter exists. Partial/closed states and issued cancellation are not enabled yet.
+M5.4 derives issued pending quantities and separate receipt status from imported
+accepted GRNs. These are non-live imported figures. Issued cancellation remains unavailable.
 See the [contract](../docs/21_PURCHASE_ORDER_CONTRACT.md) and
 [review handoff](M5_3_REVIEW.md) for boundaries, exact tests and migration impact.
 Run `pytest app/tests/test_purchase_orders.py`; use a disposable TEST_DATABASE_URL
 for `pytest app/tests/integration/test_purchase_orders.py`. Frontend tests cover
 the new screen and actions. Downgrade removes PO/evidence history: use disposable
 test schemas only and remove assigned new grants first when downgrading.
+
+## Imported goods receipts (M5.4)
+
+Owner: Munees. Reviewer: Keerthi. Migration head is `0016_grn_imports`, following
+`0015_purchase_orders`. Run `alembic upgrade head` and `alembic check`. This adds
+immutable grns/grn_items with PO, stock event and snapshot links. Existing applied
+migrations are unchanged. No new environment variables are required.
+
+The existing ERP posts receipts. POST `/api/v1/grns/imports` imports a normalized
+posted GRN, matching usable receipt events and authoritative post-receipt snapshots
+in one transaction. GET `/api/v1/grns` and `/{id}` expose receipt history. The React
+`/grns` screen supports export preview/import and detail. The PO screen displays
+physical received, accepted, rejected, pending and derived receipt status.
+
+Grant `purchase.grns.read` for history and both `purchase.grns.import` and
+`inventory.stock.import` for import. No grants are automatic. The existing
+`INVENTORY_IMPORT_ENABLED` setting stays false until real source mapping is verified.
+Only accepted quantity fulfils a PO; rejected quantity remains pending. Excess
+receipts require KNL policy confirmation and are held without writes.
+
+See the [GRN contract](../docs/22_GRN_INVENTORY_CONTRACT.md) for the normalized payload,
+snapshot/coverage rules, API compatibility and remaining integration decisions.
+Test with `pytest app/tests/test_grns.py`; with a disposable TEST_DATABASE_URL use
+`pytest app/tests/integration/test_grns.py`. Actual results are recorded in
+[M5.4 review handoff](M5_4_REVIEW.md). Never downgrade transactional history as a
+production correction mechanism.
 
 ## Purchase recommendation (M5.1)
 

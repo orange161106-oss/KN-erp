@@ -10,8 +10,8 @@ from app.db.base import Base
 
 def test_single_master_head_preserves_existing_branches():
     scripts = ScriptDirectory.from_config(Config(str(BACKEND_ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["0015_purchase_orders"]
-    assert scripts.get_revision("head").down_revision == "0014_purchase_approval"
+    assert scripts.get_heads() == ["0016_grn_imports"]
+    assert scripts.get_revision("head").down_revision == "0015_purchase_orders"
     assert scripts.get_revision("0014_purchase_approval").down_revision == "0013_inventory_alerts"
     assert scripts.get_revision("0013_inventory_alerts").down_revision == "0012_projected_inventory"
     assert scripts.get_revision("0012_projected_inventory").down_revision == "0011_central_inventory"

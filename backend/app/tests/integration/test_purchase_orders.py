@@ -51,7 +51,7 @@ def test_postgres_create_issue_exact_value_and_source_links(postgres_po):
     assert saved['total_value'] == '60.30000000'
     issued = client.post(BASE + '/' + saved['id'] + '/issue', headers=headers, json={'reason': 'Synthetic issue'})
     assert issued.status_code == 200, issued.text
-    assert issued.json()['items'][0]['pending_quantity'] is None
+    assert issued.json()['items'][0]['pending_quantity'] == '60.0000'
     assert issued.json()['issued_at'].endswith('Z')
 
 

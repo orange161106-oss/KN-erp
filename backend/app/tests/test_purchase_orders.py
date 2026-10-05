@@ -101,8 +101,8 @@ def test_po_draft_issue_traceability_and_no_stock_effect(po_api):
     result = client.post(BASE + '/' + order['id'] + '/issue', headers=headers, json={'reason': 'Approved commitment'})
     assert result.status_code == 200, result.text
     issued = result.json()
-    assert issued['status'] == 'ISSUED' and issued['items'][0]['pending_quantity'] is None
-    assert issued['pending_basis'] == 'FULFILMENT_NOT_CONNECTED'
+    assert issued['status'] == 'ISSUED' and issued['items'][0]['pending_quantity'] == '60.0000'
+    assert issued['pending_basis'] == 'IMPORTED_ACCEPTED_GRNS'
     assert len(issued['history']) == 2
     repeat = client.post(BASE + '/' + order['id'] + '/issue', headers=headers, json={'reason': 'Retry'})
     assert repeat.json()['replayed'] and len(repeat.json()['history']) == 2
