@@ -57,3 +57,6 @@ AI must never invent a manufacturing/business rule. Unknown rules must be marked
 
 - [M5.1 purchase recommendation](20_PURCHASE_RECOMMENDATION_CONTRACT.md): provisional
   quantity rules, simultaneous supplier constraints, explicit targets and explanations.
+
+- [M5.3 purchase orders](21_PURCHASE_ORDER_CONTRACT.md): traced approved demand,
+  transaction-safe PO commitments, pricing, API/UI and fulfilment limitations.

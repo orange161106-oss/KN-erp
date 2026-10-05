@@ -31,10 +31,10 @@ class PurchaseApproval(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     consumable_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("consumables.id", ondelete="RESTRICT"), nullable=False, index=True
+        Uuid, ForeignKey("consumables.id", ondelete="RESTRICT"), nullable=False
     )
     supplier_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("suppliers.id", ondelete="RESTRICT"), nullable=False, index=True
+        Uuid, ForeignKey("suppliers.id", ondelete="RESTRICT"), nullable=False
     )
     planning_version_id: Mapped[Optional[UUID]] = mapped_column(
         Uuid, ForeignKey("planning_versions.id", ondelete="SET NULL"), nullable=True
