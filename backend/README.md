@@ -408,6 +408,35 @@ or treating outputs operationally. Run `pytest app/tests/test_reorder.py` and, w
 the existing disposable TEST_DATABASE_URL, `pytest app/tests/integration/test_reorder.py`.
 Actual results are recorded in [M4.3 reviewer handoff](M4_3_REVIEW.md).
 
+## Purchase orders (M5.3)
+
+Owner: Munees. Reviewer: Keerthi. Run `alembic upgrade head` and `alembic check`;
+head is now `0015_purchase_orders`, after merged M5.2 revision 0014. The migration
+adds purchase_orders, purchase_order_items and immutable purchase_demand_evidence.
+No new environment settings or automatic role grants are added.
+
+POST `/api/v1/purchase-orders/demand` accepts `{submission_key, reason, recommendation}`,
+where recommendation is the M5.1 PurchaseRequest. It calculates and stores evidence
+on the server and submits a PENDING M5.2 queue entry. Review it through the existing
+Purchase Approvals workflow. Legacy approvals without evidence require resubmission.
+Create a PO through `/purchase-orders` in the UI or POST `/api/v1/purchase-orders`,
+using reviewed source IDs, exact quantity strings, PO date and aware delivery times.
+API detail/eligible/list and issue/cancel actions share that prefix; see OpenAPI.
+
+Grant only explicitly authorized permissions: purchase.demand.submit (plus
+inventory.projection.read for submission), purchase.orders.read/create/issue/cancel/price.
+They are independent of M5.2 review permission. Pricing requires explicit currency,
+rounding, rate and reference. Unpriced totals remain null. A PO never receives stock.
+
+Issued pending quantities remain unknown until the approved receipt-fulfilment
+adapter exists. Partial/closed states and issued cancellation are not enabled yet.
+See the [contract](../docs/21_PURCHASE_ORDER_CONTRACT.md) and
+[review handoff](M5_3_REVIEW.md) for boundaries, exact tests and migration impact.
+Run `pytest app/tests/test_purchase_orders.py`; use a disposable TEST_DATABASE_URL
+for `pytest app/tests/integration/test_purchase_orders.py`. Frontend tests cover
+the new screen and actions. Downgrade removes PO/evidence history: use disposable
+test schemas only and remove assigned new grants first when downgrading.
+
 ## Purchase recommendation (M5.1)
 
 Owner: Munees. Reviewer: Yathish. POST `/api/v1/purchasing/recommendations/assess`

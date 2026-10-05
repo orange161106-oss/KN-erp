@@ -495,3 +495,13 @@ authorization, not a claim that KNL supplied numeric values or golden examples.
 Targets, constraint values and calendar evidence remain explicit inputs; unknowns
 block recommendations. No PO is created. Corrections require a reviewed rule version
 and tests; supplied evidence must not silently change meaning.
+
+## M5.3 approved development boundary
+
+Munees approved the PO plan and specifically chose traced submissions with legacy
+approval resubmission. See `21_PURCHASE_ORDER_CONTRACT.md`. Server-calculated M5.1
+evidence is retained before M5.2 review. Orders are commitments, never receipt or
+consumption postings. Pricing has explicit terms/reference; missing rates stay unknown.
+PO-linked accepted/rejected fulfilment, issued cancellation/reversal, company number
+sequence and external price approval verification remain TBD. Issued pending quantity
+is explicitly unknown until that receipt contract is connected; no GRN rule is invented.
