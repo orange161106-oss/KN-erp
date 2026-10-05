@@ -6,11 +6,27 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.schemas.auth import CurrentUser
+from app.schemas.dashboard import DashboardSummaryResponse
 from app.schemas.reports import PlannedVsActualReportResponse
 from app.security.permissions import require_permissions
+from app.services.dashboard import get_dashboard_summary
 from app.services.reports import get_planned_vs_actual_report
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+
+@router.get(
+    "/dashboard-summary",
+    response_model=DashboardSummaryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get executive dashboard KPI cards and procurement pipeline summary",
+)
+def get_dashboard_summary_endpoint(
+    session: Annotated[Session, Depends(get_db)],
+    _: Annotated[CurrentUser, Depends(require_permissions("reports.inventory.read"))],
+) -> DashboardSummaryResponse:
+    """Aggregates executive KPIs, active alerts, workflow approval queues, and procurement pipeline summary."""
+    return get_dashboard_summary(session)
 
 
 @router.get(
@@ -41,4 +57,5 @@ def get_planned_vs_actual(
         consumable_id=consumable_id,
         process_id=process_id,
     )
+
 

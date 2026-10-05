@@ -13,6 +13,7 @@ import AlertsCenter from './features/alerts/AlertsCenter';
 import PurchaseApprovals from './features/purchasing/PurchaseApprovals';
 import PurchaseOrders from './features/purchasing/PurchaseOrders';
 import GRNs from './features/purchasing/GRNs';
+import ExecutiveDashboard from './features/dashboard/ExecutiveDashboard';
 import InventoryPurchaseReports from './features/reports/InventoryPurchaseReports';
 
 function AppShell({ children }: { children: React.ReactNode }) {
@@ -44,7 +45,8 @@ function Application() {
     <BrowserRouter>
       <AppShell>
         <Routes>
-          <Route path="/" element={<div>Dashboard Placeholder</div>} />
+          <Route path="/" element={<ExecutiveDashboard />} />
+          <Route path="/dashboard" element={<ExecutiveDashboard />} />
           <Route path="/masters/*" element={<Masters />} />
           <Route path="/mappings/*" element={<ProductionMappings />} />
           <Route path="/rules/*" element={<ConsumptionNorms />} />
