@@ -2,7 +2,7 @@
 
 ```text
 PROJECT:
-KN Consumable ERP
+KNL Consumable ERP
 
 OWNER:
 <Munees / Keerthi / Yathish>

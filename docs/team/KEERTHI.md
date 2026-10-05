@@ -14,7 +14,7 @@ Own plant-facing workflows so every exception/change is permission-controlled, a
 - dashboard workflow visibility
 
 ## Conditional
-Do not implement plant floor stock or inter-plant transfers until KN confirms they are official controlled processes.
+Do not implement plant floor stock or inter-plant transfers until KNL confirms they are official controlled processes.
 
 ## Inputs
 Yathish: calculated plant/material requirements

@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-navy: #1B3A5C;
+  --color-brand-steel: #3E7CB1;
+  --color-brand-offwhite: #F5F7FA;
+  --color-brand-charcoal: #1F2937;
+}
+
+body {
+  background-color: var(--color-brand-offwhite);
+  color: var(--color-brand-charcoal);
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}

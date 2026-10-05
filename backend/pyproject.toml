@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kn-consumable-backend"
+version = "0.1.0"
+description = "KNL Consumable ERP backend foundation"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  # Keep TestClient compatible with the approved HTTPX test dependency.
+  "starlette>=0.46,<1",
+  "uvicorn>=0.30,<1",
+  "pydantic>=2.10,<3",
+  "pydantic-settings>=2.7,<3",
+  "SQLAlchemy>=2.0.36,<2.1",
+  "psycopg[binary]>=3.2,<4",
+  "alembic>=1.14,<2",
+  "pwdlib[argon2]>=0.3,<1",
+  "PyJWT>=2.10,<3",
+  "openpyxl>=3.1,<4",
+  "python-multipart>=0.0.20,<1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.3,<10", "httpx>=0.28,<1"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["app/tests"]
+addopts = "-ra --strict-markers"
+markers = ["integration: requires an explicitly configured disposable PostgreSQL database"]

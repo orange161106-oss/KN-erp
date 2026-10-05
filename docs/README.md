@@ -1,6 +1,6 @@
-# KN Consumable ERP — Documentation Index
+# KNL Consumable ERP — Documentation Index
 
-This `docs/` folder is the single source of truth for the KN Consumable ERP.
+This `docs/` folder is the single source of truth for the KNL Consumable ERP.
 
 If code and documentation disagree, stop and resolve the conflict before continuing.
 
@@ -33,3 +33,33 @@ If code and documentation disagree, stop and resolve the conflict before continu
 
 ## Golden rule
 AI must never invent a manufacturing/business rule. Unknown rules must be marked `TBD`.
+
+## Shared implementation contracts
+
+- [M1.3 authentication and RBAC](13_AUTH_RBAC_CONTRACT.md): schema, login/current-user
+  API, centralized permission checks, token configuration and remaining authority TBDs.
+- [M2.3 consumable, unit and supplier masters](15_CONSUMABLE_SUPPLIER_MASTER_CONTRACT.md):
+  master APIs, inactive behavior, audit records, permissions, UI and supplier-field TBDs.
+- [KNL business decision register and questionnaire](16_KN_BUSINESS_DECISION_REGISTER.md):
+  Munees's stock-flow confirmations, remaining KNL questions and the milestone in
+  which each decision is needed.
+
+- [M4.1 central inventory](17_CENTRAL_INVENTORY_CONTRACT.md): KNL's existing-ERP
+  ownership, immutable source import, reported balances/history, exact conversion,
+  technical permissions and remaining integration decisions.
+
+- [M4.2 projected inventory](18_PROJECTED_INVENTORY_CONTRACT.md): exact event
+  projection, approved MSL evidence, lead-time interval integration, reconciled
+  source inputs, consistent reads and explicit timing limitations.
+
+- [M4.3 reorder timing](19_REORDER_TIMING_CONTRACT.md): supplied-policy assessment,
+  lead-time deadlines, working-calendar boundaries, explanations and nullable results.
+
+- [M5.1 purchase recommendation](20_PURCHASE_RECOMMENDATION_CONTRACT.md): provisional
+  quantity rules, simultaneous supplier constraints, explicit targets and explanations.
+
+- [M5.3 purchase orders](21_PURCHASE_ORDER_CONTRACT.md): traced approved demand,
+  transaction-safe PO commitments, pricing, API/UI and fulfilment limitations.
+
+- [M5.4 GRNs and inventory](22_GRN_INVENTORY_CONTRACT.md): atomic posted-ERP receipt
+  imports, accepted-only fulfilment, source stock links, permissions and retry rules.

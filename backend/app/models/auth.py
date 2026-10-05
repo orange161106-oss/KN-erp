@@ -1,0 +1,59 @@
+from datetime import datetime
+from uuid import UUID, uuid4
+
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, String, Table, Text, Uuid, func, true
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
+
+from app.db.base import Base
+from app.security.identity import normalize_username
+
+user_roles = Table(
+    "user_roles", Base.metadata,
+    Column("user_id", Uuid, ForeignKey("users.id", ondelete="RESTRICT"), primary_key=True),
+    Column("role_id", Uuid, ForeignKey("roles.id", ondelete="RESTRICT"), primary_key=True),
+)
+
+role_permissions = Table(
+    "role_permissions", Base.metadata,
+    Column("role_id", Uuid, ForeignKey("roles.id", ondelete="RESTRICT"), primary_key=True),
+    Column("permission_id", Uuid, ForeignKey("permissions.id", ondelete="RESTRICT"), primary_key=True),
+)
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("username = lower(btrim(username)) AND length(username) > 0", name="normalized_username"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    username: Mapped[str] = mapped_column(String(128), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(1024))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    roles: Mapped[list["Role"]] = relationship(secondary=user_roles, passive_deletes=True)
+
+    @validates("username")
+    def normalize_identity(self, key: str, value: str) -> str:
+        normalized = normalize_username(value)
+        if not normalized or len(normalized) > 128:
+            raise ValueError("Username must contain between 1 and 128 characters")
+        return normalized
+
+
+class Role(Base):
+    __tablename__ = "roles"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    code: Mapped[str] = mapped_column(String(128), unique=True)
+    name: Mapped[str] = mapped_column(String(128))
+    permissions: Mapped[list["Permission"]] = relationship(secondary=role_permissions, passive_deletes=True)
+
+
+class Permission(Base):
+    __tablename__ = "permissions"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    code: Mapped[str] = mapped_column(String(128), unique=True)
+    description: Mapped[str] = mapped_column(Text)

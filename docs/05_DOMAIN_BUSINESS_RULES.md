@@ -64,7 +64,20 @@ Purchases are not consumption.
 Approved stock-flow convention should be based on:
 `Opening + Receipts + Inward - Closing - Outward ± Approved Adjustments`
 
-Exact convention remains `TBD` until KN confirms transaction handling.
+Exact actual-consumption convention remains `TBD` until KNL confirms transaction
+handling. Munees confirmed that a central-store issue is dispatch to a plant,
+not automatically actual consumption; a usable plant return increases central
+stock, while damaged returns do not. Only physically received and accepted
+quantities increase usable stock; a PO commitment does not. Stock quantities
+support up to four decimal places. KNL's 2026-10-04 answers assign opening, reservations, warehouse approvals,
+documents, corrections and closed periods to the existing ERP. M4.1 imports
+already-posted history and authoritative usable snapshots; it does not implement
+local stock posting or infer balances from partial history. Damaged/rejected/
+inspection-pending material is excluded outside this ERP. Snapshot exclusions must
+be verified at the source, without double subtraction. Required unit conversion
+uses explicit approved factors; actual factors and MSL approach thresholds remain
+TBD. See `16_KN_BUSINESS_DECISION_REGISTER.md` and
+`17_CENTRAL_INVENTORY_CONTRACT.md` for the current boundary.
 
 ## Approval
 The engine calculates/recommends. Humans approve critical changes and purchases.

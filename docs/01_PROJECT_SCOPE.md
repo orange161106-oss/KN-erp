@@ -1,12 +1,12 @@
 # Project Scope
 
 ## Goal
-Build a standalone web-based Consumable Planning ERP for KN.
+Build a standalone web-based Consumable Planning ERP for KNL.
 
 The ERP must calculate approved consumable requirements, support plant confirmation and exceptions, manage central-store inventory, predict shortages, recommend purchases, track PO/GRN, generate alerts, preserve audit history, and provide reports.
 
 ## Existing company ERP
-KN already has a SaaS ERP that handles raw-material planning accurately.
+KNL already has a SaaS ERP that handles raw-material planning accurately.
 
 This project:
 - does not replace the raw-material ERP;
