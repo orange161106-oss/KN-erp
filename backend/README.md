@@ -11,7 +11,8 @@ Actual M2.3 validation and reviewer notes are in [M2_3_REVIEW.md](M2_3_REVIEW.md
 ## Requirements and installation
 
 - Python 3.12 or newer, and `uv` for reproducible dependency installation.
-- A supported PostgreSQL server and an existing database/user with migration permissions.
+- A supported PostgreSQL server and an existing PostgreSQL user with migration permissions.
+  Local database creation can use the setup command below; deployed databases are provisioned separately.
 - Run commands below from `backend/`.
 
 ```powershell
@@ -66,8 +67,35 @@ passwords as signing keys. Startup fails when the key is missing or too short.
 
 ## Database migrations
 
-Create the application database/user using your PostgreSQL administration process;
-this backend does not create databases or provision system services.
+For your local computer, install/start PostgreSQL and fill `backend/.env` first.
+Set `APP_ENV=local` and a localhost `DATABASE_URL` naming the application database.
+The PostgreSQL username in that URL must already exist. From `backend/`, one command
+creates the missing database and applies every pending Alembic migration:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.db.setup
+```
+
+If your application user cannot create databases, use the local administration login:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.db.setup --admin-user postgres
+```
+
+The admin password is prompted with hidden input. It is not stored; migrations use
+the original application credentials from `.env`. The new database is owned by
+the URL's application user. Existing databases are reused, pending migrations are
+applied, and no database reset, password change or business-data seeding is performed.
+Concurrent invocations for the same database are guarded by an advisory lock.
+If migration fails, fix the cause and rerun; the database is not dropped.
+
+This explicit command is for loopback PostgreSQL with `APP_ENV=local`; it does not
+install PostgreSQL or run on backend startup. Production provisioning stays separate.
+Run `pytest app/tests/test_database_setup.py` for setup behavior tests. A real-server
+test requires separately configured local/disposable PostgreSQL credentials; mocked
+tests do not demonstrate an actual database creation.
+
+For an already provisioned database, the normal migration commands remain:
 
 ```powershell
 .venv/Scripts/python.exe -m alembic upgrade head
