@@ -104,3 +104,68 @@ class GRNResponse(BaseModel):
     source: Literal['EXISTING_ERP'] = 'EXISTING_ERP'
     is_live: Literal[False] = False
     replayed: bool = False
+
+
+class GoodsReceiptRecordResponse(BaseModel):
+    id: UUID
+    row_index: int | None = None
+    part_number: str
+    item_id: str
+    description: str
+    quantity: str
+    unit: str
+    po_number: str | None = None
+    supplier_name: str | None = None
+    status: str = 'SAVED'
+    source_grn_id: str | None = None
+    notes: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {'from_attributes': True}
+
+
+class WorkspaceRecordInput(BaseModel):
+    id: UUID | None = None
+    row_index: int | None = None
+    part_number: str = Field(min_length=1, max_length=128)
+    item_id: str = Field(min_length=1, max_length=128)
+    description: str = Field(min_length=1, max_length=256)
+    quantity: str | float | int
+    unit: str = Field(default='Nos', max_length=64)
+    po_number: str | None = None
+    supplier_name: str | None = None
+    status: str = 'SAVED'
+    notes: str | None = None
+
+
+class WorkspaceSaveRequest(BaseModel):
+    records: list[WorkspaceRecordInput]
+    deleted_ids: list[UUID] = []
+    reason: str = Field(default='Workspace update', min_length=1, max_length=512)
+
+
+class WorkspaceSaveResponse(BaseModel):
+    saved_count: int
+    deleted_count: int
+    records: list[GoodsReceiptRecordResponse]
+
+
+class ExcelSheetInspectInfo(BaseModel):
+    name: str
+    row_count: int
+    column_count: int
+    headers: list[str]
+    sample_rows: list[dict[str, str]]
+
+
+class ExcelInspectResponse(BaseModel):
+    filename: str
+    sheets: list[ExcelSheetInspectInfo]
+
+
+class ExcelImportSheetResponse(BaseModel):
+    sheet_name: str
+    imported_count: int
+    records: list[GoodsReceiptRecordResponse]
+

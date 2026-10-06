@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -43,3 +43,25 @@ class GRNItem(Base):
     rejected_quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4))
     stock_transaction_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey('stock_transactions.id', ondelete='RESTRICT'), unique=True)
     stock_snapshot_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey('stock_snapshots.id', ondelete='RESTRICT'))
+
+
+class GoodsReceiptRecord(Base):
+    __tablename__ = 'goods_receipt_records'
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    row_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    part_number: Mapped[str] = mapped_column(String(128), index=True)
+    item_id: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str] = mapped_column(String(256))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=Decimal('0'))
+    unit: Mapped[str] = mapped_column(String(64), default='Nos')
+    po_number: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    supplier_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default='SAVED')  # 'DRAFT', 'SAVED'
+    source_grn_id: Mapped[str | None] = mapped_column(String(192), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+

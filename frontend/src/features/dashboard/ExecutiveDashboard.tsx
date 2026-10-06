@@ -153,7 +153,7 @@ export default function ExecutiveDashboard() {
           )}
         </div>
 
-        {summary ? (
+        {summary && summary.pipeline_summary ? (
           <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-7 gap-3 text-center">
             <div className="bg-gray-50 p-3 rounded border">
               <p className="text-[11px] font-semibold text-gray-500 uppercase">1. Calculated Qty</p>
