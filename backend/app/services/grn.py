@@ -1,16 +1,30 @@
-"""One transaction imports ERP evidence, PO fulfilment and stock source records."""
 from functools import wraps
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+import io
+from uuid import UUID, uuid4
+from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, or_, and_, func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 from app.core.errors import ApplicationError
 from app.domain.purchase_engine.orders import pending_quantity
-from app.models.grn import GRN, GRNItem
+from app.models.grn import GRN, GRNItem, GoodsReceiptRecord
 from app.models.inventory import StockSnapshot, StockTransaction
 from app.repositories import grn as repository, purchase_order as orders
-from app.schemas.grn import GRNResponse, ReceiptLineResponse
+from app.schemas.grn import (
+    GRNResponse,
+    ReceiptLineResponse,
+    GoodsReceiptRecordResponse,
+    WorkspaceSaveRequest,
+    WorkspaceSaveResponse,
+    ExcelInspectResponse,
+    ExcelSheetInspectInfo,
+    ExcelImportSheetResponse,
+)
 from app.services import inventory
 from app.services.projection import digest
 from app.services.purchase_order import audit
@@ -128,3 +142,409 @@ def listing(session, limit, offset, purchase_order_id=None):
         query = query.where(GRN.purchase_order_id == purchase_order_id)
     rows = session.scalars(query.order_by(GRN.event_at.desc(), GRN.id).limit(limit).offset(offset)).all()
     return [response(session, row) for row in rows]
+
+
+def to_record_response(row: GoodsReceiptRecord) -> GoodsReceiptRecordResponse:
+    return GoodsReceiptRecordResponse(
+        id=row.id,
+        row_index=row.row_index,
+        part_number=row.part_number,
+        item_id=row.item_id,
+        description=row.description,
+        quantity=format(row.quantity, '.4f') if row.quantity is not None else '0.0000',
+        unit=row.unit or 'Nos',
+        po_number=row.po_number,
+        supplier_name=row.supplier_name,
+        status=row.status or 'SAVED',
+        source_grn_id=row.source_grn_id,
+        notes=row.notes,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+@transaction
+def list_workspace_records(session, search: str | None = None, status: str | None = None, limit: int = 500, offset: int = 0) -> list[GoodsReceiptRecordResponse]:
+    query = select(GoodsReceiptRecord).where(GoodsReceiptRecord.is_deleted.is_(False))
+
+    if status:
+        query = query.where(GoodsReceiptRecord.status == status.upper())
+
+    if search:
+        s = f"%{search.strip()}%"
+        query = query.where(
+            or_(
+                GoodsReceiptRecord.part_number.ilike(s),
+                GoodsReceiptRecord.item_id.ilike(s),
+                GoodsReceiptRecord.description.ilike(s),
+                GoodsReceiptRecord.po_number.ilike(s),
+                GoodsReceiptRecord.supplier_name.ilike(s),
+                GoodsReceiptRecord.unit.ilike(s),
+            )
+        )
+
+    rows = session.scalars(query.order_by(GoodsReceiptRecord.row_index.asc().nulls_last(), GoodsReceiptRecord.created_at.asc()).limit(limit).offset(offset)).all()
+
+    # If no workspace records exist yet, seed from existing GRN items if any exist
+    if not rows and not search and not status and offset == 0:
+        grns = session.scalars(select(GRN).order_by(GRN.event_at.desc())).all()
+        idx = 1
+        created_rows = []
+        for grn_row in grns:
+            order = orders.order(session, grn_row.purchase_order_id)
+            po_items = {item.id: item for item in orders.items(session, order.id)} if order else {}
+            for item in repository.items(session, grn_row.id):
+                material = po_items.get(item.purchase_order_item_id)
+                mat_snap = material.material_snapshot if material else {}
+                rec = GoodsReceiptRecord(
+                    id=uuid4(),
+                    row_index=idx,
+                    part_number=mat_snap.get('code', 'PART-' + str(idx)),
+                    item_id=item.source_line_id,
+                    description=mat_snap.get('name', 'Consumable Item'),
+                    quantity=item.received_quantity,
+                    unit=mat_snap.get('unit_code', 'Nos'),
+                    po_number=order.po_number if order else None,
+                    supplier_name=order.supplier_snapshot.get('name') if order else None,
+                    status='SAVED',
+                    source_grn_id=grn_row.source_grn_id,
+                    created_by=grn_row.imported_by,
+                )
+                session.add(rec)
+                created_rows.append(rec)
+                idx += 1
+        if created_rows:
+            session.commit()
+            return [to_record_response(r) for r in created_rows]
+
+    return [to_record_response(row) for row in rows]
+
+
+@transaction
+def save_workspace_records(session, data: WorkspaceSaveRequest, actor: UUID) -> WorkspaceSaveResponse:
+    saved_records = []
+
+    # Process deletions
+    for del_id in data.deleted_ids:
+        row = session.get(GoodsReceiptRecord, del_id)
+        if row and not row.is_deleted:
+            row.is_deleted = True
+            audit(session, actor, row.id, 'DELETE_ROW', data.reason,
+                  {'id': str(row.id), 'part_number': row.part_number, 'item_id': row.item_id},
+                  old={'status': row.status, 'is_deleted': False}, entity='goods_receipt_records')
+
+    # Process additions / updates
+    for item in data.records:
+        try:
+            qty = Decimal(str(item.quantity).strip())
+            if qty < 0:
+                raise ValueError("Quantity must be non-negative")
+        except (InvalidOperation, ValueError):
+            raise ApplicationError('INVALID_QUANTITY', f"Invalid quantity '{item.quantity}' for item {item.item_id or item.part_number}.", 422)
+
+        existing = session.get(GoodsReceiptRecord, item.id) if item.id else None
+        if existing and not existing.is_deleted:
+            old_vals = {
+                'part_number': existing.part_number,
+                'item_id': existing.item_id,
+                'description': existing.description,
+                'quantity': str(existing.quantity),
+                'unit': existing.unit,
+                'status': existing.status,
+            }
+            existing.part_number = item.part_number
+            existing.item_id = item.item_id
+            existing.description = item.description
+            existing.quantity = qty
+            existing.unit = item.unit
+            existing.po_number = item.po_number
+            existing.supplier_name = item.supplier_name
+            existing.status = 'SAVED'
+            existing.notes = item.notes
+            existing.row_index = item.row_index
+            existing.updated_at = datetime.now(timezone.utc)
+            saved_records.append(existing)
+            audit(session, actor, existing.id, 'UPDATE_ROW', data.reason,
+                  {'id': str(existing.id), 'part_number': item.part_number, 'quantity': str(qty)},
+                  old=old_vals, entity='goods_receipt_records')
+        else:
+            new_row = GoodsReceiptRecord(
+                id=item.id or uuid4(),
+                row_index=item.row_index,
+                part_number=item.part_number,
+                item_id=item.item_id,
+                description=item.description,
+                quantity=qty,
+                unit=item.unit,
+                po_number=item.po_number,
+                supplier_name=item.supplier_name,
+                status='SAVED',
+                notes=item.notes,
+                created_by=actor,
+            )
+            session.add(new_row)
+            saved_records.append(new_row)
+            audit(session, actor, new_row.id, 'CREATE_ROW', data.reason,
+                  {'id': str(new_row.id), 'part_number': item.part_number, 'quantity': str(qty)},
+                  entity='goods_receipt_records')
+
+    session.commit()
+    return WorkspaceSaveResponse(
+        saved_count=len(saved_records),
+        deleted_count=len(data.deleted_ids),
+        records=[to_record_response(r) for r in saved_records]
+    )
+
+
+@transaction
+def delete_workspace_record(session, identity: UUID, actor: UUID, reason: str = 'Row deleted') -> None:
+    row = session.get(GoodsReceiptRecord, identity)
+    if not row or row.is_deleted:
+        raise ApplicationError('RECORD_NOT_FOUND', 'Goods receipt record not found.', 404)
+    row.is_deleted = True
+    audit(session, actor, row.id, 'DELETE_ROW', reason,
+          {'id': str(row.id), 'part_number': row.part_number, 'item_id': row.item_id},
+          old={'is_deleted': False}, entity='goods_receipt_records')
+    session.commit()
+
+
+def inspect_excel_file(file_bytes: bytes, filename: str) -> ExcelInspectResponse:
+    if not file_bytes:
+        raise ApplicationError('EMPTY_FILE', 'The uploaded file is empty.', 422)
+    try:
+        workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    except Exception as exc:
+        raise ApplicationError('INVALID_EXCEL', f'Could not read Excel file: {str(exc)}', 422)
+
+    sheets_info: list[ExcelSheetInspectInfo] = []
+    for sheet_name in workbook.sheetnames:
+        sheet = workbook[sheet_name]
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            sheets_info.append(ExcelSheetInspectInfo(
+                name=sheet_name,
+                row_count=0,
+                column_count=0,
+                headers=[],
+                sample_rows=[]
+            ))
+            continue
+
+        header_row = None
+        data_rows = []
+        for r in rows:
+            if any(cell is not None and str(cell).strip() != '' for cell in r):
+                if header_row is None:
+                    header_row = [str(cell).strip() if cell is not None else f'Col_{i+1}' for i, cell in enumerate(r)]
+                else:
+                    data_rows.append(r)
+
+        headers = header_row or []
+        col_count = len(headers)
+        row_count = len(data_rows)
+
+        sample = []
+        for d_row in data_rows[:5]:
+            row_dict = {}
+            for idx, h in enumerate(headers):
+                val = d_row[idx] if idx < len(d_row) else ''
+                row_dict[h] = str(val) if val is not None else ''
+            sample.append(row_dict)
+
+        sheets_info.append(ExcelSheetInspectInfo(
+            name=sheet_name,
+            row_count=row_count,
+            column_count=col_count,
+            headers=headers,
+            sample_rows=sample
+        ))
+
+    return ExcelInspectResponse(filename=filename, sheets=sheets_info)
+
+
+@transaction
+def import_excel_sheet(session, file_bytes: bytes, filename: str, sheet_name: str, actor: UUID, mode: str = 'APPEND', reason: str = 'Excel sheet import') -> ExcelImportSheetResponse:
+    if not file_bytes:
+        raise ApplicationError('EMPTY_FILE', 'The uploaded file is empty.', 422)
+    try:
+        workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    except Exception as exc:
+        raise ApplicationError('INVALID_EXCEL', f'Could not read Excel file: {str(exc)}', 422)
+
+    if sheet_name not in workbook.sheetnames:
+        raise ApplicationError('SHEET_NOT_FOUND', f"Sheet '{sheet_name}' not found in workbook.", 404)
+
+    sheet = workbook[sheet_name]
+    rows = list(sheet.iter_rows(values_only=True))
+    if not rows:
+        raise ApplicationError('EMPTY_SHEET', f"Sheet '{sheet_name}' is empty.", 422)
+
+    header_idx_map: dict[str, int] = {}
+    header_row = None
+    data_rows = []
+    for r in rows:
+        if any(cell is not None and str(cell).strip() != '' for cell in r):
+            if header_row is None:
+                header_row = r
+                for idx, cell in enumerate(r):
+                    if cell is None:
+                        continue
+                    key = str(cell).strip().lower().replace('_', ' ').replace('-', ' ')
+                    if any(w in key for w in ['part number', 'part no', 'part code', 'item code', 'product code', 'part']):
+                        header_idx_map.setdefault('part_number', idx)
+                    elif any(w in key for w in ['item id', 'line id', 'item #', 'sl no', 'sr no']):
+                        header_idx_map.setdefault('item_id', idx)
+                    elif any(w in key for w in ['description', 'item description', 'part description', 'name']):
+                        header_idx_map.setdefault('description', idx)
+                    elif any(w in key for w in ['qty', 'quantity', 'received qty', 'accepted qty']):
+                        header_idx_map.setdefault('quantity', idx)
+                    elif any(w in key for w in ['unit', 'uom']):
+                        header_idx_map.setdefault('unit', idx)
+                    elif any(w in key for w in ['po number', 'po #', 'purchase order', 'po']):
+                        header_idx_map.setdefault('po_number', idx)
+                    elif any(w in key for w in ['supplier', 'vendor']):
+                        header_idx_map.setdefault('supplier_name', idx)
+            else:
+                data_rows.append(r)
+
+    if not data_rows:
+        raise ApplicationError('EMPTY_DATA', f"Sheet '{sheet_name}' has no data rows.", 422)
+
+    if mode == 'REPLACE':
+        active = session.scalars(select(GoodsReceiptRecord).where(GoodsReceiptRecord.is_deleted.is_(False))).all()
+        for r in active:
+            r.is_deleted = True
+
+    imported_rows: list[GoodsReceiptRecord] = []
+    base_idx = session.scalar(select(func.coalesce(func.max(GoodsReceiptRecord.row_index), 0)).where(GoodsReceiptRecord.is_deleted.is_(False))) or 0
+
+    for i, row in enumerate(data_rows, start=1):
+        if not any(cell is not None and str(cell).strip() != '' for cell in row):
+            continue
+
+        part_no = str(row[header_idx_map['part_number']]).strip() if 'part_number' in header_idx_map and header_idx_map['part_number'] < len(row) and row[header_idx_map['part_number']] is not None else f'P-{i}'
+        item_id = str(row[header_idx_map['item_id']]).strip() if 'item_id' in header_idx_map and header_idx_map['item_id'] < len(row) and row[header_idx_map['item_id']] is not None else str(i)
+        desc = str(row[header_idx_map['description']]).strip() if 'description' in header_idx_map and header_idx_map['description'] < len(row) and row[header_idx_map['description']] is not None else 'Imported Item'
+
+        raw_qty = row[header_idx_map['quantity']] if 'quantity' in header_idx_map and header_idx_map['quantity'] < len(row) else 1
+        try:
+            qty = Decimal(str(raw_qty).strip())
+        except (InvalidOperation, ValueError, TypeError):
+            qty = Decimal('0')
+
+        unit = str(row[header_idx_map['unit']]).strip() if 'unit' in header_idx_map and header_idx_map['unit'] < len(row) and row[header_idx_map['unit']] is not None else 'Nos'
+        po_no = str(row[header_idx_map['po_number']]).strip() if 'po_number' in header_idx_map and header_idx_map['po_number'] < len(row) and row[header_idx_map['po_number']] is not None else None
+        supplier = str(row[header_idx_map['supplier_name']]).strip() if 'supplier_name' in header_idx_map and header_idx_map['supplier_name'] < len(row) and row[header_idx_map['supplier_name']] is not None else None
+
+        rec = GoodsReceiptRecord(
+            id=uuid4(),
+            row_index=base_idx + i,
+            part_number=part_no,
+            item_id=item_id,
+            description=desc,
+            quantity=qty,
+            unit=unit,
+            po_number=po_no,
+            supplier_name=supplier,
+            status='SAVED',
+            source_grn_id=f'EXCEL-{sheet_name}',
+            created_by=actor,
+        )
+        session.add(rec)
+        imported_rows.append(rec)
+
+    audit(session, actor, uuid4(), 'IMPORT_EXCEL_SHEET', reason,
+          {'sheet_name': sheet_name, 'filename': filename, 'imported_count': len(imported_rows)},
+          entity='goods_receipt_records')
+
+    session.commit()
+    return ExcelImportSheetResponse(
+        sheet_name=sheet_name,
+        imported_count=len(imported_rows),
+        records=[to_record_response(r) for r in imported_rows]
+    )
+
+
+def export_workspace_excel(session, search: str | None = None, status: str | None = None, record_ids: list[UUID] | None = None) -> bytes:
+    query = select(GoodsReceiptRecord).where(GoodsReceiptRecord.is_deleted.is_(False))
+    if record_ids:
+        query = query.where(GoodsReceiptRecord.id.in_(record_ids))
+    elif status:
+        query = query.where(GoodsReceiptRecord.status == status.upper())
+    if search:
+        s = f"%{search.strip()}%"
+        query = query.where(
+            or_(
+                GoodsReceiptRecord.part_number.ilike(s),
+                GoodsReceiptRecord.item_id.ilike(s),
+                GoodsReceiptRecord.description.ilike(s),
+                GoodsReceiptRecord.po_number.ilike(s),
+                GoodsReceiptRecord.supplier_name.ilike(s),
+                GoodsReceiptRecord.unit.ilike(s),
+            )
+        )
+    rows = session.scalars(query.order_by(GoodsReceiptRecord.row_index.asc().nulls_last(), GoodsReceiptRecord.created_at.asc())).all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Goods Receipts"
+
+    header_fill = PatternFill(start_color="1B3A5C", end_color="1B3A5C", fill_type="solid")
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    data_font = Font(name="Calibri", size=11)
+    thin_border = Border(
+        left=Side(style='thin', color='D9D9D9'),
+        right=Side(style='thin', color='D9D9D9'),
+        top=Side(style='thin', color='D9D9D9'),
+        bottom=Side(style='thin', color='D9D9D9')
+    )
+
+    headers = ["#", "Part Number", "Item ID", "Description", "Qty", "Unit", "PO Number", "Supplier", "Status", "Notes"]
+    ws.append(headers)
+
+    for col_num in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center" if col_num in (1, 5, 6, 9) else "left", vertical="center")
+
+    ws.row_dimensions[1].height = 24
+
+    for r_idx, row in enumerate(rows, start=1):
+        qty_val = float(row.quantity) if row.quantity is not None else 0.0
+        row_data = [
+            row.row_index or r_idx,
+            row.part_number,
+            row.item_id,
+            row.description,
+            qty_val,
+            row.unit,
+            row.po_number or '',
+            row.supplier_name or '',
+            row.status,
+            row.notes or '',
+        ]
+        ws.append(row_data)
+        current_row = r_idx + 1
+        ws.row_dimensions[current_row].height = 20
+        for col_num in range(1, len(headers) + 1):
+            cell = ws.cell(row=current_row, column=col_num)
+            cell.font = data_font
+            cell.border = thin_border
+            if col_num in (1, 6, 9):
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            elif col_num == 5:
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+                cell.number_format = '#,##0.0000'
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    for col in ws.columns:
+        max_len = max(len(str(cell.value or '')) for cell in col)
+        col_letter = get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
