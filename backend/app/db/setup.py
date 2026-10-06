@@ -1,4 +1,4 @@
-"""Explicit local database creation and Alembic upgrade; never invoked on startup."""
+"""Explicit local creation or migrations for an existing database; never run on startup."""
 import argparse
 import getpass
 import hashlib
@@ -28,7 +28,7 @@ def local_settings(settings: Settings) -> Settings:
     url = settings.sqlalchemy_url
     host = (url.host or '').lower()
     if settings.app_env != 'local' or host not in LOCAL_HOSTS:
-        raise SetupError('This setup command requires APP_ENV=local and a localhost DATABASE_URL.')
+        raise SetupError('Database creation requires APP_ENV=local and a localhost DATABASE_URL. For an existing hosted database, use --migrate-only.')
     if url.database.lower() in SYSTEM_DATABASES:
         raise SetupError('DATABASE_URL must name your application database, not postgres/template0/template1.')
     if TARGET_OVERRIDES.intersection(key.lower() for key in url.query):
@@ -51,6 +51,25 @@ def migrate(settings: Settings) -> None:
             command.upgrade(config, 'head')
     finally:
         engine.dispose()
+
+
+def migrate_existing(settings: Settings) -> None:
+    """Apply existing revisions without creating, dropping or resetting a database."""
+    url = settings.sqlalchemy_url
+    if (url.host or '').lower() not in LOCAL_HOSTS and url.query.get('sslmode') not in {'require', 'verify-ca', 'verify-full'}:
+        raise SetupError('Hosted database migrations require SSL. Add sslmode=require (or certificate verification) to DATABASE_URL.')
+    try:
+        migrate(settings)
+    except (psycopg.Error, SQLAlchemyError) as error:
+        # Inspect driver diagnostics but never echo them: they may contain secrets.
+        diagnostic = str(getattr(error, 'orig', error)).lower()
+        if any(term in diagnostic for term in ('resolve host', 'getaddrinfo', 'network is unreachable', 'network unreachable', '10051')):
+            raise SetupError('Cannot reach the database hostname. Check the copied hostname and network. Supabase direct connections need working IPv6 or its IPv4 add-on; migration code cannot provide network access. No successful migration was confirmed.') from None
+        if 'password authentication failed' in diagnostic:
+            raise SetupError('Database authentication failed. Check the database username and URL-encoded password privately in .env.') from None
+        raise SetupError('Migrations did not finish. Check database connectivity, credentials and migration permissions. The database is not reset.') from None
+    except CommandError:
+        raise SetupError('Alembic migration configuration failed. Check revision history; do not reset or stamp the database to bypass the error.') from None
 
 
 def setup_database(settings: Settings, *, admin_user: str | None = None) -> bool:
@@ -95,7 +114,10 @@ def setup_database(settings: Settings, *, admin_user: str | None = None) -> bool
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--admin-user', help='Optional local admin login; password is prompted securely, not passed on the command line')
+    parser.add_argument('--migrate-only', action='store_true', help='Apply Alembic to an already provisioned database, including Supabase; never create a database')
     args = parser.parse_args(argv)
+    if args.migrate_only and args.admin_user:
+        parser.error('--admin-user is only for local database creation, not --migrate-only')
     try:
         settings = load_settings()
     except RuntimeError as error:
@@ -103,12 +125,17 @@ def main(argv=None) -> int:
         print(str(error), file=sys.stderr)
         return 1
     try:
-        created = setup_database(settings, admin_user=args.admin_user)
+        if args.migrate_only:
+            migrate_existing(settings)
+            created = None
+        else:
+            created = setup_database(settings, admin_user=args.admin_user)
     except (SetupError, EOFError, KeyboardInterrupt) as error:
         message = str(error) if isinstance(error, SetupError) else 'Setup cancelled; no database reset was performed.'
         print(message, file=sys.stderr)
         return 1
-    print('Database created.' if created else 'Database already exists; reused.')
+    if created is not None:
+        print('Database created.' if created else 'Database already exists; reused.')
     print('Alembic migrations applied successfully. You can now start the backend.')
     return 0
 

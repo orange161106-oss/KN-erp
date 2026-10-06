@@ -97,6 +97,21 @@ tests do not demonstrate an actual database creation.
 
 For an already provisioned database, the normal migration commands remain:
 
+Supabase provisions its database for you. With its direct connection URL in the
+private `backend/.env`, use `postgresql+psycopg://` and `sslmode=require` (or
+`verify-full` with the server certificate). From `backend/`, this explicit command
+applies migrations without attempting local database creation:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.db.setup --migrate-only
+```
+
+This command changes the configured database's schema. It does not transfer local
+data or provision ERP login accounts. A direct Supabase endpoint must be reachable
+over IPv6, unless the project's IPv4 add-on is enabled. DNS/network errors cannot
+be fixed by changing migration formulas or bypassing the local creation guard.
+Use only one migration operator at a time. Standard Alembic commands also work:
+
 ```powershell
 .venv/Scripts/python.exe -m alembic upgrade head
 .venv/Scripts/python.exe -m alembic current

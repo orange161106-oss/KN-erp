@@ -134,3 +134,52 @@ def test_successful_command_prints_result_without_url(configuration, monkeypatch
     output = capsys.readouterr().out
     assert 'Database created' in output and 'migrations applied successfully' in output
     assert 'synthetic-password' not in output and 'postgresql' not in output
+
+
+def test_hosted_migration_never_creates_database(monkeypatch, capsys):
+    settings = Settings(_env_file=None, database_url='postgresql://postgres:synthetic-password@db.example.supabase.co/postgres?sslmode=require')
+    monkeypatch.setattr(setup, 'load_settings', lambda: settings)
+    upgrade = MagicMock()
+    create = MagicMock()
+    monkeypatch.setattr(setup, 'migrate', upgrade)
+    monkeypatch.setattr(setup, 'setup_database', create)
+    assert setup.main(['--migrate-only']) == 0
+    upgrade.assert_called_once_with(settings)
+    create.assert_not_called()
+    output = capsys.readouterr().out
+    assert 'migrations applied successfully' in output
+    assert 'Database created' not in output and 'synthetic-password' not in output
+
+
+def test_hosted_migration_requires_ssl_before_connecting(monkeypatch):
+    settings = Settings(_env_file=None, database_url='postgresql://postgres@db.example.supabase.co/postgres')
+    upgrade = MagicMock()
+    monkeypatch.setattr(setup, 'migrate', upgrade)
+    with pytest.raises(setup.SetupError, match='require SSL'):
+        setup.migrate_existing(settings)
+    upgrade.assert_not_called()
+
+
+@pytest.mark.parametrize('diagnostic, expected', [
+    ('failed to resolve host synthetic-secret: getaddrinfo failed', 'Cannot reach'),
+    ('network unreachable 10051 synthetic-secret', 'Cannot reach'),
+    ('password authentication failed synthetic-secret', 'authentication failed'),
+    ('permission denied synthetic-secret', 'Migrations did not finish'),
+])
+def test_migration_failure_is_actionable_and_redacted(configuration, monkeypatch, capsys, diagnostic, expected):
+    monkeypatch.setattr(setup, 'load_settings', lambda: configuration)
+    monkeypatch.setattr(setup, 'migrate', MagicMock(side_effect=OperationalError('secret-statement', {}, Exception(diagnostic))))
+    assert setup.main(['--migrate-only']) == 1
+    captured = capsys.readouterr()
+    assert expected in captured.err
+    assert 'synthetic-secret' not in captured.err and 'secret-statement' not in captured.err
+    assert 'successfully' not in captured.out
+
+
+def test_migration_mode_rejects_local_admin_argument(monkeypatch):
+    load = MagicMock()
+    monkeypatch.setattr(setup, 'load_settings', load)
+    with pytest.raises(SystemExit) as error:
+        setup.main(['--migrate-only', '--admin-user', 'postgres'])
+    assert error.value.code == 2
+    load.assert_not_called()
