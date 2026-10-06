@@ -150,6 +150,27 @@ and retain one clean head. Never edit an applied/shared migration. The metadata
 defines constraint naming; explicitly name check constraints. Use UTC timestamps
 and PostgreSQL `NUMERIC` / Python `Decimal` for precise future business values.
 
+## Development User Seeding (Supabase / Shared DB)
+
+To populate test user accounts and assign all RBAC role permissions for manual E2E/UAT testing on the shared Supabase database, run the seed script from `backend/`:
+
+```powershell
+python scripts/seed_dev_users.py
+```
+
+### Seeded UAT Accounts & Credentials
+
+| Role | Username | Password | Assigned Permissions |
+| ---- | -------- | -------- | -------------------- |
+| **System Admin** | `admin` | `admin123` | Full access across all ERP domain modules & admin features |
+| **Planner** | `planner` | `planner123` | PRD import, requirement calculation, & product mappings |
+| **Plant In-Charge** | `plant_incharge` | `incharge123` | Plant confirmations & additional requirement requests |
+| **Purchasing & Approver** | `purchase` | `purchase123` | Purchase recommendation approval queue & issuing POs |
+| **Store / Inventory** | `store` | `store123` | Stock balances, GRNs, & alert acknowledgements |
+| **Executive Management** | `manager` | `manager123` | Executive dashboard & analytical reports |
+
+> ℹ️ **Note**: Verify that your `backend/.env` file contains the valid `DATABASE_URL` pointing to the shared database before running the script.
+
 ## Start and health contract
 
 ```powershell
