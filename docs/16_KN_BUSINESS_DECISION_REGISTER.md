@@ -1,5 +1,13 @@
 # KNL business decisions and confirmation questionnaire
 
+M7.2 evidence audit (2026-10-06): the supplied inventory PDF confirms scope but
+does not supply complete approved numeric stock/MSL/lead-time/reorder/purchase
+cases. INV-08's 1,000 stock / 500 MSL illustration is not an operational default.
+The company-case registry remains empty and KNL numeric acceptance remains pending.
+See [case sources, replay and investigation](24_INVENTORY_PURCHASE_GOLDEN_CASES.md)
+and [the KNL capture sheet](validation/M7_2_KNL_CASE_CAPTURE.md). Synthetic tests
+do not resolve the operational numeric TBDs in this register.
+
 Prepared: 2026-10-02. Coordinator: Munees.
 Technical domain owners: Munees (inventory/purchasing), Keerthi (workflow/access),
 Yathish (production/requirements). KNL business approvers must be identified by KNL.
