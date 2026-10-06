@@ -32,4 +32,7 @@ include = ["app*"]
 [tool.pytest.ini_options]
 testpaths = ["app/tests"]
 addopts = "-ra --strict-markers"
-markers = ["integration: requires an explicitly configured disposable PostgreSQL database"]
+markers = [
+  "integration: requires an explicitly configured disposable PostgreSQL database",
+  "company_golden: requires complete KNL-approved numeric examples; empty registry is pending acceptance",
+]

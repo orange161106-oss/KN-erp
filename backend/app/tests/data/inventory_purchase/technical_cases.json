@@ -1,0 +1,2059 @@
+{
+  "schema_version": "M7.2_V1",
+  "suite": "SYNTHETIC",
+  "cases": [
+    {
+      "case_id": "T01",
+      "description": "Simultaneous MOQ/pack/multiple with a future MSL breach",
+      "evidence": {
+        "kind": "SYNTHETIC",
+        "input_reference": "technical_expected_results.md#T01",
+        "expected_reference": "technical_expected_results.md#T01",
+        "source_sha256": "6bcaee77ad702b518246e701c0b060fe97ebd4a900c939c3c10643a2607442ce",
+        "approved_by": null,
+        "approved_at": null
+      },
+      "material_code": "SYNTHETIC-MATERIAL",
+      "unit_code": "EA",
+      "supplier_code": "SYNTHETIC-SUPPLIER",
+      "planning_period": "2020-01",
+      "stock_imports": [
+        {
+          "export_id": "fixture-stock",
+          "generated_at": "2020-01-03T00:00:00Z",
+          "snapshots": [
+            {
+              "source_snapshot_id": "fixture-snapshot",
+              "as_of": "2020-01-02T00:00:00Z",
+              "usable_quantity": "100",
+              "nonusable_excluded": true,
+              "reservations_excluded": true
+            }
+          ]
+        }
+      ],
+      "reconciled_as_of": "2020-01-02T00:00:00Z",
+      "coverage_until": "2020-01-12T00:00:00Z",
+      "reconciliation_reference": "synthetic-stock-demand-supply-reconciliation",
+      "demand": [
+        {
+          "plant": "SYNTHETIC-PLANT",
+          "final_quantity": "80",
+          "approval_reference": "synthetic-final-requirement",
+          "fulfilled_quantity": "10",
+          "reserved_quantity": "10",
+          "events": [
+            {
+              "source_id": "demand-1",
+              "at": "2020-01-05T00:00:00Z",
+              "quantity": "60"
+            }
+          ]
+        }
+      ],
+      "incoming": [],
+      "msl_history": [
+        {
+          "source_id": "msl-1",
+          "effective_at": "2020-01-01T00:00:00Z",
+          "quantity": "50",
+          "approval_reference": "synthetic-msl"
+        }
+      ],
+      "lead_time": {
+        "approval_reference": "synthetic-lead-time",
+        "start_event": "ORDER_INITIATED",
+        "end_event": "MATERIAL_USABLE",
+        "days": 5,
+        "basis": "ELAPSED_24_HOUR_DAYS",
+        "effective_from": "2019-12-01T00:00:00Z",
+        "effective_until": "2020-01-15T00:00:00Z",
+        "calendar": null
+      },
+      "reorder": {
+        "evaluated_at": "2020-01-02T00:00:00Z",
+        "cutoff": "2020-01-10T00:00:00Z",
+        "policy": {
+          "approval_reference": "synthetic-policy",
+          "effective_from": "2020-01-01T00:00:00Z",
+          "effective_until": "2020-01-15T00:00:00Z",
+          "violation": "BELOW_MSL",
+          "availability_boundary": "BEFORE_CROSSING"
+        }
+      },
+      "purchase": {
+        "initiated_at": "2020-01-02T00:00:00Z",
+        "receipt_at": "2020-01-07T00:00:00Z",
+        "evidence_from": "2020-01-01T00:00:00Z",
+        "evidence_until": "2020-01-15T00:00:00Z",
+        "target": {
+          "quantity": "53",
+          "approval_reference": "synthetic-target"
+        },
+        "constraints": {
+          "moq": {
+            "state": "APPLICABLE",
+            "value": "20",
+            "approval_reference": "synthetic-constraint"
+          },
+          "pack_size": {
+            "state": "APPLICABLE",
+            "value": "12",
+            "approval_reference": "synthetic-constraint"
+          },
+          "order_multiple": {
+            "state": "APPLICABLE",
+            "value": "10",
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_order_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_stock_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "other_constraints": "CONFIRMED_NONE",
+          "other_constraints_reference": "synthetic-no-others"
+        }
+      },
+      "expected": {
+        "stock": {
+          "usable_quantity": "100",
+          "as_of": "2020-01-02T00:00:00Z",
+          "source_export_id": "fixture-stock"
+        },
+        "projection": {
+          "status": "COMPLETE",
+          "projected_stock": "40",
+          "current_msl": "50",
+          "current_msl_condition": "ABOVE_MSL",
+          "projected_msl_condition": "BELOW_MSL",
+          "future_breach": true,
+          "first_future_breach_at": "2020-01-05T00:00:00Z",
+          "limitation_codes": [
+            "LEAD_TIME_UNCONFIGURED"
+          ]
+        },
+        "reorder": {
+          "status": "DETERMINED",
+          "reorder_required": true,
+          "already_breached": false,
+          "expected_msl_crossing_at": "2020-01-05T00:00:00Z",
+          "latest_safe_order_at": "2019-12-31T00:00:00Z",
+          "latest_safe_order_inclusive": false,
+          "earliest_usable_at_if_ordered_now": "2020-01-07T00:00:00Z",
+          "limitation_codes": []
+        },
+        "purchase": {
+          "status": "RECOMMENDED",
+          "final_requirement": "80",
+          "current_stock": "100",
+          "projected_stock_at_receipt": "40",
+          "confirmed_incoming_before_receipt": "0",
+          "msl_at_receipt": "50",
+          "target_stock": "53",
+          "raw_quantity": "13",
+          "quantity_after_moq": "20",
+          "combined_increment": "60",
+          "candidate_quantity": "60",
+          "recommended_quantity": "60",
+          "stock_after_receipt": "100",
+          "limitation_codes": []
+        }
+      }
+    },
+    {
+      "case_id": "T02",
+      "description": "Lead time shorter than cover; demand after purchase receipt",
+      "evidence": {
+        "kind": "SYNTHETIC",
+        "input_reference": "technical_expected_results.md#T02",
+        "expected_reference": "technical_expected_results.md#T02",
+        "source_sha256": "6bcaee77ad702b518246e701c0b060fe97ebd4a900c939c3c10643a2607442ce",
+        "approved_by": null,
+        "approved_at": null
+      },
+      "material_code": "SYNTHETIC-MATERIAL",
+      "unit_code": "EA",
+      "supplier_code": "SYNTHETIC-SUPPLIER",
+      "planning_period": "2020-01",
+      "stock_imports": [
+        {
+          "export_id": "fixture-stock",
+          "generated_at": "2020-01-03T00:00:00Z",
+          "snapshots": [
+            {
+              "source_snapshot_id": "fixture-snapshot",
+              "as_of": "2020-01-02T00:00:00Z",
+              "usable_quantity": "100",
+              "nonusable_excluded": true,
+              "reservations_excluded": true
+            }
+          ]
+        }
+      ],
+      "reconciled_as_of": "2020-01-02T00:00:00Z",
+      "coverage_until": "2020-01-12T00:00:00Z",
+      "reconciliation_reference": "synthetic-stock-demand-supply-reconciliation",
+      "demand": [
+        {
+          "plant": "SYNTHETIC-PLANT",
+          "final_quantity": "80",
+          "approval_reference": "synthetic-final-requirement",
+          "fulfilled_quantity": "10",
+          "reserved_quantity": "10",
+          "events": [
+            {
+              "source_id": "demand-1",
+              "at": "2020-01-05T00:00:00Z",
+              "quantity": "60"
+            }
+          ]
+        }
+      ],
+      "incoming": [],
+      "msl_history": [
+        {
+          "source_id": "msl-1",
+          "effective_at": "2020-01-01T00:00:00Z",
+          "quantity": "50",
+          "approval_reference": "synthetic-msl"
+        }
+      ],
+      "lead_time": {
+        "approval_reference": "synthetic-lead-time",
+        "start_event": "ORDER_INITIATED",
+        "end_event": "MATERIAL_USABLE",
+        "days": 2,
+        "basis": "ELAPSED_24_HOUR_DAYS",
+        "effective_from": "2019-12-01T00:00:00Z",
+        "effective_until": "2020-01-15T00:00:00Z",
+        "calendar": null
+      },
+      "reorder": {
+        "evaluated_at": "2020-01-02T00:00:00Z",
+        "cutoff": "2020-01-10T00:00:00Z",
+        "policy": {
+          "approval_reference": "synthetic-policy",
+          "effective_from": "2020-01-01T00:00:00Z",
+          "effective_until": "2020-01-15T00:00:00Z",
+          "violation": "BELOW_MSL",
+          "availability_boundary": "BEFORE_CROSSING"
+        }
+      },
+      "purchase": {
+        "initiated_at": "2020-01-02T00:00:00Z",
+        "receipt_at": "2020-01-04T00:00:00Z",
+        "evidence_from": "2020-01-01T00:00:00Z",
+        "evidence_until": "2020-01-15T00:00:00Z",
+        "target": {
+          "quantity": "53",
+          "approval_reference": "synthetic-target"
+        },
+        "constraints": {
+          "moq": {
+            "state": "APPLICABLE",
+            "value": "20",
+            "approval_reference": "synthetic-constraint"
+          },
+          "pack_size": {
+            "state": "APPLICABLE",
+            "value": "12",
+            "approval_reference": "synthetic-constraint"
+          },
+          "order_multiple": {
+            "state": "APPLICABLE",
+            "value": "10",
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_order_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_stock_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "other_constraints": "CONFIRMED_NONE",
+          "other_constraints_reference": "synthetic-no-others"
+        }
+      },
+      "expected": {
+        "stock": {
+          "usable_quantity": "100",
+          "as_of": "2020-01-02T00:00:00Z",
+          "source_export_id": "fixture-stock"
+        },
+        "projection": {
+          "status": "COMPLETE",
+          "projected_stock": "40",
+          "current_msl": "50",
+          "current_msl_condition": "ABOVE_MSL",
+          "projected_msl_condition": "BELOW_MSL",
+          "future_breach": true,
+          "first_future_breach_at": "2020-01-05T00:00:00Z",
+          "limitation_codes": [
+            "LEAD_TIME_UNCONFIGURED"
+          ]
+        },
+        "reorder": {
+          "status": "DETERMINED",
+          "reorder_required": false,
+          "already_breached": false,
+          "expected_msl_crossing_at": "2020-01-05T00:00:00Z",
+          "latest_safe_order_at": "2020-01-03T00:00:00Z",
+          "latest_safe_order_inclusive": false,
+          "earliest_usable_at_if_ordered_now": "2020-01-04T00:00:00Z",
+          "limitation_codes": []
+        },
+        "purchase": {
+          "status": "RECOMMENDED",
+          "final_requirement": "80",
+          "current_stock": "100",
+          "projected_stock_at_receipt": "100",
+          "confirmed_incoming_before_receipt": "0",
+          "msl_at_receipt": "50",
+          "target_stock": "53",
+          "raw_quantity": "-47",
+          "quantity_after_moq": "0",
+          "combined_increment": null,
+          "candidate_quantity": "0",
+          "recommended_quantity": "0",
+          "stock_after_receipt": "100",
+          "limitation_codes": []
+        }
+      }
+    },
+    {
+      "case_id": "T03",
+      "description": "Partial confirmed PO and late supply count once; incoming prevents breach",
+      "evidence": {
+        "kind": "SYNTHETIC",
+        "input_reference": "technical_expected_results.md#T03",
+        "expected_reference": "technical_expected_results.md#T03",
+        "source_sha256": "6bcaee77ad702b518246e701c0b060fe97ebd4a900c939c3c10643a2607442ce",
+        "approved_by": null,
+        "approved_at": null
+      },
+      "material_code": "SYNTHETIC-MATERIAL",
+      "unit_code": "EA",
+      "supplier_code": "SYNTHETIC-SUPPLIER",
+      "planning_period": "2020-01",
+      "stock_imports": [
+        {
+          "export_id": "fixture-stock",
+          "generated_at": "2020-01-03T00:00:00Z",
+          "snapshots": [
+            {
+              "source_snapshot_id": "fixture-snapshot",
+              "as_of": "2020-01-02T00:00:00Z",
+              "usable_quantity": "100",
+              "nonusable_excluded": true,
+              "reservations_excluded": true
+            }
+          ]
+        }
+      ],
+      "reconciled_as_of": "2020-01-02T00:00:00Z",
+      "coverage_until": "2020-01-12T00:00:00Z",
+      "reconciliation_reference": "synthetic-stock-demand-supply-reconciliation",
+      "demand": [
+        {
+          "plant": "SYNTHETIC-PLANT",
+          "final_quantity": "80",
+          "approval_reference": "synthetic-final-requirement",
+          "fulfilled_quantity": "10",
+          "reserved_quantity": "10",
+          "events": [
+            {
+              "source_id": "demand-1",
+              "at": "2020-01-05T00:00:00Z",
+              "quantity": "60"
+            }
+          ]
+        }
+      ],
+      "incoming": [
+        {
+          "source_id": "partial-po",
+          "status": "CONFIRMED",
+          "scheduled_quantity": "100",
+          "received_quantity": "60",
+          "cancelled_quantity": "10",
+          "available_at": "2020-01-04T00:00:00Z"
+        },
+        {
+          "source_id": "late-po",
+          "status": "CONFIRMED",
+          "scheduled_quantity": "1000",
+          "received_quantity": "0",
+          "cancelled_quantity": "0",
+          "available_at": "2020-01-11T00:00:00Z"
+        }
+      ],
+      "msl_history": [
+        {
+          "source_id": "msl-1",
+          "effective_at": "2020-01-01T00:00:00Z",
+          "quantity": "50",
+          "approval_reference": "synthetic-msl"
+        }
+      ],
+      "lead_time": {
+        "approval_reference": "synthetic-lead-time",
+        "start_event": "ORDER_INITIATED",
+        "end_event": "MATERIAL_USABLE",
+        "days": 5,
+        "basis": "ELAPSED_24_HOUR_DAYS",
+        "effective_from": "2019-12-01T00:00:00Z",
+        "effective_until": "2020-01-15T00:00:00Z",
+        "calendar": null
+      },
+      "reorder": {
+        "evaluated_at": "2020-01-02T00:00:00Z",
+        "cutoff": "2020-01-10T00:00:00Z",
+        "policy": {
+          "approval_reference": "synthetic-policy",
+          "effective_from": "2020-01-01T00:00:00Z",
+          "effective_until": "2020-01-15T00:00:00Z",
+          "violation": "BELOW_MSL",
+          "availability_boundary": "BEFORE_CROSSING"
+        }
+      },
+      "purchase": {
+        "initiated_at": "2020-01-02T00:00:00Z",
+        "receipt_at": "2020-01-07T00:00:00Z",
+        "evidence_from": "2020-01-01T00:00:00Z",
+        "evidence_until": "2020-01-15T00:00:00Z",
+        "target": {
+          "quantity": "53",
+          "approval_reference": "synthetic-target"
+        },
+        "constraints": {
+          "moq": {
+            "state": "APPLICABLE",
+            "value": "20",
+            "approval_reference": "synthetic-constraint"
+          },
+          "pack_size": {
+            "state": "APPLICABLE",
+            "value": "12",
+            "approval_reference": "synthetic-constraint"
+          },
+          "order_multiple": {
+            "state": "APPLICABLE",
+            "value": "10",
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_order_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_stock_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "other_constraints": "CONFIRMED_NONE",
+          "other_constraints_reference": "synthetic-no-others"
+        }
+      },
+      "expected": {
+        "stock": {
+          "usable_quantity": "100",
+          "as_of": "2020-01-02T00:00:00Z",
+          "source_export_id": "fixture-stock"
+        },
+        "projection": {
+          "status": "COMPLETE",
+          "projected_stock": "70",
+          "current_msl": "50",
+          "current_msl_condition": "ABOVE_MSL",
+          "projected_msl_condition": "ABOVE_MSL",
+          "future_breach": false,
+          "first_future_breach_at": null,
+          "limitation_codes": [
+            "LEAD_TIME_UNCONFIGURED"
+          ],
+          "timeline": [
+            {
+              "at": "2020-01-04T00:00:00Z",
+              "balance_before": "100",
+              "receipts": "30",
+              "requirements": "0",
+              "balance_after": "130",
+              "msl": "50",
+              "msl_condition": "ABOVE_MSL"
+            },
+            {
+              "at": "2020-01-05T00:00:00Z",
+              "balance_before": "130",
+              "receipts": "0",
+              "requirements": "60",
+              "balance_after": "70",
+              "msl": "50",
+              "msl_condition": "ABOVE_MSL"
+            }
+          ]
+        },
+        "reorder": {
+          "status": "DETERMINED",
+          "reorder_required": false,
+          "already_breached": false,
+          "expected_msl_crossing_at": null,
+          "latest_safe_order_at": null,
+          "latest_safe_order_inclusive": null,
+          "earliest_usable_at_if_ordered_now": "2020-01-07T00:00:00Z",
+          "limitation_codes": []
+        },
+        "purchase": {
+          "status": "RECOMMENDED",
+          "final_requirement": "80",
+          "current_stock": "100",
+          "projected_stock_at_receipt": "70",
+          "confirmed_incoming_before_receipt": "30",
+          "msl_at_receipt": "50",
+          "target_stock": "53",
+          "raw_quantity": "-17",
+          "quantity_after_moq": "0",
+          "combined_increment": null,
+          "candidate_quantity": "0",
+          "recommended_quantity": "0",
+          "stock_after_receipt": "70",
+          "limitation_codes": []
+        }
+      }
+    },
+    {
+      "case_id": "T04",
+      "description": "Incoming after an MSL breach does not erase the earlier crossing",
+      "evidence": {
+        "kind": "SYNTHETIC",
+        "input_reference": "technical_expected_results.md#T04",
+        "expected_reference": "technical_expected_results.md#T04",
+        "source_sha256": "6bcaee77ad702b518246e701c0b060fe97ebd4a900c939c3c10643a2607442ce",
+        "approved_by": null,
+        "approved_at": null
+      },
+      "material_code": "SYNTHETIC-MATERIAL",
+      "unit_code": "EA",
+      "supplier_code": "SYNTHETIC-SUPPLIER",
+      "planning_period": "2020-01",
+      "stock_imports": [
+        {
+          "export_id": "fixture-stock",
+          "generated_at": "2020-01-03T00:00:00Z",
+          "snapshots": [
+            {
+              "source_snapshot_id": "fixture-snapshot",
+              "as_of": "2020-01-02T00:00:00Z",
+              "usable_quantity": "100",
+              "nonusable_excluded": true,
+              "reservations_excluded": true
+            }
+          ]
+        }
+      ],
+      "reconciled_as_of": "2020-01-02T00:00:00Z",
+      "coverage_until": "2020-01-12T00:00:00Z",
+      "reconciliation_reference": "synthetic-stock-demand-supply-reconciliation",
+      "demand": [
+        {
+          "plant": "SYNTHETIC-PLANT",
+          "final_quantity": "80",
+          "approval_reference": "synthetic-final-requirement",
+          "fulfilled_quantity": "10",
+          "reserved_quantity": "10",
+          "events": [
+            {
+              "source_id": "demand-1",
+              "at": "2020-01-05T00:00:00Z",
+              "quantity": "60"
+            }
+          ]
+        }
+      ],
+      "incoming": [
+        {
+          "source_id": "partial-po",
+          "status": "CONFIRMED",
+          "scheduled_quantity": "100",
+          "received_quantity": "60",
+          "cancelled_quantity": "10",
+          "available_at": "2020-01-06T00:00:00Z"
+        }
+      ],
+      "msl_history": [
+        {
+          "source_id": "msl-1",
+          "effective_at": "2020-01-01T00:00:00Z",
+          "quantity": "50",
+          "approval_reference": "synthetic-msl"
+        }
+      ],
+      "lead_time": {
+        "approval_reference": "synthetic-lead-time",
+        "start_event": "ORDER_INITIATED",
+        "end_event": "MATERIAL_USABLE",
+        "days": 5,
+        "basis": "ELAPSED_24_HOUR_DAYS",
+        "effective_from": "2019-12-01T00:00:00Z",
+        "effective_until": "2020-01-15T00:00:00Z",
+        "calendar": null
+      },
+      "reorder": {
+        "evaluated_at": "2020-01-02T00:00:00Z",
+        "cutoff": "2020-01-10T00:00:00Z",
+        "policy": {
+          "approval_reference": "synthetic-policy",
+          "effective_from": "2020-01-01T00:00:00Z",
+          "effective_until": "2020-01-15T00:00:00Z",
+          "violation": "BELOW_MSL",
+          "availability_boundary": "BEFORE_CROSSING"
+        }
+      },
+      "purchase": {
+        "initiated_at": "2020-01-02T00:00:00Z",
+        "receipt_at": "2020-01-07T00:00:00Z",
+        "evidence_from": "2020-01-01T00:00:00Z",
+        "evidence_until": "2020-01-15T00:00:00Z",
+        "target": {
+          "quantity": "53",
+          "approval_reference": "synthetic-target"
+        },
+        "constraints": {
+          "moq": {
+            "state": "APPLICABLE",
+            "value": "20",
+            "approval_reference": "synthetic-constraint"
+          },
+          "pack_size": {
+            "state": "APPLICABLE",
+            "value": "12",
+            "approval_reference": "synthetic-constraint"
+          },
+          "order_multiple": {
+            "state": "APPLICABLE",
+            "value": "10",
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_order_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_stock_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "other_constraints": "CONFIRMED_NONE",
+          "other_constraints_reference": "synthetic-no-others"
+        }
+      },
+      "expected": {
+        "stock": {
+          "usable_quantity": "100",
+          "as_of": "2020-01-02T00:00:00Z",
+          "source_export_id": "fixture-stock"
+        },
+        "projection": {
+          "status": "COMPLETE",
+          "projected_stock": "70",
+          "current_msl": "50",
+          "current_msl_condition": "ABOVE_MSL",
+          "projected_msl_condition": "ABOVE_MSL",
+          "future_breach": true,
+          "first_future_breach_at": "2020-01-05T00:00:00Z",
+          "limitation_codes": [
+            "LEAD_TIME_UNCONFIGURED"
+          ],
+          "timeline": [
+            {
+              "at": "2020-01-05T00:00:00Z",
+              "balance_before": "100",
+              "receipts": "0",
+              "requirements": "60",
+              "balance_after": "40",
+              "msl": "50",
+              "msl_condition": "BELOW_MSL"
+            },
+            {
+              "at": "2020-01-06T00:00:00Z",
+              "balance_before": "40",
+              "receipts": "30",
+              "requirements": "0",
+              "balance_after": "70",
+              "msl": "50",
+              "msl_condition": "ABOVE_MSL"
+            }
+          ]
+        },
+        "reorder": {
+          "status": "DETERMINED",
+          "reorder_required": true,
+          "already_breached": false,
+          "expected_msl_crossing_at": "2020-01-05T00:00:00Z",
+          "latest_safe_order_at": "2019-12-31T00:00:00Z",
+          "latest_safe_order_inclusive": false,
+          "earliest_usable_at_if_ordered_now": "2020-01-07T00:00:00Z",
+          "limitation_codes": []
+        },
+        "purchase": {
+          "status": "RECOMMENDED",
+          "final_requirement": "80",
+          "current_stock": "100",
+          "projected_stock_at_receipt": "70",
+          "confirmed_incoming_before_receipt": "30",
+          "msl_at_receipt": "50",
+          "target_stock": "53",
+          "raw_quantity": "-17",
+          "quantity_after_moq": "0",
+          "combined_increment": null,
+          "candidate_quantity": "0",
+          "recommended_quantity": "0",
+          "stock_after_receipt": "70",
+          "limitation_codes": []
+        }
+      }
+    },
+    {
+      "case_id": "T05",
+      "description": "Exactly MSL is not a strict breach",
+      "evidence": {
+        "kind": "SYNTHETIC",
+        "input_reference": "technical_expected_results.md#T05",
+        "expected_reference": "technical_expected_results.md#T05",
+        "source_sha256": "6bcaee77ad702b518246e701c0b060fe97ebd4a900c939c3c10643a2607442ce",
+        "approved_by": null,
+        "approved_at": null
+      },
+      "material_code": "SYNTHETIC-MATERIAL",
+      "unit_code": "EA",
+      "supplier_code": "SYNTHETIC-SUPPLIER",
+      "planning_period": "2020-01",
+      "stock_imports": [
+        {
+          "export_id": "fixture-stock",
+          "generated_at": "2020-01-03T00:00:00Z",
+          "snapshots": [
+            {
+              "source_snapshot_id": "fixture-snapshot",
+              "as_of": "2020-01-02T00:00:00Z",
+              "usable_quantity": "100",
+              "nonusable_excluded": true,
+              "reservations_excluded": true
+            }
+          ]
+        }
+      ],
+      "reconciled_as_of": "2020-01-02T00:00:00Z",
+      "coverage_until": "2020-01-12T00:00:00Z",
+      "reconciliation_reference": "synthetic-stock-demand-supply-reconciliation",
+      "demand": [
+        {
+          "plant": "SYNTHETIC-PLANT",
+          "final_quantity": "70",
+          "approval_reference": "synthetic-final-requirement",
+          "fulfilled_quantity": "10",
+          "reserved_quantity": "10",
+          "events": [
+            {
+              "source_id": "demand-1",
+              "at": "2020-01-05T00:00:00Z",
+              "quantity": "50"
+            }
+          ]
+        }
+      ],
+      "incoming": [],
+      "msl_history": [
+        {
+          "source_id": "msl-1",
+          "effective_at": "2020-01-01T00:00:00Z",
+          "quantity": "50",
+          "approval_reference": "synthetic-msl"
+        }
+      ],
+      "lead_time": {
+        "approval_reference": "synthetic-lead-time",
+        "start_event": "ORDER_INITIATED",
+        "end_event": "MATERIAL_USABLE",
+        "days": 5,
+        "basis": "ELAPSED_24_HOUR_DAYS",
+        "effective_from": "2019-12-01T00:00:00Z",
+        "effective_until": "2020-01-15T00:00:00Z",
+        "calendar": null
+      },
+      "reorder": {
+        "evaluated_at": "2020-01-02T00:00:00Z",
+        "cutoff": "2020-01-10T00:00:00Z",
+        "policy": {
+          "approval_reference": "synthetic-policy",
+          "effective_from": "2020-01-01T00:00:00Z",
+          "effective_until": "2020-01-15T00:00:00Z",
+          "violation": "BELOW_MSL",
+          "availability_boundary": "BEFORE_CROSSING"
+        }
+      },
+      "purchase": {
+        "initiated_at": "2020-01-02T00:00:00Z",
+        "receipt_at": "2020-01-07T00:00:00Z",
+        "evidence_from": "2020-01-01T00:00:00Z",
+        "evidence_until": "2020-01-15T00:00:00Z",
+        "target": {
+          "quantity": "53",
+          "approval_reference": "synthetic-target"
+        },
+        "constraints": {
+          "moq": {
+            "state": "APPLICABLE",
+            "value": "20",
+            "approval_reference": "synthetic-constraint"
+          },
+          "pack_size": {
+            "state": "APPLICABLE",
+            "value": "12",
+            "approval_reference": "synthetic-constraint"
+          },
+          "order_multiple": {
+            "state": "APPLICABLE",
+            "value": "10",
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_order_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_stock_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "other_constraints": "CONFIRMED_NONE",
+          "other_constraints_reference": "synthetic-no-others"
+        }
+      },
+      "expected": {
+        "stock": {
+          "usable_quantity": "100",
+          "as_of": "2020-01-02T00:00:00Z",
+          "source_export_id": "fixture-stock"
+        },
+        "projection": {
+          "status": "COMPLETE",
+          "projected_stock": "50",
+          "current_msl": "50",
+          "current_msl_condition": "ABOVE_MSL",
+          "projected_msl_condition": "AT_MSL",
+          "future_breach": false,
+          "first_future_breach_at": null,
+          "limitation_codes": [
+            "LEAD_TIME_UNCONFIGURED"
+          ]
+        },
+        "reorder": {
+          "status": "DETERMINED",
+          "reorder_required": false,
+          "already_breached": false,
+          "expected_msl_crossing_at": null,
+          "latest_safe_order_at": null,
+          "latest_safe_order_inclusive": null,
+          "earliest_usable_at_if_ordered_now": "2020-01-07T00:00:00Z",
+          "limitation_codes": []
+        },
+        "purchase": {
+          "status": "RECOMMENDED",
+          "final_requirement": "70",
+          "current_stock": "100",
+          "projected_stock_at_receipt": "50",
+          "confirmed_incoming_before_receipt": "0",
+          "msl_at_receipt": "50",
+          "target_stock": "53",
+          "raw_quantity": "3",
+          "quantity_after_moq": "20",
+          "combined_increment": "60",
+          "candidate_quantity": "60",
+          "recommended_quantity": "60",
+          "stock_after_receipt": "110",
+          "limitation_codes": []
+        }
+      }
+    },
+    {
+      "case_id": "T06",
+      "description": "Equality is a crossing only under an explicit inclusive MSL policy",
+      "evidence": {
+        "kind": "SYNTHETIC",
+        "input_reference": "technical_expected_results.md#T06",
+        "expected_reference": "technical_expected_results.md#T06",
+        "source_sha256": "6bcaee77ad702b518246e701c0b060fe97ebd4a900c939c3c10643a2607442ce",
+        "approved_by": null,
+        "approved_at": null
+      },
+      "material_code": "SYNTHETIC-MATERIAL",
+      "unit_code": "EA",
+      "supplier_code": "SYNTHETIC-SUPPLIER",
+      "planning_period": "2020-01",
+      "stock_imports": [
+        {
+          "export_id": "fixture-stock",
+          "generated_at": "2020-01-03T00:00:00Z",
+          "snapshots": [
+            {
+              "source_snapshot_id": "fixture-snapshot",
+              "as_of": "2020-01-02T00:00:00Z",
+              "usable_quantity": "100",
+              "nonusable_excluded": true,
+              "reservations_excluded": true
+            }
+          ]
+        }
+      ],
+      "reconciled_as_of": "2020-01-02T00:00:00Z",
+      "coverage_until": "2020-01-12T00:00:00Z",
+      "reconciliation_reference": "synthetic-stock-demand-supply-reconciliation",
+      "demand": [
+        {
+          "plant": "SYNTHETIC-PLANT",
+          "final_quantity": "70",
+          "approval_reference": "synthetic-final-requirement",
+          "fulfilled_quantity": "10",
+          "reserved_quantity": "10",
+          "events": [
+            {
+              "source_id": "demand-1",
+              "at": "2020-01-05T00:00:00Z",
+              "quantity": "50"
+            }
+          ]
+        }
+      ],
+      "incoming": [],
+      "msl_history": [
+        {
+          "source_id": "msl-1",
+          "effective_at": "2020-01-01T00:00:00Z",
+          "quantity": "50",
+          "approval_reference": "synthetic-msl"
+        }
+      ],
+      "lead_time": {
+        "approval_reference": "synthetic-lead-time",
+        "start_event": "ORDER_INITIATED",
+        "end_event": "MATERIAL_USABLE",
+        "days": 5,
+        "basis": "ELAPSED_24_HOUR_DAYS",
+        "effective_from": "2019-12-01T00:00:00Z",
+        "effective_until": "2020-01-15T00:00:00Z",
+        "calendar": null
+      },
+      "reorder": {
+        "evaluated_at": "2020-01-02T00:00:00Z",
+        "cutoff": "2020-01-10T00:00:00Z",
+        "policy": {
+          "approval_reference": "synthetic-policy",
+          "effective_from": "2020-01-01T00:00:00Z",
+          "effective_until": "2020-01-15T00:00:00Z",
+          "violation": "AT_OR_BELOW_MSL",
+          "availability_boundary": "BEFORE_CROSSING"
+        }
+      },
+      "purchase": {
+        "initiated_at": "2020-01-02T00:00:00Z",
+        "receipt_at": "2020-01-07T00:00:00Z",
+        "evidence_from": "2020-01-01T00:00:00Z",
+        "evidence_until": "2020-01-15T00:00:00Z",
+        "target": {
+          "quantity": "53",
+          "approval_reference": "synthetic-target"
+        },
+        "constraints": {
+          "moq": {
+            "state": "APPLICABLE",
+            "value": "20",
+            "approval_reference": "synthetic-constraint"
+          },
+          "pack_size": {
+            "state": "APPLICABLE",
+            "value": "12",
+            "approval_reference": "synthetic-constraint"
+          },
+          "order_multiple": {
+            "state": "APPLICABLE",
+            "value": "10",
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_order_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_stock_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "other_constraints": "CONFIRMED_NONE",
+          "other_constraints_reference": "synthetic-no-others"
+        }
+      },
+      "expected": {
+        "stock": {
+          "usable_quantity": "100",
+          "as_of": "2020-01-02T00:00:00Z",
+          "source_export_id": "fixture-stock"
+        },
+        "projection": {
+          "status": "COMPLETE",
+          "projected_stock": "50",
+          "current_msl": "50",
+          "current_msl_condition": "ABOVE_MSL",
+          "projected_msl_condition": "AT_MSL",
+          "future_breach": false,
+          "first_future_breach_at": null,
+          "limitation_codes": [
+            "LEAD_TIME_UNCONFIGURED"
+          ]
+        },
+        "reorder": {
+          "status": "DETERMINED",
+          "reorder_required": true,
+          "already_breached": false,
+          "expected_msl_crossing_at": "2020-01-05T00:00:00Z",
+          "latest_safe_order_at": "2019-12-31T00:00:00Z",
+          "latest_safe_order_inclusive": false,
+          "earliest_usable_at_if_ordered_now": "2020-01-07T00:00:00Z",
+          "limitation_codes": []
+        },
+        "purchase": {
+          "status": "RECOMMENDED",
+          "final_requirement": "70",
+          "current_stock": "100",
+          "projected_stock_at_receipt": "50",
+          "confirmed_incoming_before_receipt": "0",
+          "msl_at_receipt": "50",
+          "target_stock": "53",
+          "raw_quantity": "3",
+          "quantity_after_moq": "20",
+          "combined_increment": "60",
+          "candidate_quantity": "60",
+          "recommended_quantity": "60",
+          "stock_after_receipt": "110",
+          "limitation_codes": []
+        }
+      }
+    },
+    {
+      "case_id": "T07",
+      "description": "Already below MSL; negative projection; no invented historical deadline",
+      "evidence": {
+        "kind": "SYNTHETIC",
+        "input_reference": "technical_expected_results.md#T07",
+        "expected_reference": "technical_expected_results.md#T07",
+        "source_sha256": "6bcaee77ad702b518246e701c0b060fe97ebd4a900c939c3c10643a2607442ce",
+        "approved_by": null,
+        "approved_at": null
+      },
+      "material_code": "SYNTHETIC-MATERIAL",
+      "unit_code": "EA",
+      "supplier_code": "SYNTHETIC-SUPPLIER",
+      "planning_period": "2020-01",
+      "stock_imports": [
+        {
+          "export_id": "fixture-stock",
+          "generated_at": "2020-01-03T00:00:00Z",
+          "snapshots": [
+            {
+              "source_snapshot_id": "fixture-snapshot",
+              "as_of": "2020-01-02T00:00:00Z",
+              "usable_quantity": "40",
+              "nonusable_excluded": true,
+              "reservations_excluded": true
+            }
+          ]
+        }
+      ],
+      "reconciled_as_of": "2020-01-02T00:00:00Z",
+      "coverage_until": "2020-01-12T00:00:00Z",
+      "reconciliation_reference": "synthetic-stock-demand-supply-reconciliation",
+      "demand": [
+        {
+          "plant": "SYNTHETIC-PLANT",
+          "final_quantity": "80",
+          "approval_reference": "synthetic-final-requirement",
+          "fulfilled_quantity": "10",
+          "reserved_quantity": "10",
+          "events": [
+            {
+              "source_id": "demand-1",
+              "at": "2020-01-05T00:00:00Z",
+              "quantity": "60"
+            }
+          ]
+        }
+      ],
+      "incoming": [],
+      "msl_history": [
+        {
+          "source_id": "msl-1",
+          "effective_at": "2020-01-01T00:00:00Z",
+          "quantity": "50",
+          "approval_reference": "synthetic-msl"
+        }
+      ],
+      "lead_time": {
+        "approval_reference": "synthetic-lead-time",
+        "start_event": "ORDER_INITIATED",
+        "end_event": "MATERIAL_USABLE",
+        "days": 5,
+        "basis": "ELAPSED_24_HOUR_DAYS",
+        "effective_from": "2019-12-01T00:00:00Z",
+        "effective_until": "2020-01-15T00:00:00Z",
+        "calendar": null
+      },
+      "reorder": {
+        "evaluated_at": "2020-01-02T00:00:00Z",
+        "cutoff": "2020-01-10T00:00:00Z",
+        "policy": {
+          "approval_reference": "synthetic-policy",
+          "effective_from": "2020-01-01T00:00:00Z",
+          "effective_until": "2020-01-15T00:00:00Z",
+          "violation": "BELOW_MSL",
+          "availability_boundary": "BEFORE_CROSSING"
+        }
+      },
+      "purchase": {
+        "initiated_at": "2020-01-02T00:00:00Z",
+        "receipt_at": "2020-01-07T00:00:00Z",
+        "evidence_from": "2020-01-01T00:00:00Z",
+        "evidence_until": "2020-01-15T00:00:00Z",
+        "target": {
+          "quantity": "53",
+          "approval_reference": "synthetic-target"
+        },
+        "constraints": {
+          "moq": {
+            "state": "APPLICABLE",
+            "value": "20",
+            "approval_reference": "synthetic-constraint"
+          },
+          "pack_size": {
+            "state": "APPLICABLE",
+            "value": "12",
+            "approval_reference": "synthetic-constraint"
+          },
+          "order_multiple": {
+            "state": "APPLICABLE",
+            "value": "10",
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_order_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_stock_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "other_constraints": "CONFIRMED_NONE",
+          "other_constraints_reference": "synthetic-no-others"
+        }
+      },
+      "expected": {
+        "stock": {
+          "usable_quantity": "40",
+          "as_of": "2020-01-02T00:00:00Z",
+          "source_export_id": "fixture-stock"
+        },
+        "projection": {
+          "status": "COMPLETE",
+          "projected_stock": "-20",
+          "current_msl": "50",
+          "current_msl_condition": "BELOW_MSL",
+          "projected_msl_condition": "BELOW_MSL",
+          "future_breach": false,
+          "first_future_breach_at": null,
+          "limitation_codes": [
+            "LEAD_TIME_UNCONFIGURED"
+          ]
+        },
+        "reorder": {
+          "status": "DETERMINED",
+          "reorder_required": true,
+          "already_breached": true,
+          "expected_msl_crossing_at": "2020-01-02T00:00:00Z",
+          "latest_safe_order_at": null,
+          "latest_safe_order_inclusive": null,
+          "earliest_usable_at_if_ordered_now": null,
+          "limitation_codes": []
+        },
+        "purchase": {
+          "status": "RECOMMENDED",
+          "final_requirement": "80",
+          "current_stock": "40",
+          "projected_stock_at_receipt": "-20",
+          "confirmed_incoming_before_receipt": "0",
+          "msl_at_receipt": "50",
+          "target_stock": "53",
+          "raw_quantity": "73",
+          "quantity_after_moq": "73",
+          "combined_increment": "60",
+          "candidate_quantity": "120",
+          "recommended_quantity": "120",
+          "stock_after_receipt": "100",
+          "limitation_codes": []
+        }
+      }
+    },
+    {
+      "case_id": "T08",
+      "description": "Four decimal quantities and simultaneous fractional ordering increments",
+      "evidence": {
+        "kind": "SYNTHETIC",
+        "input_reference": "technical_expected_results.md#T08",
+        "expected_reference": "technical_expected_results.md#T08",
+        "source_sha256": "6bcaee77ad702b518246e701c0b060fe97ebd4a900c939c3c10643a2607442ce",
+        "approved_by": null,
+        "approved_at": null
+      },
+      "material_code": "SYNTHETIC-MATERIAL",
+      "unit_code": "EA",
+      "supplier_code": "SYNTHETIC-SUPPLIER",
+      "planning_period": "2020-01",
+      "stock_imports": [
+        {
+          "export_id": "fixture-stock",
+          "generated_at": "2020-01-03T00:00:00Z",
+          "snapshots": [
+            {
+              "source_snapshot_id": "fixture-snapshot",
+              "as_of": "2020-01-02T00:00:00Z",
+              "usable_quantity": "0.3003",
+              "nonusable_excluded": true,
+              "reservations_excluded": true
+            }
+          ]
+        }
+      ],
+      "reconciled_as_of": "2020-01-02T00:00:00Z",
+      "coverage_until": "2020-01-12T00:00:00Z",
+      "reconciliation_reference": "synthetic-stock-demand-supply-reconciliation",
+      "demand": [
+        {
+          "plant": "SYNTHETIC-PLANT",
+          "final_quantity": "0.2002",
+          "approval_reference": "synthetic-final-requirement",
+          "fulfilled_quantity": "0",
+          "reserved_quantity": "0",
+          "events": [
+            {
+              "source_id": "demand-1",
+              "at": "2020-01-05T00:00:00Z",
+              "quantity": "0.2002"
+            }
+          ]
+        }
+      ],
+      "incoming": [],
+      "msl_history": [
+        {
+          "source_id": "msl-1",
+          "effective_at": "2020-01-01T00:00:00Z",
+          "quantity": "0.15",
+          "approval_reference": "synthetic-msl"
+        }
+      ],
+      "lead_time": {
+        "approval_reference": "synthetic-lead-time",
+        "start_event": "ORDER_INITIATED",
+        "end_event": "MATERIAL_USABLE",
+        "days": 5,
+        "basis": "ELAPSED_24_HOUR_DAYS",
+        "effective_from": "2019-12-01T00:00:00Z",
+        "effective_until": "2020-01-15T00:00:00Z",
+        "calendar": null
+      },
+      "reorder": {
+        "evaluated_at": "2020-01-02T00:00:00Z",
+        "cutoff": "2020-01-10T00:00:00Z",
+        "policy": {
+          "approval_reference": "synthetic-policy",
+          "effective_from": "2020-01-01T00:00:00Z",
+          "effective_until": "2020-01-15T00:00:00Z",
+          "violation": "BELOW_MSL",
+          "availability_boundary": "BEFORE_CROSSING"
+        }
+      },
+      "purchase": {
+        "initiated_at": "2020-01-02T00:00:00Z",
+        "receipt_at": "2020-01-07T00:00:00Z",
+        "evidence_from": "2020-01-01T00:00:00Z",
+        "evidence_until": "2020-01-15T00:00:00Z",
+        "target": {
+          "quantity": "0.4004",
+          "approval_reference": "synthetic-target"
+        },
+        "constraints": {
+          "moq": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "pack_size": {
+            "state": "APPLICABLE",
+            "value": "0.25",
+            "approval_reference": "synthetic-constraint"
+          },
+          "order_multiple": {
+            "state": "APPLICABLE",
+            "value": "0.30",
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_order_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_stock_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "other_constraints": "CONFIRMED_NONE",
+          "other_constraints_reference": "synthetic-no-others"
+        }
+      },
+      "expected": {
+        "stock": {
+          "usable_quantity": "0.3003",
+          "as_of": "2020-01-02T00:00:00Z",
+          "source_export_id": "fixture-stock"
+        },
+        "projection": {
+          "status": "COMPLETE",
+          "projected_stock": "0.1001",
+          "current_msl": "0.15",
+          "current_msl_condition": "ABOVE_MSL",
+          "projected_msl_condition": "BELOW_MSL",
+          "future_breach": true,
+          "first_future_breach_at": "2020-01-05T00:00:00Z",
+          "limitation_codes": [
+            "LEAD_TIME_UNCONFIGURED"
+          ]
+        },
+        "reorder": {
+          "status": "DETERMINED",
+          "reorder_required": true,
+          "already_breached": false,
+          "expected_msl_crossing_at": "2020-01-05T00:00:00Z",
+          "latest_safe_order_at": "2019-12-31T00:00:00Z",
+          "latest_safe_order_inclusive": false,
+          "earliest_usable_at_if_ordered_now": "2020-01-07T00:00:00Z",
+          "limitation_codes": []
+        },
+        "purchase": {
+          "status": "RECOMMENDED",
+          "final_requirement": "0.2002",
+          "current_stock": "0.3003",
+          "projected_stock_at_receipt": "0.1001",
+          "confirmed_incoming_before_receipt": "0",
+          "msl_at_receipt": "0.15",
+          "target_stock": "0.4004",
+          "raw_quantity": "0.3003",
+          "quantity_after_moq": "0.3003",
+          "combined_increment": "1.5",
+          "candidate_quantity": "1.5",
+          "recommended_quantity": "1.5",
+          "stock_after_receipt": "1.6001",
+          "limitation_codes": []
+        }
+      }
+    },
+    {
+      "case_id": "T09",
+      "description": "Maximum order conflict is surfaced without silently capping the order",
+      "evidence": {
+        "kind": "SYNTHETIC",
+        "input_reference": "technical_expected_results.md#T09",
+        "expected_reference": "technical_expected_results.md#T09",
+        "source_sha256": "6bcaee77ad702b518246e701c0b060fe97ebd4a900c939c3c10643a2607442ce",
+        "approved_by": null,
+        "approved_at": null
+      },
+      "material_code": "SYNTHETIC-MATERIAL",
+      "unit_code": "EA",
+      "supplier_code": "SYNTHETIC-SUPPLIER",
+      "planning_period": "2020-01",
+      "stock_imports": [
+        {
+          "export_id": "fixture-stock",
+          "generated_at": "2020-01-03T00:00:00Z",
+          "snapshots": [
+            {
+              "source_snapshot_id": "fixture-snapshot",
+              "as_of": "2020-01-02T00:00:00Z",
+              "usable_quantity": "100",
+              "nonusable_excluded": true,
+              "reservations_excluded": true
+            }
+          ]
+        }
+      ],
+      "reconciled_as_of": "2020-01-02T00:00:00Z",
+      "coverage_until": "2020-01-12T00:00:00Z",
+      "reconciliation_reference": "synthetic-stock-demand-supply-reconciliation",
+      "demand": [
+        {
+          "plant": "SYNTHETIC-PLANT",
+          "final_quantity": "80",
+          "approval_reference": "synthetic-final-requirement",
+          "fulfilled_quantity": "10",
+          "reserved_quantity": "10",
+          "events": [
+            {
+              "source_id": "demand-1",
+              "at": "2020-01-05T00:00:00Z",
+              "quantity": "60"
+            }
+          ]
+        }
+      ],
+      "incoming": [],
+      "msl_history": [
+        {
+          "source_id": "msl-1",
+          "effective_at": "2020-01-01T00:00:00Z",
+          "quantity": "50",
+          "approval_reference": "synthetic-msl"
+        }
+      ],
+      "lead_time": {
+        "approval_reference": "synthetic-lead-time",
+        "start_event": "ORDER_INITIATED",
+        "end_event": "MATERIAL_USABLE",
+        "days": 5,
+        "basis": "ELAPSED_24_HOUR_DAYS",
+        "effective_from": "2019-12-01T00:00:00Z",
+        "effective_until": "2020-01-15T00:00:00Z",
+        "calendar": null
+      },
+      "reorder": {
+        "evaluated_at": "2020-01-02T00:00:00Z",
+        "cutoff": "2020-01-10T00:00:00Z",
+        "policy": {
+          "approval_reference": "synthetic-policy",
+          "effective_from": "2020-01-01T00:00:00Z",
+          "effective_until": "2020-01-15T00:00:00Z",
+          "violation": "BELOW_MSL",
+          "availability_boundary": "BEFORE_CROSSING"
+        }
+      },
+      "purchase": {
+        "initiated_at": "2020-01-02T00:00:00Z",
+        "receipt_at": "2020-01-07T00:00:00Z",
+        "evidence_from": "2020-01-01T00:00:00Z",
+        "evidence_until": "2020-01-15T00:00:00Z",
+        "target": {
+          "quantity": "53",
+          "approval_reference": "synthetic-target"
+        },
+        "constraints": {
+          "moq": {
+            "state": "APPLICABLE",
+            "value": "20",
+            "approval_reference": "synthetic-constraint"
+          },
+          "pack_size": {
+            "state": "APPLICABLE",
+            "value": "12",
+            "approval_reference": "synthetic-constraint"
+          },
+          "order_multiple": {
+            "state": "APPLICABLE",
+            "value": "10",
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_order_quantity": {
+            "state": "APPLICABLE",
+            "value": "59",
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_stock_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "other_constraints": "CONFIRMED_NONE",
+          "other_constraints_reference": "synthetic-no-others"
+        }
+      },
+      "expected": {
+        "stock": {
+          "usable_quantity": "100",
+          "as_of": "2020-01-02T00:00:00Z",
+          "source_export_id": "fixture-stock"
+        },
+        "projection": {
+          "status": "COMPLETE",
+          "projected_stock": "40",
+          "current_msl": "50",
+          "current_msl_condition": "ABOVE_MSL",
+          "projected_msl_condition": "BELOW_MSL",
+          "future_breach": true,
+          "first_future_breach_at": "2020-01-05T00:00:00Z",
+          "limitation_codes": [
+            "LEAD_TIME_UNCONFIGURED"
+          ]
+        },
+        "reorder": {
+          "status": "DETERMINED",
+          "reorder_required": true,
+          "already_breached": false,
+          "expected_msl_crossing_at": "2020-01-05T00:00:00Z",
+          "latest_safe_order_at": "2019-12-31T00:00:00Z",
+          "latest_safe_order_inclusive": false,
+          "earliest_usable_at_if_ordered_now": "2020-01-07T00:00:00Z",
+          "limitation_codes": []
+        },
+        "purchase": {
+          "status": "CONFLICT",
+          "final_requirement": "80",
+          "current_stock": "100",
+          "projected_stock_at_receipt": "40",
+          "confirmed_incoming_before_receipt": "0",
+          "msl_at_receipt": "50",
+          "target_stock": "53",
+          "raw_quantity": "13",
+          "quantity_after_moq": "20",
+          "combined_increment": "60",
+          "candidate_quantity": "60",
+          "recommended_quantity": null,
+          "stock_after_receipt": null,
+          "limitation_codes": [
+            "MAX_ORDER_CONFLICT"
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "T10",
+      "description": "Unknown supplier pack constraint blocks recommendation",
+      "evidence": {
+        "kind": "SYNTHETIC",
+        "input_reference": "technical_expected_results.md#T10",
+        "expected_reference": "technical_expected_results.md#T10",
+        "source_sha256": "6bcaee77ad702b518246e701c0b060fe97ebd4a900c939c3c10643a2607442ce",
+        "approved_by": null,
+        "approved_at": null
+      },
+      "material_code": "SYNTHETIC-MATERIAL",
+      "unit_code": "EA",
+      "supplier_code": "SYNTHETIC-SUPPLIER",
+      "planning_period": "2020-01",
+      "stock_imports": [
+        {
+          "export_id": "fixture-stock",
+          "generated_at": "2020-01-03T00:00:00Z",
+          "snapshots": [
+            {
+              "source_snapshot_id": "fixture-snapshot",
+              "as_of": "2020-01-02T00:00:00Z",
+              "usable_quantity": "100",
+              "nonusable_excluded": true,
+              "reservations_excluded": true
+            }
+          ]
+        }
+      ],
+      "reconciled_as_of": "2020-01-02T00:00:00Z",
+      "coverage_until": "2020-01-12T00:00:00Z",
+      "reconciliation_reference": "synthetic-stock-demand-supply-reconciliation",
+      "demand": [
+        {
+          "plant": "SYNTHETIC-PLANT",
+          "final_quantity": "80",
+          "approval_reference": "synthetic-final-requirement",
+          "fulfilled_quantity": "10",
+          "reserved_quantity": "10",
+          "events": [
+            {
+              "source_id": "demand-1",
+              "at": "2020-01-05T00:00:00Z",
+              "quantity": "60"
+            }
+          ]
+        }
+      ],
+      "incoming": [],
+      "msl_history": [
+        {
+          "source_id": "msl-1",
+          "effective_at": "2020-01-01T00:00:00Z",
+          "quantity": "50",
+          "approval_reference": "synthetic-msl"
+        }
+      ],
+      "lead_time": {
+        "approval_reference": "synthetic-lead-time",
+        "start_event": "ORDER_INITIATED",
+        "end_event": "MATERIAL_USABLE",
+        "days": 5,
+        "basis": "ELAPSED_24_HOUR_DAYS",
+        "effective_from": "2019-12-01T00:00:00Z",
+        "effective_until": "2020-01-15T00:00:00Z",
+        "calendar": null
+      },
+      "reorder": {
+        "evaluated_at": "2020-01-02T00:00:00Z",
+        "cutoff": "2020-01-10T00:00:00Z",
+        "policy": {
+          "approval_reference": "synthetic-policy",
+          "effective_from": "2020-01-01T00:00:00Z",
+          "effective_until": "2020-01-15T00:00:00Z",
+          "violation": "BELOW_MSL",
+          "availability_boundary": "BEFORE_CROSSING"
+        }
+      },
+      "purchase": {
+        "initiated_at": "2020-01-02T00:00:00Z",
+        "receipt_at": "2020-01-07T00:00:00Z",
+        "evidence_from": "2020-01-01T00:00:00Z",
+        "evidence_until": "2020-01-15T00:00:00Z",
+        "target": {
+          "quantity": "53",
+          "approval_reference": "synthetic-target"
+        },
+        "constraints": {
+          "moq": {
+            "state": "APPLICABLE",
+            "value": "20",
+            "approval_reference": "synthetic-constraint"
+          },
+          "pack_size": {
+            "state": "UNKNOWN",
+            "value": null,
+            "approval_reference": null
+          },
+          "order_multiple": {
+            "state": "APPLICABLE",
+            "value": "10",
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_order_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_stock_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "other_constraints": "CONFIRMED_NONE",
+          "other_constraints_reference": "synthetic-no-others"
+        }
+      },
+      "expected": {
+        "stock": {
+          "usable_quantity": "100",
+          "as_of": "2020-01-02T00:00:00Z",
+          "source_export_id": "fixture-stock"
+        },
+        "projection": {
+          "status": "COMPLETE",
+          "projected_stock": "40",
+          "current_msl": "50",
+          "current_msl_condition": "ABOVE_MSL",
+          "projected_msl_condition": "BELOW_MSL",
+          "future_breach": true,
+          "first_future_breach_at": "2020-01-05T00:00:00Z",
+          "limitation_codes": [
+            "LEAD_TIME_UNCONFIGURED"
+          ]
+        },
+        "reorder": {
+          "status": "DETERMINED",
+          "reorder_required": true,
+          "already_breached": false,
+          "expected_msl_crossing_at": "2020-01-05T00:00:00Z",
+          "latest_safe_order_at": "2019-12-31T00:00:00Z",
+          "latest_safe_order_inclusive": false,
+          "earliest_usable_at_if_ordered_now": "2020-01-07T00:00:00Z",
+          "limitation_codes": []
+        },
+        "purchase": {
+          "status": "INCOMPLETE",
+          "final_requirement": "80",
+          "current_stock": "100",
+          "projected_stock_at_receipt": "40",
+          "confirmed_incoming_before_receipt": "0",
+          "msl_at_receipt": "50",
+          "target_stock": "53",
+          "raw_quantity": "13",
+          "quantity_after_moq": null,
+          "combined_increment": null,
+          "candidate_quantity": null,
+          "recommended_quantity": null,
+          "stock_after_receipt": null,
+          "limitation_codes": [
+            "CONSTRAINT_UNCONFIRMED"
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "T11",
+      "description": "Zero raw quantity does not order MOQ; a target below MSL stays visible",
+      "evidence": {
+        "kind": "SYNTHETIC",
+        "input_reference": "technical_expected_results.md#T11",
+        "expected_reference": "technical_expected_results.md#T11",
+        "source_sha256": "6bcaee77ad702b518246e701c0b060fe97ebd4a900c939c3c10643a2607442ce",
+        "approved_by": null,
+        "approved_at": null
+      },
+      "material_code": "SYNTHETIC-MATERIAL",
+      "unit_code": "EA",
+      "supplier_code": "SYNTHETIC-SUPPLIER",
+      "planning_period": "2020-01",
+      "stock_imports": [
+        {
+          "export_id": "fixture-stock",
+          "generated_at": "2020-01-03T00:00:00Z",
+          "snapshots": [
+            {
+              "source_snapshot_id": "fixture-snapshot",
+              "as_of": "2020-01-02T00:00:00Z",
+              "usable_quantity": "100",
+              "nonusable_excluded": true,
+              "reservations_excluded": true
+            }
+          ]
+        }
+      ],
+      "reconciled_as_of": "2020-01-02T00:00:00Z",
+      "coverage_until": "2020-01-12T00:00:00Z",
+      "reconciliation_reference": "synthetic-stock-demand-supply-reconciliation",
+      "demand": [
+        {
+          "plant": "SYNTHETIC-PLANT",
+          "final_quantity": "80",
+          "approval_reference": "synthetic-final-requirement",
+          "fulfilled_quantity": "10",
+          "reserved_quantity": "10",
+          "events": [
+            {
+              "source_id": "demand-1",
+              "at": "2020-01-05T00:00:00Z",
+              "quantity": "60"
+            }
+          ]
+        }
+      ],
+      "incoming": [],
+      "msl_history": [
+        {
+          "source_id": "msl-1",
+          "effective_at": "2020-01-01T00:00:00Z",
+          "quantity": "50",
+          "approval_reference": "synthetic-msl"
+        }
+      ],
+      "lead_time": {
+        "approval_reference": "synthetic-lead-time",
+        "start_event": "ORDER_INITIATED",
+        "end_event": "MATERIAL_USABLE",
+        "days": 5,
+        "basis": "ELAPSED_24_HOUR_DAYS",
+        "effective_from": "2019-12-01T00:00:00Z",
+        "effective_until": "2020-01-15T00:00:00Z",
+        "calendar": null
+      },
+      "reorder": {
+        "evaluated_at": "2020-01-02T00:00:00Z",
+        "cutoff": "2020-01-10T00:00:00Z",
+        "policy": {
+          "approval_reference": "synthetic-policy",
+          "effective_from": "2020-01-01T00:00:00Z",
+          "effective_until": "2020-01-15T00:00:00Z",
+          "violation": "BELOW_MSL",
+          "availability_boundary": "BEFORE_CROSSING"
+        }
+      },
+      "purchase": {
+        "initiated_at": "2020-01-02T00:00:00Z",
+        "receipt_at": "2020-01-07T00:00:00Z",
+        "evidence_from": "2020-01-01T00:00:00Z",
+        "evidence_until": "2020-01-15T00:00:00Z",
+        "target": {
+          "quantity": "40",
+          "approval_reference": "synthetic-target"
+        },
+        "constraints": {
+          "moq": {
+            "state": "APPLICABLE",
+            "value": "20",
+            "approval_reference": "synthetic-constraint"
+          },
+          "pack_size": {
+            "state": "APPLICABLE",
+            "value": "12",
+            "approval_reference": "synthetic-constraint"
+          },
+          "order_multiple": {
+            "state": "APPLICABLE",
+            "value": "10",
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_order_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_stock_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "other_constraints": "CONFIRMED_NONE",
+          "other_constraints_reference": "synthetic-no-others"
+        }
+      },
+      "expected": {
+        "stock": {
+          "usable_quantity": "100",
+          "as_of": "2020-01-02T00:00:00Z",
+          "source_export_id": "fixture-stock"
+        },
+        "projection": {
+          "status": "COMPLETE",
+          "projected_stock": "40",
+          "current_msl": "50",
+          "current_msl_condition": "ABOVE_MSL",
+          "projected_msl_condition": "BELOW_MSL",
+          "future_breach": true,
+          "first_future_breach_at": "2020-01-05T00:00:00Z",
+          "limitation_codes": [
+            "LEAD_TIME_UNCONFIGURED"
+          ]
+        },
+        "reorder": {
+          "status": "DETERMINED",
+          "reorder_required": true,
+          "already_breached": false,
+          "expected_msl_crossing_at": "2020-01-05T00:00:00Z",
+          "latest_safe_order_at": "2019-12-31T00:00:00Z",
+          "latest_safe_order_inclusive": false,
+          "earliest_usable_at_if_ordered_now": "2020-01-07T00:00:00Z",
+          "limitation_codes": []
+        },
+        "purchase": {
+          "status": "RECOMMENDED",
+          "final_requirement": "80",
+          "current_stock": "100",
+          "projected_stock_at_receipt": "40",
+          "confirmed_incoming_before_receipt": "0",
+          "msl_at_receipt": "50",
+          "target_stock": "40",
+          "raw_quantity": "0",
+          "quantity_after_moq": "0",
+          "combined_increment": null,
+          "candidate_quantity": "0",
+          "recommended_quantity": "0",
+          "stock_after_receipt": "40",
+          "limitation_codes": [
+            "TARGET_BELOW_MSL"
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "T12",
+      "description": "An older snapshot imported later must not overwrite the newer usable balance",
+      "evidence": {
+        "kind": "SYNTHETIC",
+        "input_reference": "technical_expected_results.md#T12",
+        "expected_reference": "technical_expected_results.md#T12",
+        "source_sha256": "6bcaee77ad702b518246e701c0b060fe97ebd4a900c939c3c10643a2607442ce",
+        "approved_by": null,
+        "approved_at": null
+      },
+      "material_code": "SYNTHETIC-MATERIAL",
+      "unit_code": "EA",
+      "supplier_code": "SYNTHETIC-SUPPLIER",
+      "planning_period": "2020-01",
+      "stock_imports": [
+        {
+          "export_id": "fixture-stock",
+          "generated_at": "2020-01-03T00:00:00Z",
+          "snapshots": [
+            {
+              "source_snapshot_id": "fixture-snapshot",
+              "as_of": "2020-01-02T00:00:00Z",
+              "usable_quantity": "100",
+              "nonusable_excluded": true,
+              "reservations_excluded": true
+            }
+          ]
+        },
+        {
+          "export_id": "older-imported-later",
+          "generated_at": "2020-01-04T00:00:00Z",
+          "snapshots": [
+            {
+              "source_snapshot_id": "older-snapshot",
+              "as_of": "2020-01-01T00:00:00Z",
+              "usable_quantity": "999",
+              "nonusable_excluded": true,
+              "reservations_excluded": true
+            }
+          ]
+        }
+      ],
+      "reconciled_as_of": "2020-01-02T00:00:00Z",
+      "coverage_until": "2020-01-12T00:00:00Z",
+      "reconciliation_reference": "synthetic-stock-demand-supply-reconciliation",
+      "demand": [
+        {
+          "plant": "SYNTHETIC-PLANT",
+          "final_quantity": "80",
+          "approval_reference": "synthetic-final-requirement",
+          "fulfilled_quantity": "10",
+          "reserved_quantity": "10",
+          "events": [
+            {
+              "source_id": "demand-1",
+              "at": "2020-01-05T00:00:00Z",
+              "quantity": "60"
+            }
+          ]
+        }
+      ],
+      "incoming": [],
+      "msl_history": [
+        {
+          "source_id": "msl-1",
+          "effective_at": "2020-01-01T00:00:00Z",
+          "quantity": "50",
+          "approval_reference": "synthetic-msl"
+        }
+      ],
+      "lead_time": {
+        "approval_reference": "synthetic-lead-time",
+        "start_event": "ORDER_INITIATED",
+        "end_event": "MATERIAL_USABLE",
+        "days": 5,
+        "basis": "ELAPSED_24_HOUR_DAYS",
+        "effective_from": "2019-12-01T00:00:00Z",
+        "effective_until": "2020-01-15T00:00:00Z",
+        "calendar": null
+      },
+      "reorder": {
+        "evaluated_at": "2020-01-02T00:00:00Z",
+        "cutoff": "2020-01-10T00:00:00Z",
+        "policy": {
+          "approval_reference": "synthetic-policy",
+          "effective_from": "2020-01-01T00:00:00Z",
+          "effective_until": "2020-01-15T00:00:00Z",
+          "violation": "BELOW_MSL",
+          "availability_boundary": "BEFORE_CROSSING"
+        }
+      },
+      "purchase": {
+        "initiated_at": "2020-01-02T00:00:00Z",
+        "receipt_at": "2020-01-07T00:00:00Z",
+        "evidence_from": "2020-01-01T00:00:00Z",
+        "evidence_until": "2020-01-15T00:00:00Z",
+        "target": {
+          "quantity": "53",
+          "approval_reference": "synthetic-target"
+        },
+        "constraints": {
+          "moq": {
+            "state": "APPLICABLE",
+            "value": "20",
+            "approval_reference": "synthetic-constraint"
+          },
+          "pack_size": {
+            "state": "APPLICABLE",
+            "value": "12",
+            "approval_reference": "synthetic-constraint"
+          },
+          "order_multiple": {
+            "state": "APPLICABLE",
+            "value": "10",
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_order_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "max_stock_quantity": {
+            "state": "NOT_APPLICABLE",
+            "value": null,
+            "approval_reference": "synthetic-constraint"
+          },
+          "other_constraints": "CONFIRMED_NONE",
+          "other_constraints_reference": "synthetic-no-others"
+        }
+      },
+      "expected": {
+        "stock": {
+          "usable_quantity": "100",
+          "as_of": "2020-01-02T00:00:00Z",
+          "source_export_id": "fixture-stock"
+        },
+        "projection": {
+          "status": "COMPLETE",
+          "projected_stock": "40",
+          "current_msl": "50",
+          "current_msl_condition": "ABOVE_MSL",
+          "projected_msl_condition": "BELOW_MSL",
+          "future_breach": true,
+          "first_future_breach_at": "2020-01-05T00:00:00Z",
+          "limitation_codes": [
+            "LEAD_TIME_UNCONFIGURED"
+          ]
+        },
+        "reorder": {
+          "status": "DETERMINED",
+          "reorder_required": true,
+          "already_breached": false,
+          "expected_msl_crossing_at": "2020-01-05T00:00:00Z",
+          "latest_safe_order_at": "2019-12-31T00:00:00Z",
+          "latest_safe_order_inclusive": false,
+          "earliest_usable_at_if_ordered_now": "2020-01-07T00:00:00Z",
+          "limitation_codes": []
+        },
+        "purchase": {
+          "status": "RECOMMENDED",
+          "final_requirement": "80",
+          "current_stock": "100",
+          "projected_stock_at_receipt": "40",
+          "confirmed_incoming_before_receipt": "0",
+          "msl_at_receipt": "50",
+          "target_stock": "53",
+          "raw_quantity": "13",
+          "quantity_after_moq": "20",
+          "combined_increment": "60",
+          "candidate_quantity": "60",
+          "recommended_quantity": "60",
+          "stock_after_receipt": "100",
+          "limitation_codes": []
+        }
+      }
+    }
+  ]
+}

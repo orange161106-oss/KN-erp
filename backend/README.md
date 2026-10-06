@@ -501,3 +501,26 @@ No report table or business formula was added. Contract and open decisions are i
 
 Run `pytest app/tests/test_inventory_purchase_reports.py` and
 `pytest app/tests/test_planned_vs_actual_history.py` for report API validation.
+
+## Inventory/purchase golden comparisons (M7.2)
+
+Owner: Munees. The test-only replay uses existing stock/projection/reorder/purchase
+services in fresh in-memory SQLite databases, without application credentials.
+No API, policy or migration is added. The KNL registry is empty pending approved
+numeric cases; 12 separately recorded technical fixtures cannot pass KNL acceptance.
+
+Read [the validation guide](../docs/24_INVENTORY_PURCHASE_GOLDEN_CASES.md) and
+[KNL capture sheet](../docs/validation/M7_2_KNL_CASE_CAPTURE.md). Run:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest app/tests/test_inventory_purchase_golden.py
+.\.venv\Scripts\python.exe -m app.tests.inventory_purchase_golden --report .cache/m7_2/company_report.json
+.\.venv\Scripts\python.exe -m app.tests.inventory_purchase_golden --cases app/tests/data/inventory_purchase/technical_cases.json --report .cache/m7_2/technical_report.json
+```
+
+The runner records every difference and continues after replay errors. Exit 2 and
+`NOT_READY` for the empty company registry are intentional. Technical matches retain
+`company_acceptance=PENDING`; pytest displays a named company-case skip. To close
+company UAT, require the company CLI to exit 0 plus evidence review and sign-off.
+Use `pytest -m company_golden` for recorded company cases. Actual results are in
+[M7.2 handoff](M7_2_REVIEW.md).
