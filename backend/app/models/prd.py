@@ -4,6 +4,7 @@ from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -114,3 +115,24 @@ class PRDOrderItem(Base):
 
     planning_version: Mapped["PlanningVersion"] = relationship(back_populates="items")
     header: Mapped["PRDOrderHeader"] = relationship(back_populates="items")
+
+
+class PRDRecord(Base):
+    __tablename__ = "prd_records"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    row_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    plant: Mapped[str] = mapped_column(String(64), nullable=False)
+    customer: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    product_code: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    description: Mapped[str] = mapped_column(String(256), nullable=False)
+    planned_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
+    uom: Mapped[str] = mapped_column(String(32), default="Nos", nullable=False)
+    target_period: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    planning_version: Mapped[str] = mapped_column(String(32), default="V1", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="SAVED", nullable=False)
+    remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_by: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

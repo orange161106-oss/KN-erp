@@ -13,6 +13,8 @@ from app.schemas.grn import (
     GoodsReceiptRecordResponse,
     WorkspaceSaveRequest,
     WorkspaceSaveResponse,
+    WorkspaceBulkDeleteRequest,
+    WorkspaceBulkDeleteResponse,
     ExcelInspectResponse,
     ExcelImportSheetResponse,
 )
@@ -80,6 +82,24 @@ def delete_workspace_record(
     return Response(status_code=204)
 
 
+@router.post('/workspace/bulk-delete', response_model=WorkspaceBulkDeleteResponse)
+def bulk_delete_workspace(
+    data: WorkspaceBulkDeleteRequest,
+    user: DeleteWorkspace,
+    session: Database,
+):
+    count = service.bulk_delete_workspace_records(
+        session,
+        ids=data.ids,
+        delete_all_matching=data.delete_all_matching,
+        search=data.search,
+        status=data.status,
+        actor=user.id,
+        reason=data.reason,
+    )
+    return WorkspaceBulkDeleteResponse(deleted_count=count)
+
+
 @router.post('/workspace/inspect', response_model=ExcelInspectResponse)
 async def inspect_excel_file(
     user: ImportWorkspace,
@@ -108,8 +128,25 @@ def export_workspace_excel(
     session: Database,
     search: str | None = None,
     status: str | None = None,
+    record_ids: Annotated[list[UUID] | None, Query()] = None,
 ):
-    excel_bytes = service.export_workspace_excel(session, search=search, status=status)
+    excel_bytes = service.export_workspace_excel(session, search=search, status=status, record_ids=record_ids)
+    return Response(
+        content=excel_bytes,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="goods_receipts_workspace.xlsx"'},
+    )
+
+
+@router.post('/workspace/export')
+def export_workspace_excel_post(
+    data: dict[str, list[str]],
+    user: ExportWorkspace,
+    session: Database,
+):
+    raw_ids = data.get('record_ids', [])
+    ids = [UUID(i) for i in raw_ids if i]
+    excel_bytes = service.export_workspace_excel(session, record_ids=ids if ids else None)
     return Response(
         content=excel_bytes,
         media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

@@ -11,7 +11,7 @@ from app.models.inventory import StockImportBatch, StockSnapshot, StockTransacti
 from app.models.projection import ProjectionInputSet
 from app.models.mappings import ProductPlant, ProductProcessConsumable
 from app.models.masters import Customer, Product
-from app.models.prd import ImportBatch, ImportError, PlanningVersion, PRDOrderHeader, PRDOrderItem
+from app.models.prd import ImportBatch, ImportError, PlanningVersion, PRDOrderHeader, PRDOrderItem, PRDRecord
 from app.models.plant_workflow import PlantConfirmation, RequirementAdjustment, UserPlant
 from app.models.production import Plant, Process, Route, RouteStep
 from app.models.requirements import CalculatedRequirement, RequirementCalculationError
@@ -21,6 +21,7 @@ __all__ = [
     "GRN",
     "GRNItem",
     "GoodsReceiptRecord",
+    "PRDRecord",
     "PurchaseDemandEvidence",
     "PurchaseOrder",
     "PurchaseOrderItem",

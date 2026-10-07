@@ -18,12 +18,16 @@ from app.modules.purchasing.approval_router import router as purchase_approval_r
 
 from app.modules.po_grn.router import router as purchase_orders_router
 from app.modules.po_grn.grn_router import router as grn_router
+from app.modules.prd.prd_workspace_router import router as prd_workspace_router
+from app.modules.requirements.requirements_workspace_router import router as requirements_workspace_router
 from app.modules.reports.router import router as reports_router
 from app.modules.reports.inventory_purchase_router import router as inventory_purchase_reports_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(grn_router)
 api_router.include_router(purchase_orders_router)
+api_router.include_router(prd_workspace_router)
+api_router.include_router(requirements_workspace_router)
 api_router.include_router(health_router)
 api_router.include_router(auth_router)
 api_router.include_router(inventory_master_router)
@@ -41,4 +45,5 @@ api_router.include_router(purchase_recommendation_router)
 api_router.include_router(purchase_approval_router)
 api_router.include_router(reports_router)
 api_router.include_router(inventory_purchase_reports_router)
+
 

@@ -15,6 +15,8 @@ import PurchaseOrders from './features/purchasing/PurchaseOrders';
 import GRNs from './features/purchasing/GRNs';
 import ExecutiveDashboard from './features/dashboard/ExecutiveDashboard';
 import InventoryPurchaseReports from './features/reports/InventoryPurchaseReports';
+import PRDPlanning from './features/prd/PRDPlanning';
+import Requirements from './features/requirements/Requirements';
 
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
@@ -50,8 +52,8 @@ function Application() {
           <Route path="/masters/*" element={<Masters />} />
           <Route path="/mappings/*" element={<ProductionMappings />} />
           <Route path="/rules/*" element={<ConsumptionNorms />} />
-          <Route path="/prd" element={<div>PRD / Planning Placeholder</div>} />
-          <Route path="/requirements" element={<div>Requirements Placeholder</div>} />
+          <Route path="/prd" element={<PRDPlanning />} />
+          <Route path="/requirements" element={<Requirements />} />
           <Route
             path="/plant-workflow/*"
             element={<PlantWorkflow currentUserId={user.id} />}
