@@ -120,7 +120,7 @@ export default function Sidebar() {
         )}
 
         <div className="mt-auto pt-3 border-t border-brand-steel/40 flex flex-col space-y-1">
-          {user.roles.includes('ADMIN') && (
+          {(user.roles.includes('ADMIN') || user.is_super_admin) && (
             <Link to="/admin" className={navItemClass('/admin')}>
               Administration
             </Link>

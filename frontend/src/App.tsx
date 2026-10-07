@@ -17,6 +17,7 @@ import ExecutiveDashboard from './features/dashboard/ExecutiveDashboard';
 import InventoryPurchaseReports from './features/reports/InventoryPurchaseReports';
 import PRDPlanning from './features/prd/PRDPlanning';
 import Requirements from './features/requirements/Requirements';
+import UserManagement from './features/admin/UserManagement';
 
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
@@ -64,7 +65,7 @@ function Application() {
           <Route path="/grns" element={<GRNs />} />
           <Route path="/alerts/*" element={<AlertsCenter />} />
           <Route path="/reports" element={<InventoryPurchaseReports />} />
-          <Route path="/admin" element={<div>Administration Placeholder</div>} />
+          <Route path="/admin" element={<UserManagement />} />
           <Route path="/status" element={<SystemStatus />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
