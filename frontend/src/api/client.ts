@@ -40,6 +40,6 @@ export const apiClient = {
   post: <T>(endpoint: string, data: unknown) => request<T>(endpoint, 'POST', data),
   put: <T>(endpoint: string, data: unknown) => request<T>(endpoint, 'PUT', data),
   patch: <T>(endpoint: string, data: unknown) => request<T>(endpoint, 'PATCH', data),
-  delete: <T>(endpoint: string) => request<T>(endpoint, 'DELETE'),
+  delete: <T>(endpoint: string, data?: unknown) => request<T>(endpoint, 'DELETE', data),
   postFormData: <T>(endpoint: string, data: FormData) => request<T>(endpoint, 'POST', data),
 };

@@ -118,6 +118,8 @@ class GoodsReceiptRecordResponse(BaseModel):
     supplier_name: str | None = None
     status: str = 'SAVED'
     source_grn_id: str | None = None
+    plant: str | None = None
+    grn_date: str | None = None
     notes: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -136,6 +138,9 @@ class WorkspaceRecordInput(BaseModel):
     po_number: str | None = None
     supplier_name: str | None = None
     status: str = 'SAVED'
+    source_grn_id: str | None = None
+    plant: str | None = None
+    grn_date: str | None = None
     notes: str | None = None
 
 
@@ -149,6 +154,18 @@ class WorkspaceSaveResponse(BaseModel):
     saved_count: int
     deleted_count: int
     records: list[GoodsReceiptRecordResponse]
+
+
+class WorkspaceBulkDeleteRequest(BaseModel):
+    ids: list[UUID] = []
+    delete_all_matching: bool = False
+    search: str | None = None
+    status: str | None = None
+    reason: str = Field(default='Bulk delete from workspace', min_length=1, max_length=512)
+
+
+class WorkspaceBulkDeleteResponse(BaseModel):
+    deleted_count: int
 
 
 class ExcelSheetInspectInfo(BaseModel):

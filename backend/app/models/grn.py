@@ -59,6 +59,8 @@ class GoodsReceiptRecord(Base):
     supplier_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default='SAVED')  # 'DRAFT', 'SAVED'
     source_grn_id: Mapped[str | None] = mapped_column(String(192), nullable=True)
+    plant: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    grn_date: Mapped[str | None] = mapped_column(String(64), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
