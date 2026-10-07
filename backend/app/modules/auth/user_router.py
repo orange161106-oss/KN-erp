@@ -37,6 +37,8 @@ def list_users(
             UserResponse(
                 id=u.id,
                 username=u.username,
+                full_name=u.full_name,
+                employee_id=u.employee_id,
                 is_active=u.is_active,
                 is_super_admin=u.is_super_admin,
                 roles=[r.code for r in u.roles],
@@ -71,11 +73,18 @@ def create_user(
     if existing:
         raise HTTPException(status_code=400, detail="Username already exists")
 
+    if data.employee_id:
+        existing_emp = session.scalar(select(User).where(User.employee_id == data.employee_id))
+        if existing_emp:
+            raise HTTPException(status_code=400, detail="Employee ID already exists")
+
     roles = session.scalars(select(Role).where(Role.code.in_(data.roles))).all() if data.roles else []
     p_hash = passwords.hash(data.password.get_secret_value())
 
     user = User(
         username=data.username,
+        full_name=data.full_name,
+        employee_id=data.employee_id,
         password_hash=p_hash,
         is_active=True,
         is_super_admin=False,
@@ -103,6 +112,8 @@ def create_user(
     return UserResponse(
         id=user.id,
         username=user.username,
+        full_name=user.full_name,
+        employee_id=user.employee_id,
         is_active=user.is_active,
         is_super_admin=user.is_super_admin,
         roles=[r.code for r in user.roles],
@@ -138,6 +149,14 @@ def update_user(
 
     if data.password:
         user.password_hash = passwords.hash(data.password.get_secret_value())
+    if data.full_name is not None:
+        user.full_name = data.full_name
+    if data.employee_id is not None:
+        if data.employee_id != user.employee_id:
+            existing_emp = session.scalar(select(User).where(User.employee_id == data.employee_id))
+            if existing_emp:
+                raise HTTPException(status_code=400, detail="Employee ID already exists")
+        user.employee_id = data.employee_id
     if data.is_active is not None:
         user.is_active = data.is_active
     if data.roles is not None:
@@ -162,6 +181,8 @@ def update_user(
     return UserResponse(
         id=user.id,
         username=user.username,
+        full_name=user.full_name,
+        employee_id=user.employee_id,
         is_active=user.is_active,
         is_super_admin=user.is_super_admin,
         roles=[r.code for r in user.roles],

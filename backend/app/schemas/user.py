@@ -30,6 +30,8 @@ class UserCreate(UserPermissionFlags):
 
     username: str = Field(min_length=1, max_length=128, strict=True)
     password: SecretStr = Field(min_length=6, max_length=1024)
+    full_name: Optional[str] = None
+    employee_id: Optional[str] = None
     roles: list[str] = Field(default_factory=list)
 
     @field_validator("username", mode="before")
@@ -42,6 +44,8 @@ class UserUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     password: Optional[SecretStr] = None
+    full_name: Optional[str] = None
+    employee_id: Optional[str] = None
     is_active: Optional[bool] = None
     roles: Optional[list[str]] = None
 
@@ -70,6 +74,8 @@ class UserResponse(UserPermissionFlags):
 
     id: UUID
     username: str
+    full_name: Optional[str] = None
+    employee_id: Optional[str] = None
     is_active: bool
     is_super_admin: bool
     roles: list[str]

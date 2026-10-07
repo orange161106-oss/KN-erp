@@ -31,6 +31,8 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(1024))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     is_super_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    full_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    employee_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
 
     # Granular Feature Flags (10 Flags)
     can_view_master_data: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())

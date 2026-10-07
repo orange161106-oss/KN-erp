@@ -24,6 +24,8 @@ export interface UserPermissionFlags {
 export interface UserResponse extends UserPermissionFlags {
   id: string;
   username: string;
+  full_name?: string | null;
+  employee_id?: string | null;
   is_active: boolean;
   is_super_admin: boolean;
   roles: string[];
@@ -32,11 +34,15 @@ export interface UserResponse extends UserPermissionFlags {
 export interface UserCreate extends UserPermissionFlags {
   username: string;
   password: string;
+  full_name?: string | null;
+  employee_id?: string | null;
   roles: string[];
 }
 
 export interface UserUpdate extends Partial<UserPermissionFlags> {
   password?: string;
+  full_name?: string | null;
+  employee_id?: string | null;
   is_active?: boolean;
   roles?: string[];
 }
