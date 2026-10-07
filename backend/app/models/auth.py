@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, String, Table, Text, Uuid, func, true
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, String, Table, Text, Uuid, false, func, true
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.db.base import Base
@@ -30,6 +30,27 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(128), unique=True)
     password_hash: Mapped[str] = mapped_column(String(1024))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    is_super_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+    # Granular Feature Flags (10 Flags)
+    can_view_master_data: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_edit_master_data: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_view_planning: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_run_calculations: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_confirm_demand: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_approve_extra_demand: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_create_po: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_approve_po: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_upload_grn: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_view_reports: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+    # Plant Access Flags (5 Plants)
+    can_access_plant_1: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_access_plant_2: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_access_plant_3: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_access_plant_4: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_access_plant_5: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     roles: Mapped[list["Role"]] = relationship(secondary=user_roles, passive_deletes=True)

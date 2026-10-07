@@ -29,5 +29,25 @@ class CurrentUser(BaseModel):
 
     id: UUID
     username: str
+    is_super_admin: bool = False
     roles: list[str]
     permissions: list[str]
+
+    # Granular Feature Access
+    can_view_master_data: bool = False
+    can_edit_master_data: bool = False
+    can_view_planning: bool = False
+    can_run_calculations: bool = False
+    can_confirm_demand: bool = False
+    can_approve_extra_demand: bool = False
+    can_create_po: bool = False
+    can_approve_po: bool = False
+    can_upload_grn: bool = False
+    can_view_reports: bool = False
+
+    # Plant Scope Access
+    can_access_plant_1: bool = False
+    can_access_plant_2: bool = False
+    can_access_plant_3: bool = False
+    can_access_plant_4: bool = False
+    can_access_plant_5: bool = False

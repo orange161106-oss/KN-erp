@@ -50,10 +50,32 @@ def seed_users():
             user_roles = [roles_by_code[code] for code in role_codes if code in roles_by_code]
             p_hash = passwords.hash(password)
 
+            is_super = (username == "admin")
+            all_flags = {
+                "is_super_admin": is_super,
+                "can_view_master_data": True if is_super else (username in ["planner", "store", "purchase"]),
+                "can_edit_master_data": True if is_super else (username in ["planner"]),
+                "can_view_planning": True if is_super else (username in ["planner", "manager"]),
+                "can_run_calculations": True if is_super else (username in ["planner"]),
+                "can_confirm_demand": True if is_super else (username in ["plant_incharge", "planner"]),
+                "can_approve_extra_demand": True if is_super else (username in ["manager", "planner"]),
+                "can_create_po": True if is_super else (username in ["purchase"]),
+                "can_approve_po": True if is_super else (username in ["manager", "purchase"]),
+                "can_upload_grn": True if is_super else (username in ["store"]),
+                "can_view_reports": True if is_super else True,
+                "can_access_plant_1": True,
+                "can_access_plant_2": True,
+                "can_access_plant_3": True,
+                "can_access_plant_4": True,
+                "can_access_plant_5": True,
+            }
+
             if existing:
                 existing.password_hash = p_hash
                 existing.is_active = True
                 existing.roles = user_roles
+                for k, v in all_flags.items():
+                    setattr(existing, k, v)
                 print(f"  - Updated user '{username}' (Password: {password})")
             else:
                 new_user = User(
@@ -61,6 +83,7 @@ def seed_users():
                     password_hash=p_hash,
                     is_active=True,
                     roles=user_roles,
+                    **all_flags
                 )
                 session.add(new_user)
                 print(f"  - Created user '{username}' (Password: {password})")

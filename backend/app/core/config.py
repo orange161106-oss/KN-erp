@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     auth_access_token_expire_minutes: int = Field(default=15, ge=1, le=60)
     auth_token_issuer: str = Field(default="kn-consumable-erp", min_length=1)
     auth_token_audience: str = Field(default="kn-consumable-web", min_length=1)
+    super_admin_username: str = Field(default="admin", min_length=3, max_length=128)
+    super_admin_password: SecretStr = Field(default="Admin@123456", min_length=8)
 
     @field_validator("auth_secret_key")
     @classmethod

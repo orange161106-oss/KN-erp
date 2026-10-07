@@ -61,9 +61,26 @@ def current_user(session: Session, token: str, settings: Settings) -> CurrentUse
         if user is None or not user.is_active:
             raise authentication_required()
         return CurrentUser(
-            id=user.id, username=user.username,
+            id=user.id,
+            username=user.username,
+            is_super_admin=getattr(user, "is_super_admin", False),
             roles=sorted(role.code for role in user.roles),
             permissions=sorted({permission.code for role in user.roles for permission in role.permissions}),
+            can_view_master_data=getattr(user, "can_view_master_data", False),
+            can_edit_master_data=getattr(user, "can_edit_master_data", False),
+            can_view_planning=getattr(user, "can_view_planning", False),
+            can_run_calculations=getattr(user, "can_run_calculations", False),
+            can_confirm_demand=getattr(user, "can_confirm_demand", False),
+            can_approve_extra_demand=getattr(user, "can_approve_extra_demand", False),
+            can_create_po=getattr(user, "can_create_po", False),
+            can_approve_po=getattr(user, "can_approve_po", False),
+            can_upload_grn=getattr(user, "can_upload_grn", False),
+            can_view_reports=getattr(user, "can_view_reports", False),
+            can_access_plant_1=getattr(user, "can_access_plant_1", False),
+            can_access_plant_2=getattr(user, "can_access_plant_2", False),
+            can_access_plant_3=getattr(user, "can_access_plant_3", False),
+            can_access_plant_4=getattr(user, "can_access_plant_4", False),
+            can_access_plant_5=getattr(user, "can_access_plant_5", False),
         )
     except SQLAlchemyError:
         raise database_unavailable() from None
