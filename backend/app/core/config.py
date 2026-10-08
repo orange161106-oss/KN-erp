@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
 from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -45,8 +46,16 @@ class Settings(BaseSettings):
     auth_access_token_expire_minutes: int = Field(default=15, ge=1, le=60)
     auth_token_issuer: str = Field(default="kn-consumable-erp", min_length=1)
     auth_token_audience: str = Field(default="kn-consumable-web", min_length=1)
-    super_admin_username: str = Field(default="admin", min_length=3, max_length=128)
-    super_admin_password: SecretStr = Field(default="Admin@123456", min_length=8)
+    super_admin_username: str | None = Field(default=None, min_length=3, max_length=128)
+    super_admin_password: SecretStr | None = Field(default=None, min_length=8, max_length=1024)
+    plant_permission_ids: dict[int, UUID] = Field(default_factory=dict)
+
+    @field_validator("plant_permission_ids")
+    @classmethod
+    def validate_plant_ids(cls, value: dict[int, UUID]) -> dict[int, UUID]:
+        if set(value) - set(range(1, 6)) or len(set(value.values())) != len(value):
+            raise ValueError("Map distinct plant UUIDs to slots 1 through 5")
+        return value
 
     @field_validator("auth_secret_key")
     @classmethod

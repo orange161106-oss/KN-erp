@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, String, Table, Text, Uuid, false, func, true
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, String, Table, Text, Uuid, false, func, true, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.db.base import Base
@@ -24,6 +24,8 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint("username = lower(btrim(username)) AND length(username) > 0", name="normalized_username"),
+        Index("uq_users_single_super_admin", "is_super_admin", unique=True,
+              postgresql_where=text("is_super_admin = true"), sqlite_where=text("is_super_admin = 1")),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)

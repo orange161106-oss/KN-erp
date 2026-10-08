@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field
 
 class RequirementWorkspaceRecord(BaseModel):
     id: str
+    planning_period: str = ""
+    revision: str = ""
     plant: str
     process: str
     consumable_code: str

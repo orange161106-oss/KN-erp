@@ -57,7 +57,7 @@ function renderRequirements() {
           id: 'test-user',
           username: 'planner',
           roles: ['PLANNER'],
-          permissions: ['inventory.stock.read'],
+          permissions: ['planning.read', 'requirements.calculate'],
         },
         login: vi.fn(),
         logout: vi.fn(),
@@ -69,11 +69,13 @@ function renderRequirements() {
 }
 
 test('renders Requirements table with critical shortages and normal status', async () => {
-  fetchMock.mockResolvedValue(jsonResponse(mockRequirements));
+  fetchMock.mockImplementation(async input => String(input).endsWith('/prd/planning-versions')
+    ? jsonResponse([{ id: 'version-1', planning_period: '2026-08', revision_label: 'R3', status: 'CALCULATED' }])
+    : jsonResponse(mockRequirements));
   renderRequirements();
 
   expect(await screen.findByText('Consumable Requirements Workspace')).toBeInTheDocument();
-  expect(screen.getByText(/Recalculate/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /Recalculate/ })).toBeInTheDocument();
   expect(screen.getByText(/Export Excel/)).toBeInTheDocument();
 
   // Records rendered
@@ -87,7 +89,7 @@ test('renders Requirements table with critical shortages and normal status', asy
 test('user can trigger recalculation', async () => {
   fetchMock.mockImplementation(async (url, init) => {
     const urlStr = String(url);
-    if (init?.method === 'POST' && urlStr.includes('/workspace/recalculate')) {
+    if (init?.method === 'POST' && urlStr.includes('/requirements/calculate')) {
       return jsonResponse({
         message: 'Recalculation complete',
         record_count: 2,
@@ -96,14 +98,17 @@ test('user can trigger recalculation', async () => {
         records: mockRequirements,
       });
     }
+    if (urlStr.includes('/prd/planning-versions')) return jsonResponse([{ id: 'version-1', planning_period: '2026-08', revision_label: 'R3', status: 'VALIDATED' }]);
     return jsonResponse(mockRequirements);
   });
 
   renderRequirements();
   await screen.findByText('MIG Welding Wire 1.2mm');
 
-  const recalcBtn = screen.getByText(/Recalculate/);
+  const recalcBtn = screen.getByRole('button', { name: /Recalculate/ });
   await userEvent.click(recalcBtn);
 
-  expect(await screen.findByText(/Recalculated: 2 items/)).toBeInTheDocument();
+  expect(await screen.findByText(/Calculation completed/)).toBeInTheDocument();
+  const call = fetchMock.mock.calls.find(([url, init]) => String(url).includes('/requirements/calculate') && init?.method === 'POST');
+  expect(JSON.parse(String(call?.[1]?.body))).toEqual({ planning_version_id: 'version-1' });
 });

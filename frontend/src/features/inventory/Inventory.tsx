@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import StockStatementUpload from './StockStatementUpload';
 import type { FormEvent } from 'react';
 import { apiClient } from '../../api/client';
 import { useAuth } from '../auth/context';
@@ -68,7 +69,7 @@ function InventoryContent() {
   if (since) historyParams.set('since', new Date(since).toISOString());
   if (until) historyParams.set('until', new Date(until).toISOString());
   const history = useApi<Page<StockTransaction>>(`${endpoint}/transactions?${historyParams}`, revision);
-  const canImport = user?.permissions.includes('inventory.stock.import');
+  const canImport = user?.is_super_admin || user?.permissions.includes('inventory.stock.import');
   function viewHistory(row: Balance) { setMaterial({ id: row.consumable_id, code: row.code }); setHistoryOffset(0); setTab('history'); }
 
   return <div className="max-w-7xl space-y-5">
@@ -130,12 +131,15 @@ function InventoryContent() {
         <Pager offset={historyOffset} total={history.data.total} setOffset={setHistoryOffset} />
       </>}
     </section>}
-    {canImport && status?.data?.import_enabled && <SourceImport onImported={() => setRevision(value => value + 1)} />}
+    {canImport && status?.data?.import_enabled && <>
+      <StockStatementUpload onImported={() => setRevision(value => value + 1)} />
+      <details><summary>Advanced source integration</summary><SourceImport onImported={() => setRevision(value => value + 1)} /></details>
+    </>}
     {canImport && status?.data && !status.data.import_enabled && <p className="text-sm text-gray-600">Source imports are disabled until the export mapping is verified and enabled.</p>}
   </div>;
 }
 
 export default function Inventory() {
   const { user } = useAuth();
-  return user?.permissions.includes('inventory.stock.read') ? <InventoryContent /> : <p role="alert">You do not have permission to view central inventory.</p>;
+  return user?.is_super_admin || user?.permissions.includes('inventory.stock.read') ? <InventoryContent /> : <p role="alert">You do not have permission to view central inventory.</p>;
 }

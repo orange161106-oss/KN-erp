@@ -55,7 +55,7 @@ function renderPRDWorkspace() {
           id: 'test-user',
           username: 'planner',
           roles: ['PLANNER'],
-          permissions: ['prd.plan.read', 'prd.plan.create', 'prd.plan.update', 'prd.plan.delete'],
+          permissions: ['prd.plan.read', 'prd.plan.create', 'prd.plan.update', 'prd.plan.delete', 'prd.plan.import'],
         },
         login: vi.fn(),
         logout: vi.fn(),

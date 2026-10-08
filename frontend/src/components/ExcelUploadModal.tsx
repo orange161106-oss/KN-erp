@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 
 export interface SheetInfo {
   name: string;
@@ -21,6 +22,7 @@ interface ExcelUploadModalProps {
   onInspect: (file: File) => Promise<InspectResult>;
   onImport: (file: File, sheetName: string) => Promise<void>;
   isLoading?: boolean;
+  children?: ReactNode;
 }
 
 export default function ExcelUploadModal({
@@ -31,6 +33,7 @@ export default function ExcelUploadModal({
   onInspect,
   onImport,
   isLoading = false,
+  children,
 }: ExcelUploadModalProps) {
   const [file, setFile] = useState<File | null>(null);
   const [inspectData, setInspectData] = useState<InspectResult | null>(null);
@@ -123,6 +126,7 @@ export default function ExcelUploadModal({
             </div>
           )}
 
+          {children}
           {!file ? (
             <div
               onDragOver={e => {

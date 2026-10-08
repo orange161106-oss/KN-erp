@@ -1,3 +1,4 @@
+import { canOpen } from './core/rbac';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import SystemStatus from './pages/SystemStatus';
 import Login from './pages/Login';
@@ -44,29 +45,31 @@ function Application() {
     return <Login />;
   }
 
+  const allowed = (path: string, page: React.ReactNode) => canOpen(user, path) ? page : <p role="alert">You do not have permission to view this page. Select an available page from the menu.</p>;
+
   return (
     <BrowserRouter>
       <AppShell>
         <Routes>
-          <Route path="/" element={<ExecutiveDashboard />} />
-          <Route path="/dashboard" element={<ExecutiveDashboard />} />
-          <Route path="/masters/*" element={<Masters />} />
-          <Route path="/mappings/*" element={<ProductionMappings />} />
-          <Route path="/rules/*" element={<ConsumptionNorms />} />
-          <Route path="/prd" element={<PRDPlanning />} />
-          <Route path="/requirements" element={<Requirements />} />
+          <Route path="/" element={allowed('/', <ExecutiveDashboard />)} />
+          <Route path="/dashboard" element={allowed('/dashboard', <ExecutiveDashboard />)} />
+          <Route path="/masters/*" element={allowed('/masters', <Masters />)} />
+          <Route path="/mappings/*" element={allowed('/mappings', <ProductionMappings />)} />
+          <Route path="/rules/*" element={allowed('/rules', <ConsumptionNorms />)} />
+          <Route path="/prd" element={allowed('/prd', <PRDPlanning />)} />
+          <Route path="/requirements" element={allowed('/requirements', <Requirements />)} />
           <Route
             path="/plant-workflow/*"
-            element={<PlantWorkflow currentUserId={user.id} />}
+            element={allowed('/plant-workflow', <PlantWorkflow currentUserId={user.id} />)}
           />
-          <Route path="/inventory" element={<Inventory />} />
-          <Route path="/purchase/*" element={<PurchaseApprovals currentUserId={user.id} />} />
-          <Route path="/purchase-orders" element={<PurchaseOrders />} />
-          <Route path="/grns" element={<GRNs />} />
-          <Route path="/alerts/*" element={<AlertsCenter />} />
-          <Route path="/reports" element={<InventoryPurchaseReports />} />
-          <Route path="/admin" element={<UserManagement />} />
-          <Route path="/status" element={<SystemStatus />} />
+          <Route path="/inventory" element={allowed('/inventory', <Inventory />)} />
+          <Route path="/purchase/*" element={allowed('/purchase', <PurchaseApprovals currentUserId={user.id} />)} />
+          <Route path="/purchase-orders" element={allowed('/purchase-orders', <PurchaseOrders />)} />
+          <Route path="/grns" element={allowed('/grns', <GRNs />)} />
+          <Route path="/alerts/*" element={allowed('/alerts', <AlertsCenter />)} />
+          <Route path="/reports" element={allowed('/reports', <InventoryPurchaseReports />)} />
+          <Route path="/admin" element={allowed('/admin', <UserManagement />)} />
+          <Route path="/status" element={allowed('/status', <SystemStatus />)} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AppShell>

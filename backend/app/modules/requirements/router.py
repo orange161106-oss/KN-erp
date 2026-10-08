@@ -1,3 +1,4 @@
+from app.security.permissions import require_permissions
 from typing import Annotated, Optional
 from uuid import UUID
 
@@ -7,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.schemas.auth import CurrentUser
 from app.schemas.requirements import (
+    CalculatedRevisionApprovalResponse,
     CalculatedRequirementResponse,
     CalculationRunRequest,
     RequirementCalculationErrorResponse,
@@ -22,11 +24,18 @@ from app.services.requirements import (
 router = APIRouter(prefix="/requirements", tags=["requirements"])
 
 
+@router.post("/planning-versions/{identity}/approve", response_model=CalculatedRevisionApprovalResponse)
+def approve_calculated_revision(identity: UUID, session: Annotated[Session, Depends(get_db)],
+                                user: Annotated[CurrentUser, Depends(get_current_user)]):
+    from app.services.requirement_approval import approve
+    return approve(session, identity, user)
+
+
 @router.post(
     "/calculate",
     response_model=RequirementCalculationRunResponse,
     status_code=status.HTTP_200_OK,
-)
+ dependencies=[Depends(require_permissions('requirements.calculate'))])
 def post_calculate_requirements(
     req: CalculationRunRequest,
     session: Annotated[Session, Depends(get_db)],
@@ -38,7 +47,7 @@ def post_calculate_requirements(
 @router.get(
     "/planning-versions/{planning_version_id}",
     response_model=list[CalculatedRequirementResponse],
-)
+ dependencies=[Depends(require_permissions('planning.read'))])
 def get_version_calculated_requirements(
     planning_version_id: UUID,
     session: Annotated[Session, Depends(get_db)],
@@ -57,7 +66,7 @@ def get_version_calculated_requirements(
 @router.get(
     "/planning-versions/{planning_version_id}/errors",
     response_model=list[RequirementCalculationErrorResponse],
-)
+ dependencies=[Depends(require_permissions('planning.read'))])
 def get_version_calculation_errors(
     planning_version_id: UUID,
     session: Annotated[Session, Depends(get_db)],

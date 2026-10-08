@@ -1,3 +1,4 @@
+from app.security.permissions import require_permissions
 from typing import Annotated, Optional
 from uuid import UUID
 
@@ -5,6 +6,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.core.errors import ApplicationError
 from app.schemas.auth import CurrentUser
 from app.schemas.prd_workspace import (
     PRDExcelImportResponse,
@@ -21,7 +23,7 @@ from app.services import prd_workspace as service
 router = APIRouter(prefix="/prd/workspace", tags=["prd-workspace"])
 
 
-@router.get("/records", response_model=list[PRDWorkspaceRecordResponse])
+@router.get("/records", response_model=list[PRDWorkspaceRecordResponse], dependencies=[Depends(require_permissions('planning.read'))])
 def get_prd_workspace_records(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[Session, Depends(get_db)],
@@ -45,7 +47,7 @@ def get_prd_workspace_records(
     )
 
 
-@router.post("/save", response_model=PRDWorkspaceSaveResponse)
+@router.post("/save", response_model=PRDWorkspaceSaveResponse, dependencies=[Depends(require_permissions('planning.write'))])
 def save_prd_workspace_records(
     data: PRDWorkspaceSaveRequest,
     user: Annotated[CurrentUser, Depends(get_current_user)],
@@ -54,7 +56,7 @@ def save_prd_workspace_records(
     return service.save_prd_records(session, data, user.id)
 
 
-@router.delete("/records/{identity}", status_code=204)
+@router.delete("/records/{identity}", status_code=204, dependencies=[Depends(require_permissions('planning.write'))])
 def delete_prd_workspace_record(
     identity: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
@@ -65,7 +67,7 @@ def delete_prd_workspace_record(
     return Response(status_code=204)
 
 
-@router.post("/bulk-delete", response_model=PRDWorkspaceBulkDeleteResponse)
+@router.post("/bulk-delete", response_model=PRDWorkspaceBulkDeleteResponse, dependencies=[Depends(require_permissions('planning.write'))])
 def bulk_delete_prd_workspace(
     data: PRDWorkspaceBulkDeleteRequest,
     user: Annotated[CurrentUser, Depends(get_current_user)],
@@ -86,16 +88,18 @@ def bulk_delete_prd_workspace(
     return PRDWorkspaceBulkDeleteResponse(deleted_count=count)
 
 
-@router.post("/inspect", response_model=PRDExcelInspectResponse)
+@router.post("/inspect", response_model=PRDExcelInspectResponse, dependencies=[Depends(require_permissions('planning.read'))])
 async def inspect_prd_excel(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     file: UploadFile = File(...),
 ):
-    contents = await file.read()
+    contents = await file.read(10 * 1024 * 1024 + 1)
+    if len(contents) > 10 * 1024 * 1024:
+        raise ApplicationError('SOURCE_TOO_LARGE', 'Use a workbook of at most 10 MB.', 422)
     return service.inspect_prd_excel(contents, file.filename or "prd.xlsx")
 
 
-@router.post("/import-sheet", response_model=PRDExcelImportResponse)
+@router.post("/import-sheet", response_model=PRDExcelImportResponse, dependencies=[Depends(require_permissions('planning.write'))])
 async def import_prd_sheet(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[Session, Depends(get_db)],
@@ -103,8 +107,12 @@ async def import_prd_sheet(
     sheet_name: str = Form(...),
     mode: str = Form(default="APPEND"),
     reason: str = Form(default="Excel PRD import"),
+    target_period: str | None = Form(default=None),
+    revision_label: str | None = Form(default=None),
 ):
-    contents = await file.read()
+    contents = await file.read(10 * 1024 * 1024 + 1)
+    if len(contents) > 10 * 1024 * 1024:
+        raise ApplicationError('SOURCE_TOO_LARGE', 'Use a workbook of at most 10 MB.', 422)
     return service.import_prd_excel(
         session,
         contents,
@@ -113,10 +121,12 @@ async def import_prd_sheet(
         user.id,
         mode=mode,
         reason=reason,
+        target_period=target_period,
+        revision_label=revision_label,
     )
 
 
-@router.get("/export")
+@router.get("/export", dependencies=[Depends(require_permissions('planning.read'))])
 def export_prd_workspace(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[Session, Depends(get_db)],
@@ -143,7 +153,7 @@ def export_prd_workspace(
     )
 
 
-@router.post("/export")
+@router.post("/export", dependencies=[Depends(require_permissions('planning.read'))])
 def export_prd_workspace_post(
     data: dict[str, list[str]],
     user: Annotated[CurrentUser, Depends(get_current_user)],

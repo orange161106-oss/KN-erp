@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -19,6 +19,15 @@ router = APIRouter(prefix="/inventory", tags=["central inventory"], responses={
 Read = Annotated[CurrentUser, Depends(require_permissions("inventory.stock.read"))]
 Import = Annotated[CurrentUser, Depends(require_permissions("inventory.stock.import"))]
 Database = Annotated[Session, Depends(get_db)]
+
+
+@router.post('/statement/preview', response_model=SourceImport)
+async def preview_statement(session: Database, user: Import, file: UploadFile = File(...),
+                            sheet_name: str = Form(...), as_of: Timestamp = Form(...),
+                            generated_at: Timestamp = Form(...), exclusions_confirmed: bool = Form(False)):
+    from app.services.stock_source import preview
+    return preview(session, await file.read(10 * 1024 * 1024 + 1), file.filename or 'stock.xlsx', sheet_name,
+                   as_of=as_of, generated_at=generated_at, exclusions_confirmed=exclusions_confirmed)
 
 
 @router.get("/status", response_model=InventoryStatus)

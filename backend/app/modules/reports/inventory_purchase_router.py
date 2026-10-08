@@ -16,6 +16,7 @@ from app.schemas.purchase_recommendation import PurchaseReport, PurchaseRequest
 from app.schemas.reorder import ReorderReport, ReorderRequest
 from app.security.dependencies import get_current_user
 from app.security.permissions import require_permissions
+from app.security.policy import allows
 from app.services import inventory_purchase_reports as service
 
 router = APIRouter(prefix='/reports', tags=['inventory and purchase reports'], responses={
@@ -25,7 +26,7 @@ PurchaseRead = Annotated[CurrentUser, Depends(require_permissions('reports.purch
 
 
 def any_report_read(user: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
-    if not {'reports.inventory.read', 'reports.purchase.read'}.intersection(user.permissions):
+    if not any(allows(user, code) for code in ('reports.inventory.read', 'reports.purchase.read')):
         raise ApplicationError('PERMISSION_DENIED', 'Required report permission is missing.', 403)
     return user
 

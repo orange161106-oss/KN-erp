@@ -19,15 +19,17 @@ export interface RequirementRecord {
   status: 'Normal' | 'Low' | 'Critical shortage' | string;
   remarks: string | null;
   msl: string;
+  planning_period?: string;
+  revision?: string;
 }
 
 export default function Requirements() {
   const { user } = useAuth();
 
   // RBAC checks
-  const canRead = canPerform(user, 'requirements', 'read') || !!user?.permissions.includes('inventory.stock.read') || true;
+  const canRead = canPerform(user, 'requirements', 'read');
   const canExport = canPerform(user, 'requirements', 'export') || canRead;
-  const canRecalculate = canPerform(user, 'requirements', 'update') || !!user?.roles.includes('ADMIN') || !!user?.roles.includes('PLANNER');
+  const canRecalculate = canPerform(user, 'requirements', 'update');
 
   // Data state
   const [records, setRecords] = useState<RequirementRecord[]>([]);
@@ -44,6 +46,13 @@ export default function Requirements() {
   const [plantFilter, setPlantFilter] = useState('');
   const [consumableFilter, setConsumableFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [versions, setVersions] = useState<Array<{ id: string; planning_period: string; revision_label: string; status: string }>>([]);
+  const [selectedVersion, setSelectedVersion] = useState('');
+  useEffect(() => {
+    void apiClient.get<typeof versions>('/api/v1/prd/planning-versions').then(data => {
+      setVersions(data); setSelectedVersion(data[0]?.id || '');
+    }).catch(e => setStatusMessage({ type: 'error', text: e.message }));
+  }, []);
 
   // Load records
   const loadRecords = useCallback(async () => {
@@ -78,19 +87,13 @@ export default function Requirements() {
     setIsRecalculating(true);
     setStatusMessage(null);
     try {
-      const res = await apiClient.post<{
-        message: string;
-        record_count: number;
-        critical_shortages: number;
-        low_stock: number;
-        records: RequirementRecord[];
-      }>('/api/v1/requirements/workspace/recalculate', {});
-
-      setRecords(res.records);
+      if (!selectedVersion) throw new Error('Import and validate a planning revision before calculation.');
+      await apiClient.post('/api/v1/requirements/calculate', { planning_version_id: selectedVersion });
+      await loadRecords();
       setSelectedRowIds(new Set());
       setStatusMessage({
-        type: res.critical_shortages > 0 ? 'error' : 'success',
-        text: `Recalculated: ${res.record_count} items (${res.critical_shortages} critical shortages, ${res.low_stock} low stock).`,
+        type: 'info',
+        text: 'Calculation completed. Review configuration errors and results before Super Admin approval.',
       });
     } catch (err) {
       setStatusMessage({
@@ -168,6 +171,8 @@ export default function Requirements() {
   // Column definitions
   const columns: ColumnDef<RequirementRecord>[] = useMemo(
     () => [
+      { key: 'planning_period', label: 'Period', width: 'w-28', align: 'left' },
+      { key: 'revision', label: 'Revision', width: 'w-24', align: 'left' },
       {
         key: 'plant',
         label: 'Plant',
@@ -284,7 +289,7 @@ export default function Requirements() {
         <div>
           <h1 className="text-xl font-bold text-gray-900 tracking-tight">Consumable Requirements Workspace</h1>
           <p className="text-xs text-gray-500 mt-0.5">
-            Real-time material requirements computed from PRD Plan Qty × Consumption Norms vs Current Stock.
+            Stored results from validated planning revisions and configured consumption rules. Review dated inventory projections separately.
           </p>
         </div>
 
@@ -329,6 +334,18 @@ export default function Requirements() {
       )}
 
       {/* Workspace Table Panel */}
+      <div className="flex gap-3 items-center">
+        <label>Planning revision <select value={selectedVersion} onChange={e => setSelectedVersion(e.target.value)}>
+          <option value="">Select a validated planning revision</option>
+          {versions.map(v => <option key={v.id} value={v.id}>{v.planning_period} · {v.revision_label} · {v.status}</option>)}
+        </select></label>
+        {user?.is_super_admin && <button disabled={!selectedVersion || isRecalculating} onClick={() => {
+          void apiClient.post(`/api/v1/requirements/planning-versions/${selectedVersion}/approve`, {}).then(() => {
+            setStatusMessage({ type: 'success', text: 'Calculated revision approved. No purchase order was created.' });
+          }).catch(e => setStatusMessage({ type: 'error', text: e.message }));
+        }}>Approve calculated revision</button>}
+        <p className="text-xs">The table shows the latest revision for each period. Older revision evidence remains in planning history.</p>
+      </div>
       <div className="flex-1 min-h-0 bg-white border border-gray-300 rounded shadow-xs flex flex-col overflow-hidden">
         {/* Toolbar */}
         <Toolbar

@@ -20,6 +20,7 @@ from app.schemas.grn import (
 )
 from app.security.dependencies import get_current_user
 from app.security.permissions import require_permissions
+from app.security.policy import allows
 from app.services import grn as service
 
 router = APIRouter(prefix='/grns', tags=['imported GRNs'], responses={
@@ -30,7 +31,7 @@ Import = Annotated[CurrentUser, Depends(require_permissions('purchase.grns.impor
 
 def require_any_permission(*codes: str):
     def dependency(user: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
-        if not any(code in user.permissions for code in codes):
+        if not any(allows(user, code) for code in codes):
             raise ApplicationError("PERMISSION_DENIED", f"Required permission missing. Needs one of: {', '.join(codes)}.", 403)
         return user
     return dependency

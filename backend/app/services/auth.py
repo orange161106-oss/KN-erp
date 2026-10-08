@@ -9,6 +9,7 @@ from app.repositories.auth import find_user_by_username, find_user_with_permissi
 from app.schemas.auth import CurrentUser, LoginRequest, TokenResponse
 from app.security.passwords import PasswordService
 from app.security.tokens import InvalidAccessToken, create_access_token, decode_access_token
+from app.security.policy import effective_permissions
 
 logger = logging.getLogger("kn.backend.auth")
 BEARER_HEADERS = {"WWW-Authenticate": "Bearer"}
@@ -65,7 +66,9 @@ def current_user(session: Session, token: str, settings: Settings) -> CurrentUse
             username=user.username,
             is_super_admin=getattr(user, "is_super_admin", False),
             roles=sorted(role.code for role in user.roles),
-            permissions=sorted({permission.code for role in user.roles for permission in role.permissions}),
+            permissions=effective_permissions(user, {p.code for role in user.roles for p in role.permissions}),
+            plant_ids=[identity for slot, identity in settings.plant_permission_ids.items()
+                       if getattr(user, f"can_access_plant_{slot}", False)],
             can_view_master_data=getattr(user, "can_view_master_data", False),
             can_edit_master_data=getattr(user, "can_edit_master_data", False),
             can_view_planning=getattr(user, "can_view_planning", False),

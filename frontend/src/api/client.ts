@@ -12,16 +12,21 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(endpoint: string, method: string, data?: unknown): Promise<T> {
+async function request<T>(endpoint: string, method: string, data?: unknown, timeoutMs?: number): Promise<T> {
   const requestToken = accessToken;
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (requestToken) headers.Authorization = `Bearer ${requestToken}`;
   const formData = data instanceof FormData;
   if (data !== undefined && !formData) headers['Content-Type'] = 'application/json';
   let response: Response;
+  const controller = new AbortController();
+  const timeout = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
   try {
-    response = await fetch(`${BASE_URL}${endpoint}`, { method, headers, body: data === undefined ? undefined : formData ? data : JSON.stringify(data) });
-  } catch { throw new ApiError(0, 'NETWORK_ERROR', 'Cannot reach the server. Check your connection and try again.'); }
+    response = await fetch(`${BASE_URL}${endpoint}`, { method, headers, signal: controller.signal, body: data === undefined ? undefined : formData ? data : JSON.stringify(data) });
+  } catch {
+    if (controller.signal.aborted) throw new ApiError(0, 'REQUEST_TIMEOUT', 'The preview timed out. Check the backend, then try again.');
+    throw new ApiError(0, 'NETWORK_ERROR', 'Cannot reach the server. Check your connection and try again.');
+  } finally { if (timeout !== undefined) clearTimeout(timeout); }
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     if (response.status === 401 && requestToken === accessToken) { setAccessToken(null); unauthorizedHandler?.(); }
@@ -41,5 +46,5 @@ export const apiClient = {
   put: <T>(endpoint: string, data: unknown) => request<T>(endpoint, 'PUT', data),
   patch: <T>(endpoint: string, data: unknown) => request<T>(endpoint, 'PATCH', data),
   delete: <T>(endpoint: string, data?: unknown) => request<T>(endpoint, 'DELETE', data),
-  postFormData: <T>(endpoint: string, data: FormData) => request<T>(endpoint, 'POST', data),
+  postFormData: <T>(endpoint: string, data: FormData, timeoutMs?: number) => request<T>(endpoint, 'POST', data, timeoutMs),
 };

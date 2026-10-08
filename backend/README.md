@@ -150,26 +150,32 @@ and retain one clean head. Never edit an applied/shared migration. The metadata
 defines constraint naming; explicitly name check constraints. Use UTC timestamps
 and PostgreSQL `NUMERIC` / Python `Decimal` for precise future business values.
 
-## Development User Seeding (Supabase / Shared DB)
+## Super Admin and employee setup
 
-To populate test user accounts and assign all RBAC role permissions for manual E2E/UAT testing on the shared Supabase database, run the seed script from `backend/`:
+The shared-password development seeder is retired. It must not reset accounts or
+assign every permission to every role on Supabase.
+
+After applying migrations, set `SUPER_ADMIN_USERNAME` and `SUPER_ADMIN_PASSWORD`
+privately in `backend/.env`. The password has no built-in default. Provision explicitly:
 
 ```powershell
-python scripts/seed_dev_users.py
+.\.venv\Scripts\python.exe -m app.db.bootstrap_admin
 ```
 
-### Seeded UAT Accounts & Credentials
+This command creates one Super Admin or leaves the matching existing account alone.
+It refuses to promote an ordinary employee with the same username. Explicit rotation
+uses `--rotate-password`; ordinary employee APIs cannot modify Super Admin. Startup
+never seeds or resets accounts. Create employees in Administration and select their
+feature flags; base roles do not bypass flags. Existing unmapped permissions, such as
+stock imports and PO pricing/cancellation, still require explicit legacy grants.
 
-| Role | Username | Password | Assigned Permissions |
-| ---- | -------- | -------- | -------------------- |
-| **System Admin** | `admin` | `admin123` | Full access across all ERP domain modules & admin features |
-| **Planner** | `planner` | `planner123` | PRD import, requirement calculation, & product mappings |
-| **Plant In-Charge** | `plant_incharge` | `incharge123` | Plant confirmations & additional requirement requests |
-| **Purchasing & Approver** | `purchase` | `purchase123` | Purchase recommendation approval queue & issuing POs |
-| **Store / Inventory** | `store` | `store123` | Stock balances, GRNs, & alert acknowledgements |
-| **Executive Management** | `manager` | `manager123` | Executive dashboard & analytical reports |
+Map plant checkbox slots to verified plant UUIDs using `PLANT_PERMISSION_IDS` (a JSON
+object with keys `1` through `5`). Obtain IDs from `/api/v1/plants`; do not infer them
+from names or database row order. An unset slot grants no plant workflow access.
+Legacy `user_plants` rows remain as history and do not override checkbox revocation.
 
-> ℹ️ **Note**: Verify that your `backend/.env` file contains the valid `DATABASE_URL` pointing to the shared database before running the script.
+See [the verified workflow setup guide](../docs/validation/KNL_VERIFIED_WORKFLOW_FOUNDATION_2026-10-08.md)
+for the migration/API impact and manual testing sequence.
 
 ## Start and health contract
 

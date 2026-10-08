@@ -530,7 +530,7 @@ export default function GRNs() {
       <div className="flex items-center justify-between pb-2 border-b border-gray-200">
         <div>
           <h2 className="text-xl font-bold text-gray-800">Goods Receipts</h2>
-          <p className="text-xs text-gray-500">Manage receipt data in an Excel-style workspace.</p>
+          <p className="text-xs text-gray-500">Review source receipt rows here. Workspace edits do not post inventory or fulfil POs. Stock integration requires validated accepted quantities and PO-item references.</p>
         </div>
 
         {/* Global Alerts */}

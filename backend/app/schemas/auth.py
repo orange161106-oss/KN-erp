@@ -32,6 +32,7 @@ class CurrentUser(BaseModel):
     is_super_admin: bool = False
     roles: list[str]
     permissions: list[str]
+    plant_ids: list[UUID] = Field(default_factory=list)
 
     # Granular Feature Access
     can_view_master_data: bool = False

@@ -30,9 +30,11 @@ class UserCreate(UserPermissionFlags):
 
     username: str = Field(min_length=1, max_length=128, strict=True)
     password: SecretStr = Field(min_length=6, max_length=1024)
-    full_name: Optional[str] = None
-    employee_id: Optional[str] = None
+    full_name: Optional[str] = Field(default=None, max_length=256)
+    employee_id: Optional[str] = Field(default=None, max_length=64)
     roles: list[str] = Field(default_factory=list)
+    is_active: bool = True
+    reason: str = Field(default="Employee account provisioned by Super Admin", min_length=1, max_length=1024)
 
     @field_validator("username", mode="before")
     @classmethod
@@ -43,11 +45,12 @@ class UserCreate(UserPermissionFlags):
 class UserUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    password: Optional[SecretStr] = None
-    full_name: Optional[str] = None
-    employee_id: Optional[str] = None
+    password: Optional[SecretStr] = Field(default=None, min_length=6, max_length=1024)
+    full_name: Optional[str] = Field(default=None, max_length=256)
+    employee_id: Optional[str] = Field(default=None, max_length=64)
     is_active: Optional[bool] = None
     roles: Optional[list[str]] = None
+    reason: str = Field(default="Employee account updated by Super Admin", min_length=1, max_length=1024)
 
     # Optional Feature Flags
     can_view_master_data: Optional[bool] = None

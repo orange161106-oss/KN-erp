@@ -1,3 +1,4 @@
+from app.security.permissions import require_permissions
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, Query, Response
@@ -15,7 +16,7 @@ from app.services import requirements_workspace as service
 router = APIRouter(prefix="/requirements/workspace", tags=["requirements-workspace"])
 
 
-@router.get("/records", response_model=list[RequirementWorkspaceRecord])
+@router.get("/records", response_model=list[RequirementWorkspaceRecord], dependencies=[Depends(require_permissions('planning.read'))])
 def get_requirements_workspace_records(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[Session, Depends(get_db)],
@@ -33,7 +34,7 @@ def get_requirements_workspace_records(
     )
 
 
-@router.post("/recalculate", response_model=RequirementRecalculateResponse)
+@router.post("/recalculate", response_model=RequirementRecalculateResponse, dependencies=[Depends(require_permissions('requirements.calculate'))])
 def post_recalculate_requirements(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[Session, Depends(get_db)],
@@ -41,7 +42,7 @@ def post_recalculate_requirements(
     return service.recalculate_requirements(session)
 
 
-@router.get("/export")
+@router.get("/export", dependencies=[Depends(require_permissions('planning.read'))])
 def export_requirements_workspace(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[Session, Depends(get_db)],
@@ -66,7 +67,7 @@ def export_requirements_workspace(
     )
 
 
-@router.post("/export")
+@router.post("/export", dependencies=[Depends(require_permissions('planning.read'))])
 def export_requirements_workspace_post(
     data: dict[str, list[str]],
     user: Annotated[CurrentUser, Depends(get_current_user)],

@@ -7,6 +7,7 @@ const BASE_ROLES = [
   { code: 'PLANNER', label: 'Planner' },
   { code: 'PLANT_INCHARGE', label: 'Plant Incharge' },
   { code: 'PURCHASE', label: 'Purchase' },
+  { code: 'APPROVER', label: 'Approver' },
   { code: 'STORE', label: 'Store' },
   { code: 'MANAGEMENT', label: 'Management' },
   { code: 'ADMIN', label: 'Admin' },
@@ -21,7 +22,7 @@ const FEATURE_FLAGS: { key: keyof UserCreate; label: string; desc: string }[] = 
   { key: 'can_approve_extra_demand', label: 'Approve Extra Demand', desc: 'Approve additional/override requests' },
   { key: 'can_create_po', label: 'Create Purchase Orders', desc: 'Generate draft POs' },
   { key: 'can_approve_po', label: 'Approve Purchase Orders', desc: 'Approve issued POs' },
-  { key: 'can_upload_grn', label: 'Upload GRN', desc: 'Post goods receipt notes' },
+  { key: 'can_upload_grn', label: 'Upload GRN', desc: 'Import goods receipts from the existing ERP' },
   { key: 'can_view_reports', label: 'View Analytical Reports', desc: 'Access reports & executive dashboard' },
 ];
 
@@ -138,17 +139,13 @@ export default function UserManagement() {
     e.preventDefault();
     try {
       const finalPermissions = { ...permissions };
-      if (selectedRole !== 'PLANT_INCHARGE') {
-        PLANT_FLAGS.forEach(p => {
-          finalPermissions[p.key] = false;
-        });
-      }
+
 
       if (editingUser) {
         const updatePayload: UserUpdate = {
           full_name: fullName || null,
           employee_id: employeeId || null,
-          roles: [selectedRole],
+          roles: editingUser.roles[0] === selectedRole ? editingUser.roles : [selectedRole, ...editingUser.roles.slice(1).filter(r => r !== selectedRole)],
           is_active: isActive,
           ...finalPermissions,
         };
@@ -158,6 +155,7 @@ export default function UserManagement() {
         const createPayload: UserCreate = {
           username,
           password,
+          is_active: isActive,
           full_name: fullName || null,
           employee_id: employeeId || null,
           roles: [selectedRole],
@@ -427,7 +425,7 @@ export default function UserManagement() {
               </div>
 
               {/* 5 Plant Scope Access Flags - Only for Plant Incharge */}
-              {selectedRole === 'PLANT_INCHARGE' && (
+              {(
                 <div className="border-t pt-4">
                   <h3 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-1.5">
                     <Building className="w-4 h-4 text-emerald-600" />

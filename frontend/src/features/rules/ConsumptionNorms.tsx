@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react';
 import { apiClient } from '../../api/client';
 import type { ConsumptionNorm, EvaluationResult } from './types';
+import { useAuth } from '../auth/context';
+import NormSetup from './NormSetup';
 
 export default function ConsumptionNorms() {
+  const { user } = useAuth();
+  const canEdit = Boolean(user?.is_super_admin || user?.permissions.includes('masters.write'));
+  const canCalculate = Boolean(user?.is_super_admin || user?.permissions.includes('requirements.calculate'));
   const [norms, setNorms] = useState<ConsumptionNorm[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -13,20 +18,20 @@ export default function ConsumptionNorms() {
   const [evalResult, setEvalResult] = useState<EvaluationResult | null>(null);
   const [evalLoading, setEvalLoading] = useState(false);
   const [evalError, setEvalError] = useState('');
+  const [evalDate, setEvalDate] = useState('');
+  const [requestedQty, setRequestedQty] = useState('');
 
   useEffect(() => {
     loadNorms();
   }, []);
 
-  async function loadNorms() {
+  async function loadNorms(preferredId?: string) {
     setLoading(true);
     setError('');
     try {
       const data = await apiClient.get<ConsumptionNorm[]>('/api/v1/consumption-norms');
       setNorms(data);
-      if (data.length > 0 && !evalNormId) {
-        setEvalNormId(data[0].id);
-      }
+      setEvalNormId(previous => data.find(n => n.id === (preferredId || previous) && n.is_active)?.id || data.find(n => n.is_active)?.id || '');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load consumption norms');
     } finally {
@@ -37,7 +42,7 @@ export default function ConsumptionNorms() {
   async function handleSimulateEvaluation(e: React.FormEvent) {
     e.preventDefault();
     const selectedNorm = norms.find(n => n.id === evalNormId);
-    if (!selectedNorm) return;
+    if (!selectedNorm || !canCalculate) return;
 
     setEvalLoading(true);
     setEvalError('');
@@ -49,6 +54,8 @@ export default function ConsumptionNorms() {
         process_id: selectedNorm.process_id || null,
         plant_id: selectedNorm.plant_id || null,
         production_quantity: evalQty,
+        as_of_date: evalDate,
+        requested_quantity: requestedQty || null,
       });
       setEvalResult(res);
     } catch (err: unknown) {
@@ -59,13 +66,14 @@ export default function ConsumptionNorms() {
   }
 
   async function handleToggleActive(norm: ConsumptionNorm) {
+    if (!canEdit) return;
     try {
       await apiClient.put(`/api/v1/consumption-norms/${norm.id}`, {
         is_active: !norm.is_active,
       });
       loadNorms();
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Failed to update norm');
+      setError(err instanceof Error ? err.message : 'Failed to update norm');
     }
   }
 
@@ -75,24 +83,27 @@ export default function ConsumptionNorms() {
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Consumption Rules & Norms</h2>
           <p className="text-sm text-gray-500 mt-1">
-            M3.1 Requirement Calculation Framework: Deterministic Strategy per Rule Type
+            Configure approved consumable usage rules, then check the calculated requirement.
           </p>
         </div>
       </div>
+
+      {canEdit && <NormSetup onCreated={async id => { await loadNorms(id); setEvalResult(null); setEvalError(''); }} />}
+      {!canEdit && !norms.length && <p>A Super Admin or an employee with Edit master data permission must configure a norm before calculation.</p>}
 
       {/* Evaluation Simulator Card */}
       <div className="bg-white p-6 rounded-lg border border-indigo-200 shadow-sm space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-base font-bold text-indigo-950 uppercase tracking-wide">
-              Deterministic Calculation Simulator
+              Test a consumption norm
             </h3>
             <p className="text-xs text-gray-500 mt-0.5">
               Simulate explainable requirement calculations with step-by-step audit trails.
             </p>
           </div>
           <span className="text-xs bg-indigo-100 text-indigo-800 font-semibold px-2.5 py-1 rounded-full">
-            Pure Domain Engine
+            Calculation preview
           </span>
         </div>
 
@@ -107,7 +118,7 @@ export default function ConsumptionNorms() {
               {norms.length === 0 ? (
                 <option value="">No norms configured</option>
               ) : (
-                norms.map(n => (
+                norms.filter(n => n.is_active).map(n => (
                   <option key={n.id} value={n.id}>
                     {n.consumable_code || n.consumable_id} [{n.rule_type} v{n.version}]
                   </option>
@@ -121,6 +132,7 @@ export default function ConsumptionNorms() {
             <input
               type="number"
               step="any"
+              min="0"
               value={evalQty}
               onChange={e => setEvalQty(e.target.value)}
               required
@@ -129,16 +141,24 @@ export default function ConsumptionNorms() {
             />
           </div>
 
+          <label className="block text-xs font-medium">Calculation date
+            <input required type="date" className="block w-full border rounded px-3 py-2" value={evalDate} onChange={e => setEvalDate(e.target.value)} />
+          </label>
+          {norms.find(n => n.id === evalNormId)?.rule_type === 'PLANT_REQUEST' && <label className="block text-xs font-medium">Explicit requested quantity (optional)
+            <input type="number" min="0" step="any" className="block w-full border rounded px-3 py-2" value={requestedQty} onChange={e => setRequestedQty(e.target.value)} />
+          </label>}
+
           <div>
             <button
               type="submit"
-              disabled={evalLoading || !evalNormId}
+              disabled={evalLoading || !evalNormId || !canCalculate}
               className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded text-sm disabled:opacity-50"
             >
               {evalLoading ? 'Calculating…' : 'Run Calculation'}
             </button>
           </div>
         </form>
+        <p className="text-sm text-gray-600">This preview does not approve demand, create a purchase order or change stock.</p>
 
         {evalError && (
           <div className="bg-red-50 text-red-700 p-3 rounded text-sm border border-red-200">
@@ -246,12 +266,12 @@ export default function ConsumptionNorms() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <button
+                      {canEdit && <button
                         onClick={() => handleToggleActive(norm)}
                         className="text-xs text-indigo-600 hover:text-indigo-900 underline font-medium"
                       >
                         {norm.is_active ? 'Deactivate' : 'Reactivate'}
-                      </button>
+                      </button>}
                     </td>
                   </tr>
                 ))
