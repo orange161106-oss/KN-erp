@@ -26,3 +26,14 @@ def require_permissions(*codes: str) -> Callable[..., CurrentUser]:
         return user
 
     return dependency
+
+
+def require_feature_flag(flag_name: str) -> Callable[..., CurrentUser]:
+    def dependency(user: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
+        if user.is_super_admin:
+            return user
+        if getattr(user, flag_name, False):
+            return user
+        raise ApplicationError("PERMISSION_DENIED", f"Feature flag '{flag_name}' is required.", 403)
+
+    return dependency

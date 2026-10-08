@@ -43,7 +43,7 @@ router = APIRouter(prefix="/mappings", tags=["mappings"])
 # Product-Plant Endpoints
 # ==========================================
 
-@router.get("/product-plants", response_model=list[ProductPlantResponse], dependencies=[Depends(require_permissions('masters.read'))])
+@router.get("/product-plants", response_model=list[ProductPlantResponse], dependencies=[Depends(require_permissions('mappings.read'))])
 def get_product_plants(
     session: Annotated[Session, Depends(get_db)],
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
@@ -56,7 +56,7 @@ def get_product_plants(
     )
 
 
-@router.get("/product-plants/{mapping_id}", response_model=ProductPlantResponse, dependencies=[Depends(require_permissions('masters.read'))])
+@router.get("/product-plants/{mapping_id}", response_model=ProductPlantResponse, dependencies=[Depends(require_permissions('mappings.read'))])
 def get_product_plant(
     mapping_id: UUID,
     session: Annotated[Session, Depends(get_db)],
@@ -69,7 +69,7 @@ def get_product_plant(
     "/product-plants",
     response_model=ProductPlantResponse,
     status_code=status.HTTP_201_CREATED,
- dependencies=[Depends(require_permissions('masters.write'))])
+ dependencies=[Depends(require_permissions('mappings.write'))])
 def post_product_plant(
     data: ProductPlantCreate,
     session: Annotated[Session, Depends(get_db)],
@@ -82,7 +82,7 @@ def post_product_plant(
     "/product-plants/bulk",
     response_model=BulkMappingResponse,
     status_code=status.HTTP_201_CREATED,
- dependencies=[Depends(require_permissions('masters.write'))])
+ dependencies=[Depends(require_permissions('mappings.write'))])
 def post_product_plants_bulk(
     data: BulkProductPlantCreate,
     session: Annotated[Session, Depends(get_db)],
@@ -91,7 +91,7 @@ def post_product_plants_bulk(
     return bulk_create_product_plants(session, data)
 
 
-@router.put("/product-plants/{mapping_id}", response_model=ProductPlantResponse, dependencies=[Depends(require_permissions('masters.write'))])
+@router.put("/product-plants/{mapping_id}", response_model=ProductPlantResponse, dependencies=[Depends(require_permissions('mappings.write'))])
 def put_product_plant(
     mapping_id: UUID,
     data: ProductPlantUpdate,
@@ -108,7 +108,7 @@ def put_product_plant(
 @router.get(
     "/product-process-consumables",
     response_model=list[ProductProcessConsumableResponse],
- dependencies=[Depends(require_permissions('masters.read'))])
+ dependencies=[Depends(require_permissions('mappings.read'))])
 def get_product_process_consumables(
     session: Annotated[Session, Depends(get_db)],
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
@@ -129,7 +129,7 @@ def get_product_process_consumables(
 @router.get(
     "/product-process-consumables/{mapping_id}",
     response_model=ProductProcessConsumableResponse,
- dependencies=[Depends(require_permissions('masters.read'))])
+ dependencies=[Depends(require_permissions('mappings.read'))])
 def get_product_process_consumable(
     mapping_id: UUID,
     session: Annotated[Session, Depends(get_db)],
@@ -142,7 +142,7 @@ def get_product_process_consumable(
     "/product-process-consumables",
     response_model=ProductProcessConsumableResponse,
     status_code=status.HTTP_201_CREATED,
- dependencies=[Depends(require_permissions('masters.write'))])
+ dependencies=[Depends(require_permissions('mappings.write'))])
 def post_product_process_consumable(
     data: ProductProcessConsumableCreate,
     session: Annotated[Session, Depends(get_db)],
@@ -155,7 +155,7 @@ def post_product_process_consumable(
     "/product-process-consumables/bulk",
     response_model=BulkMappingResponse,
     status_code=status.HTTP_201_CREATED,
- dependencies=[Depends(require_permissions('masters.write'))])
+ dependencies=[Depends(require_permissions('mappings.write'))])
 def post_product_process_consumables_bulk(
     data: BulkProductProcessConsumableCreate,
     session: Annotated[Session, Depends(get_db)],
@@ -167,7 +167,7 @@ def post_product_process_consumables_bulk(
 @router.put(
     "/product-process-consumables/{mapping_id}",
     response_model=ProductProcessConsumableResponse,
- dependencies=[Depends(require_permissions('masters.write'))])
+ dependencies=[Depends(require_permissions('mappings.write'))])
 def put_product_process_consumable(
     mapping_id: UUID,
     data: ProductProcessConsumableUpdate,
@@ -181,7 +181,7 @@ def put_product_process_consumable(
 # Phase 2 Gate Resolution & Validation Endpoints
 # ==========================================
 
-@router.get("/resolve/{product_id}", response_model=ProductResolutionResponse, dependencies=[Depends(require_permissions('masters.read'))])
+@router.get("/resolve/{product_id}", response_model=ProductResolutionResponse, dependencies=[Depends(require_permissions('mappings.read'))])
 def get_resolve_product_mapping(
     product_id: UUID,
     session: Annotated[Session, Depends(get_db)],
@@ -191,7 +191,7 @@ def get_resolve_product_mapping(
     return resolve_product_mapping(session, product_id=product_id, plant_id=plant_id)
 
 
-@router.get("/validate", response_model=MappingValidationReport, dependencies=[Depends(require_permissions('masters.read'))])
+@router.get("/validate", response_model=MappingValidationReport, dependencies=[Depends(require_permissions('mappings.read'))])
 def get_validate_mappings(
     session: Annotated[Session, Depends(get_db)],
     current_user: Annotated[CurrentUser, Depends(get_current_user)],

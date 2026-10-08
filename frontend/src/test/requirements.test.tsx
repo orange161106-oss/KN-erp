@@ -57,7 +57,7 @@ function renderRequirements() {
           id: 'test-user',
           username: 'planner',
           roles: ['PLANNER'],
-          permissions: ['planning.read', 'requirements.calculate'],
+          permissions: ['requirements.read', 'requirements.calculate'],
         },
         login: vi.fn(),
         logout: vi.fn(),

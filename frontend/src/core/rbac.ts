@@ -12,7 +12,10 @@ export function canPerform(user: UserContextData | null | undefined, module: str
   const code = `${prefix[module] || module}.${action}`;
   if (user.permissions.includes(code)) return true;
   if (module === 'prd') return user.permissions.includes(action === 'read' || action === 'export' ? 'planning.read' : 'planning.write');
-  if (module === 'requirements') return user.permissions.includes(action === 'read' || action === 'export' ? 'planning.read' : 'requirements.calculate');
+  if (module === 'requirements') {
+    if (action === 'read' || action === 'export') return user.permissions.includes('requirements.read');
+    return user.permissions.includes('requirements.calculate');
+  }
   return false;
 }
 
@@ -21,8 +24,8 @@ export function canOpen(user: UserContextData, path: string): boolean {
   const codes: Record<string, string[]> = {
     '/': ['reports.inventory.read'], '/dashboard': ['reports.inventory.read'],
     '/masters': ['masters.read', 'masters.units.read', 'masters.consumables.read', 'masters.suppliers.read'],
-    '/mappings': ['masters.read'], '/rules': ['masters.read'],
-    '/prd': ['planning.read', 'prd.plan.read'], '/requirements': ['planning.read'],
+    '/mappings': ['mappings.read'], '/rules': ['norms.read'],
+    '/prd': ['planning.read', 'prd.plan.read'], '/requirements': ['requirements.read'],
     '/plant-workflow': ['plant_workflow:view', 'plant_workflow:confirm', 'plant_workflow:approve'],
     '/inventory': ['inventory.stock.read'], '/purchase': ['purchasing:view'],
     '/purchase-orders': ['purchase.orders.read'], '/grns': ['purchase.grns.read'],

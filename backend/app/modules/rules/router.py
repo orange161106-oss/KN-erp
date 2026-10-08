@@ -29,7 +29,7 @@ from app.services.rules import (
 router = APIRouter(prefix="/consumption-norms", tags=["consumption norms"])
 
 
-@router.get("", response_model=list[ConsumptionNormResponse], dependencies=[Depends(require_permissions('masters.read'))])
+@router.get("", response_model=list[ConsumptionNormResponse], dependencies=[Depends(require_permissions('norms.read'))])
 def get_consumption_norms(
     session: Annotated[Session, Depends(get_db)],
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
@@ -49,7 +49,7 @@ def get_consumption_norms(
     )
 
 
-@router.get("/{norm_id}", response_model=ConsumptionNormResponse, dependencies=[Depends(require_permissions('masters.read'))])
+@router.get("/{norm_id}", response_model=ConsumptionNormResponse, dependencies=[Depends(require_permissions('norms.read'))])
 def get_single_consumption_norm(
     norm_id: UUID,
     session: Annotated[Session, Depends(get_db)],
@@ -58,7 +58,7 @@ def get_single_consumption_norm(
     return get_consumption_norm(session, norm_id)
 
 
-@router.post("", response_model=ConsumptionNormResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permissions('masters.write'))])
+@router.post("", response_model=ConsumptionNormResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permissions('norms.write'))])
 def post_consumption_norm(
     data: ConsumptionNormCreate,
     session: Annotated[Session, Depends(get_db)],
@@ -67,7 +67,7 @@ def post_consumption_norm(
     return create_consumption_norm(session, data)
 
 
-@router.put("/{norm_id}", response_model=ConsumptionNormResponse, dependencies=[Depends(require_permissions('masters.write'))])
+@router.put("/{norm_id}", response_model=ConsumptionNormResponse, dependencies=[Depends(require_permissions('norms.write'))])
 def put_consumption_norm(
     norm_id: UUID,
     data: ConsumptionNormUpdate,

@@ -36,7 +36,6 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     employee_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
 
-    # Granular Feature Flags (10 Flags)
     can_view_master_data: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     can_edit_master_data: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     can_view_planning: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
@@ -47,6 +46,18 @@ class User(Base):
     can_approve_po: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     can_upload_grn: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     can_view_reports: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+    # Granular Feature Flags (10 Workflow Flags)
+    can_access_masters: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_access_production_mappings: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_access_consumption_norms: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_access_prd_planning: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_access_requirements: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_access_plant_workflow: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_access_inventory: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_access_purchase: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_access_purchase_orders: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_access_goods_receipts: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
     # Plant Access Flags (5 Plants)
     can_access_plant_1: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())

@@ -47,7 +47,7 @@ def post_calculate_requirements(
 @router.get(
     "/planning-versions/{planning_version_id}",
     response_model=list[CalculatedRequirementResponse],
- dependencies=[Depends(require_permissions('planning.read'))])
+ dependencies=[Depends(require_permissions('requirements.read'))])
 def get_version_calculated_requirements(
     planning_version_id: UUID,
     session: Annotated[Session, Depends(get_db)],
@@ -66,7 +66,7 @@ def get_version_calculated_requirements(
 @router.get(
     "/planning-versions/{planning_version_id}/errors",
     response_model=list[RequirementCalculationErrorResponse],
- dependencies=[Depends(require_permissions('planning.read'))])
+ dependencies=[Depends(require_permissions('requirements.read'))])
 def get_version_calculation_errors(
     planning_version_id: UUID,
     session: Annotated[Session, Depends(get_db)],

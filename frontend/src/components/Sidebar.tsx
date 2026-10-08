@@ -14,6 +14,9 @@ export default function Sidebar() {
   const { user, logout } = useAuth();
   const location = useLocation();
   if (!user) return null;
+  const isActive = (path: string) => path === '/'
+    ? location.pathname === '/' || location.pathname === '/dashboard'
+    : location.pathname.startsWith(path);
   return <aside className="w-64 bg-brand-navy text-white flex flex-col select-none">
     <div className="p-4 text-lg font-bold border-b border-brand-steel/60">KNL Consumable ERP</div>
     <div className="px-4 py-2.5 bg-brand-steel/40 text-xs">
@@ -21,7 +24,7 @@ export default function Sidebar() {
     </div>
     <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
       {links.filter(([path]) => canOpen(user, path)).map(([path, label]) => <Link key={path} to={path}
-        className={`block px-3 py-2 rounded text-xs font-medium ${location.pathname === path ? 'bg-brand-steel text-white' : 'text-gray-200 hover:bg-white/10'}`}>
+        className={`block px-3 py-2 rounded text-xs font-medium transition-colors ${isActive(path) ? 'bg-brand-steel text-white' : 'text-gray-200 hover:bg-white/10'}`}>
         {label}
       </Link>)}
       <button onClick={logout} className="block px-3 py-2 text-xs text-red-400">Logout</button>

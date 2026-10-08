@@ -4,6 +4,7 @@ import { canOpen, canPerform } from '../core/rbac';
 test('base ADMIN role never grants a feature or employee administration', () => {
   const user = { roles: ['ADMIN'], permissions: [] };
   expect(canPerform(user, 'prd', 'create')).toBe(false);
+  expect(canOpen(user, '/requirements')).toBe(false);
   expect(canOpen(user, '/admin')).toBe(false);
   expect(canOpen(user, '/masters')).toBe(false);
 });
@@ -27,4 +28,17 @@ test('Super Admin can open protected setup pages without role templates', () => 
   expect(canOpen(user, '/admin')).toBe(true);
   expect(canOpen(user, '/masters')).toBe(true);
   expect(canPerform(user, 'prd', 'import')).toBe(true);
+});
+
+test('workflow visibility uses effective permissions without granting writes or other workflows', () => {
+  const user = { roles: [], permissions: ['requirements.read'] };
+  expect(canOpen(user, '/requirements')).toBe(true);
+  expect(canPerform(user, 'requirements', 'read')).toBe(true);
+  expect(canPerform(user, 'requirements', 'update')).toBe(false);
+  expect(canOpen(user, '/prd')).toBe(false);
+  expect(canOpen(user, '/admin')).toBe(false);
+  const mappingsUser = { roles: [], permissions: ['mappings.read'] };
+  expect(canOpen(mappingsUser, '/mappings')).toBe(true);
+  expect(canOpen(mappingsUser, '/masters')).toBe(false);
+  expect(canOpen({ roles: [], permissions: ['masters.read'] }, '/mappings')).toBe(false);
 });

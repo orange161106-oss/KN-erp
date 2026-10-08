@@ -14,11 +14,13 @@ from app.security.dependencies import get_current_user
 from app.services import requirements_workspace as service
 
 router = APIRouter(prefix="/requirements/workspace", tags=["requirements-workspace"])
+ViewPlanning = Annotated[CurrentUser, Depends(get_current_user)]
+RunCalculations = Annotated[CurrentUser, Depends(get_current_user)]
 
 
-@router.get("/records", response_model=list[RequirementWorkspaceRecord], dependencies=[Depends(require_permissions('planning.read'))])
+@router.get("/records", response_model=list[RequirementWorkspaceRecord], dependencies=[Depends(require_permissions('requirements.read'))])
 def get_requirements_workspace_records(
-    user: Annotated[CurrentUser, Depends(get_current_user)],
+    user: ViewPlanning,
     session: Annotated[Session, Depends(get_db)],
     plant: Optional[str] = None,
     consumable: Optional[str] = None,
@@ -36,15 +38,15 @@ def get_requirements_workspace_records(
 
 @router.post("/recalculate", response_model=RequirementRecalculateResponse, dependencies=[Depends(require_permissions('requirements.calculate'))])
 def post_recalculate_requirements(
-    user: Annotated[CurrentUser, Depends(get_current_user)],
+    user: RunCalculations,
     session: Annotated[Session, Depends(get_db)],
 ):
     return service.recalculate_requirements(session)
 
 
-@router.get("/export", dependencies=[Depends(require_permissions('planning.read'))])
+@router.get("/export", dependencies=[Depends(require_permissions('requirements.read'))])
 def export_requirements_workspace(
-    user: Annotated[CurrentUser, Depends(get_current_user)],
+    user: ViewPlanning,
     session: Annotated[Session, Depends(get_db)],
     plant: Optional[str] = None,
     consumable: Optional[str] = None,
@@ -67,10 +69,10 @@ def export_requirements_workspace(
     )
 
 
-@router.post("/export", dependencies=[Depends(require_permissions('planning.read'))])
+@router.post("/export", dependencies=[Depends(require_permissions('requirements.read'))])
 def export_requirements_workspace_post(
     data: dict[str, list[str]],
-    user: Annotated[CurrentUser, Depends(get_current_user)],
+    user: ViewPlanning,
     session: Annotated[Session, Depends(get_db)],
 ):
     raw_ids = data.get("record_ids", [])
@@ -80,4 +82,3 @@ def export_requirements_workspace_post(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="consumable_requirements_workspace.xlsx"'},
     )
-

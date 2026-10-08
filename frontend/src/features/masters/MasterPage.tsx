@@ -7,6 +7,7 @@ import ReferenceName from './ReferenceName';
 import { useApi } from './useApi';
 import { endpoint, titles } from './types';
 import type { Master, Page, Resource } from './types';
+import { TableSkeleton } from '../../components/ui/Skeleton';
 export default function MasterPage({ resource }: { resource: Resource }) {
   const { user } = useAuth();
   const [search, setSearch] = useState('');
@@ -15,7 +16,7 @@ export default function MasterPage({ resource }: { resource: Resource }) {
   const [revision, setRevision] = useState(0);
   const [form, setForm] = useState<{ kind: 'create' | 'edit' | 'status'; record?: Master } | null>(null);
   const [supplier, setSupplier] = useState<Master | null>(null);
-  const canWrite = user?.permissions.includes(`masters.${resource}.write`);
+  const canWrite = Boolean(user?.is_super_admin || user?.permissions.includes(`masters.${resource}.write`));
   const url = `${endpoint(resource)}?limit=25&offset=${offset}&q=${encodeURIComponent(search)}${status ? `&is_active=${status}` : ''}`;
   const result = useApi<Page<Master>>(url, revision);
   const saved = () => { setForm(null); setSupplier(null); setRevision(value => value + 1); };
@@ -31,7 +32,8 @@ export default function MasterPage({ resource }: { resource: Resource }) {
       <label className="text-sm">Status<select aria-label="Status" value={status} onChange={e => { setStatus(e.target.value); setOffset(0); }} className="block mt-1 border rounded p-2"><option value="true">Active</option><option value="false">Inactive</option><option value="">All</option></select></label>
       <button onClick={() => setRevision(value => value + 1)} className="self-end border rounded px-4 py-2">Refresh</button>
     </div>
-    {!result && <p role="status">Loading {resource}…</p>}{result?.error && <p role="alert" className="text-red-700">{result.error}</p>}
+    {!result && <TableSkeleton columns={resource === 'consumables' ? 5 : 4} rows={5} />}
+    {result?.error && <p role="alert" className="text-red-700">{result.error}</p>}
     {result?.data && <>
       <div className="overflow-x-auto bg-white border rounded-lg"><table className="w-full text-sm text-left">
         <thead className="bg-gray-50"><tr><th className="p-3">Code</th><th className="p-3">Name</th>{resource === 'consumables' && <th className="p-3">Unit</th>}<th className="p-3">Status</th><th className="p-3">Actions</th></tr></thead>

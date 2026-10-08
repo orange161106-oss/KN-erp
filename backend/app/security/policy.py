@@ -39,11 +39,42 @@ ANY_FEATURE_PERMISSIONS = {
 }
 
 
+# Workflow visibility complements the existing operation grants. Checking a
+# workflow must not grant imports, approvals, or employee administration.
+WORKFLOW_READ_PERMISSIONS = {
+    "masters.read": ("can_access_masters",),
+    "mappings.read": ("can_access_production_mappings",),
+    "norms.read": ("can_access_consumption_norms",),
+    "planning.read": ("can_access_prd_planning",),
+    "requirements.read": ("can_access_requirements",),
+    "plant_workflow:view": ("can_access_plant_workflow",),
+    "inventory.stock.read": ("can_access_inventory",),
+    "inventory.projection.read": ("can_access_inventory",),
+    "purchasing:view": ("can_access_purchase",),
+    "purchase.orders.read": ("can_access_purchase_orders", "can_access_purchase"),
+    "purchase.grns.read": ("can_access_goods_receipts",),
+}
+for resource in ("units", "consumables", "suppliers", "supplier_consumables"):
+    WORKFLOW_READ_PERMISSIONS[f"masters.{resource}.read"] = ("can_access_masters",)
+for resource in ("plan", "records"):
+    for action in ("read", "export"):
+        WORKFLOW_READ_PERMISSIONS[f"prd.{resource}.{action}"] = ("can_access_prd_planning",)
+FEATURE_PERMISSIONS.update({
+    "mappings.read": ("can_view_master_data",),
+    "mappings.write": ("can_edit_master_data",),
+    "norms.read": ("can_view_master_data",),
+    "norms.write": ("can_edit_master_data",),
+    "requirements.read": ("can_view_planning",),
+})
+
+
 def allows(user, code: str) -> bool:
     if user.is_super_admin:
         return True
     if code == "admin:manage":
         return False
+    if any(getattr(user, flag, False) for flag in WORKFLOW_READ_PERMISSIONS.get(code, ())):
+        return True
     if code in ANY_FEATURE_PERMISSIONS:
         return any(getattr(user, f, False) for f in ANY_FEATURE_PERMISSIONS[code])
     flags = FEATURE_PERMISSIONS.get(code)
@@ -53,20 +84,15 @@ def allows(user, code: str) -> bool:
 
 
 def effective_permissions(user, legacy: set[str]) -> list[str]:
-    # Super Admin need not rely on a seeded ADMIN role.
-    candidates = legacy | set(FEATURE_PERMISSIONS) | set(ANY_FEATURE_PERMISSIONS) | {"admin:manage"}
+    from types import SimpleNamespace
+
+    candidates = legacy | set(FEATURE_PERMISSIONS) | set(ANY_FEATURE_PERMISSIONS) | set(WORKFLOW_READ_PERMISSIONS) | {"admin:manage"}
     if user.is_super_admin:
-        return sorted(candidates | {"inventory.stock.read", "inventory.stock.import", "inventory.projection.read",
+        candidates |= {"inventory.stock.read", "inventory.stock.import", "inventory.projection.read",
             "inventory.projection.import", "purchase.orders.cancel", "purchase.orders.price",
-            "purchase.demand.submit", "alerts:view", "alerts:acknowledge"})
-    result = []
-    for code in candidates:
-        if code in ANY_FEATURE_PERMISSIONS:
-            permitted = any(getattr(user, f, False) for f in ANY_FEATURE_PERMISSIONS[code])
-        elif code in FEATURE_PERMISSIONS:
-            permitted = all(getattr(user, f, False) for f in FEATURE_PERMISSIONS[code])
-        else:
-            permitted = code in legacy and code != "admin:manage"
-        if permitted:
-            result.append(code)
-    return sorted(result)
+            "purchase.demand.submit", "alerts:view", "alerts:acknowledge"}
+    # ORM users have role relationships; the policy consumes explicit codes.
+    identity = SimpleNamespace(**{flag: getattr(user, flag, False)
+        for flags in [*FEATURE_PERMISSIONS.values(), *ANY_FEATURE_PERMISSIONS.values(), *WORKFLOW_READ_PERMISSIONS.values()]
+        for flag in flags}, is_super_admin=user.is_super_admin, permissions=legacy)
+    return sorted(code for code in candidates if allows(identity, code))

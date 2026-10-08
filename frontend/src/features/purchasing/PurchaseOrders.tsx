@@ -23,7 +23,7 @@ const button = 'rounded bg-brand-navy text-white px-4 py-2 disabled:opacity-50';
 
 export default function PurchaseOrders() {
   const { user } = useAuth();
-  const can = (permission: string) => !!user?.permissions.includes(permission);
+  const can = (permission: string) => Boolean(user?.is_super_admin || user?.permissions.includes(permission));
   const canRead = can('purchase.orders.read');
   const [orders, setOrders] = useState<Order[]>([]);
   const [demands, setDemands] = useState<Demand[]>([]);

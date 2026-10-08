@@ -13,3 +13,4 @@ dist/
 *.log
 .vitest/
 coverage/
+node_modules/

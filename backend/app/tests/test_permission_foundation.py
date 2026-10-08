@@ -145,3 +145,71 @@ def test_authenticated_user_cannot_bypass_planning_or_master_flags(db):
     client = TestClient(app)  # no context/lifespan, no operational DB connection
     assert client.get('/api/v1/masters/products').status_code == 403
     assert client.post('/api/v1/prd/workspace/save', json={'records': [], 'deleted_ids': []}).status_code == 403
+
+
+@pytest.mark.parametrize('flag,read_code,write_code', [
+    ('can_access_masters', 'masters.consumables.read', 'masters.consumables.write'),
+    ('can_access_production_mappings', 'mappings.read', 'mappings.write'),
+    ('can_access_consumption_norms', 'norms.read', 'norms.write'),
+    ('can_access_prd_planning', 'planning.read', 'planning.write'),
+    ('can_access_requirements', 'requirements.read', 'requirements.calculate'),
+    ('can_access_plant_workflow', 'plant_workflow:view', 'plant_workflow:approve'),
+    ('can_access_inventory', 'inventory.stock.read', 'inventory.stock.import'),
+    ('can_access_purchase', 'purchasing:view', 'purchasing:approve'),
+    ('can_access_purchase_orders', 'purchase.orders.read', 'purchase.orders.issue'),
+    ('can_access_goods_receipts', 'purchase.grns.read', 'purchase.grns.import'),
+])
+def test_workflow_visibility_does_not_grant_mutations(flag, read_code, write_code):
+    identity = actor(**{flag: True})
+    check_permissions(identity, frozenset({read_code}))
+    with pytest.raises(ApplicationError):
+        check_permissions(identity, frozenset({write_code}))
+    with pytest.raises(ApplicationError):
+        check_permissions(identity, frozenset({'admin:manage'}))
+
+
+def test_both_permission_matrices_survive_account_edit_and_login(db):
+    root = User(username='root', password_hash='synthetic', is_super_admin=True)
+    db.add(root); db.commit()
+    identity = actor(is_super_admin=True); identity.id = root.id
+    created = users.create_user(db, UserCreate(username='employee', password='synthetic-password',
+        can_access_requirements=True, can_view_planning=True, can_run_calculations=True), identity)
+    updated = users.update_user(db, created.id, UserUpdate(can_access_prd_planning=True), identity)
+    assert updated.can_access_requirements and updated.can_view_planning and updated.can_run_calculations
+    settings = Settings(_env_file=None, database_url='postgresql://operator@localhost/test',
+        auth_secret_key='synthetic-signing-key-at-least-32-bytes')
+    logged_in = current_user(db, create_access_token(created.id, settings), settings)
+    assert logged_in.can_access_requirements and logged_in.can_access_prd_planning
+    assert {'requirements.read', 'requirements.calculate', 'planning.read', 'planning.write'} <= set(logged_in.permissions)
+
+
+def test_requirements_workflow_flag_cannot_open_prd():
+    with pytest.raises(ApplicationError):
+        check_permissions(actor(can_access_requirements=True), frozenset({'planning.read'}))
+
+
+def test_workflow_migration_preserves_existing_accounts_and_product_identifiers():
+    from pathlib import Path
+    import runpy
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import text
+
+    backend = Path(__file__).resolve().parents[2]
+    scripts = ScriptDirectory(str(backend / 'alembic'))
+    assert scripts.get_heads() == ['2994bb185290']
+    migration = runpy.run_path(str(backend / 'alembic/versions/2994bb185290_architecture_realignment_1_to_1_.py'))
+    engine = create_engine('sqlite://')
+    with engine.begin() as connection:
+        connection.execute(text('CREATE TABLE users (id INTEGER PRIMARY KEY, is_super_admin BOOLEAN, can_create_po BOOLEAN)'))
+        connection.execute(text('CREATE UNIQUE INDEX uq_users_single_super_admin ON users (is_super_admin) WHERE is_super_admin = 1'))
+        connection.execute(text('INSERT INTO users VALUES (1, 1, 1)'))
+        connection.execute(text('CREATE TABLE products (item_id TEXT, part_number TEXT)'))
+        connection.execute(text("INSERT INTO products VALUES ('ITEM-001', 'PART-001')"))
+        with Operations.context(MigrationContext.configure(connection)):
+            migration['upgrade']()
+        assert connection.execute(text('SELECT can_create_po, can_access_masters FROM users')).one() == (1, 0)
+        assert connection.execute(text('SELECT item_id, part_number FROM products')).one() == ('ITEM-001', 'PART-001')
+        assert connection.execute(text("SELECT name FROM sqlite_master WHERE name = 'uq_users_single_super_admin'")).scalar()
+    engine.dispose()

@@ -7,7 +7,7 @@ import type { Resource } from './types';
 export default function Masters() {
   const { user } = useAuth();
   const resources: Resource[] = ['units', 'consumables', 'suppliers'];
-  const allowed = resources.filter(resource => user?.permissions.includes(`masters.${resource}.read`));
+  const allowed = resources.filter(resource => user?.is_super_admin || user?.permissions.includes(`masters.${resource}.read`));
   const forbidden = <p role="alert">You do not have permission to view these master records.</p>;
   const canReadProducts = Boolean(user?.is_super_admin || user?.permissions.includes('masters.read'));
   const tabClass = ({ isActive }: { isActive: boolean }) => `rounded-t px-4 py-2 ${isActive ? 'bg-brand-navy text-white font-semibold' : 'text-brand-navy border hover:bg-gray-100'}`;

@@ -5,7 +5,6 @@ from app.security.identity import normalize_username
 
 
 class UserPermissionFlags(BaseModel):
-    # Feature Flags
     can_view_master_data: bool = False
     can_edit_master_data: bool = False
     can_view_planning: bool = False
@@ -16,6 +15,18 @@ class UserPermissionFlags(BaseModel):
     can_approve_po: bool = False
     can_upload_grn: bool = False
     can_view_reports: bool = False
+
+    # 10 Workflow Feature Flags
+    can_access_masters: bool = False
+    can_access_production_mappings: bool = False
+    can_access_consumption_norms: bool = False
+    can_access_prd_planning: bool = False
+    can_access_requirements: bool = False
+    can_access_plant_workflow: bool = False
+    can_access_inventory: bool = False
+    can_access_purchase: bool = False
+    can_access_purchase_orders: bool = False
+    can_access_goods_receipts: bool = False
 
     # Plant Access Flags
     can_access_plant_1: bool = False
@@ -52,7 +63,6 @@ class UserUpdate(BaseModel):
     roles: Optional[list[str]] = None
     reason: str = Field(default="Employee account updated by Super Admin", min_length=1, max_length=1024)
 
-    # Optional Feature Flags
     can_view_master_data: Optional[bool] = None
     can_edit_master_data: Optional[bool] = None
     can_view_planning: Optional[bool] = None
@@ -64,6 +74,18 @@ class UserUpdate(BaseModel):
     can_upload_grn: Optional[bool] = None
     can_view_reports: Optional[bool] = None
 
+    # Optional Feature Flags
+    can_access_masters: Optional[bool] = None
+    can_access_production_mappings: Optional[bool] = None
+    can_access_consumption_norms: Optional[bool] = None
+    can_access_prd_planning: Optional[bool] = None
+    can_access_requirements: Optional[bool] = None
+    can_access_plant_workflow: Optional[bool] = None
+    can_access_inventory: Optional[bool] = None
+    can_access_purchase: Optional[bool] = None
+    can_access_purchase_orders: Optional[bool] = None
+    can_access_goods_receipts: Optional[bool] = None
+
     # Optional Plant Access Flags
     can_access_plant_1: Optional[bool] = None
     can_access_plant_2: Optional[bool] = None
@@ -73,7 +95,7 @@ class UserUpdate(BaseModel):
 
 
 class UserResponse(UserPermissionFlags):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
 
     id: UUID
     username: str
@@ -82,3 +104,10 @@ class UserResponse(UserPermissionFlags):
     is_active: bool
     is_super_admin: bool
     roles: list[str]
+
+    @field_validator("roles", mode="before")
+    @classmethod
+    def extract_role_codes(cls, v):
+        if isinstance(v, list):
+            return [r.code if hasattr(r, "code") else str(r) for r in v]
+        return v

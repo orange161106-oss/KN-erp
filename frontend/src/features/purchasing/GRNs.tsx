@@ -61,12 +61,13 @@ const ALL_COLUMNS: {
 
 export default function GRNs() {
   const { user } = useAuth();
-  const canRead = !!user?.permissions.includes('purchase.grns.read');
-  const canImport = !!user?.permissions.includes('purchase.grns.import') || !!user?.permissions.includes('inventory.stock.import');
-  const canCreate = !!user?.permissions.includes('purchase.grns.create') || !!user?.roles.includes('ADMIN');
-  const canUpdate = !!user?.permissions.includes('purchase.grns.update') || !!user?.roles.includes('ADMIN');
-  const canDelete = !!user?.permissions.includes('purchase.grns.delete') || !!user?.roles.includes('ADMIN');
-  const canExport = !!user?.permissions.includes('purchase.grns.export') || canRead;
+  const can = (permission: string) => Boolean(user?.is_super_admin || user?.permissions.includes(permission));
+  const canRead = can('purchase.grns.read');
+  const canImport = can('purchase.grns.import');
+  const canCreate = can('purchase.grns.create');
+  const canUpdate = can('purchase.grns.update');
+  const canDelete = can('purchase.grns.delete');
+  const canExport = can('purchase.grns.export') || canRead;
 
   const [records, setRecords] = useState<WorkspaceRecord[]>([]);
   const [originalMap, setOriginalMap] = useState<Map<string, WorkspaceRecord>>(new Map());
