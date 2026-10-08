@@ -1,17 +1,17 @@
 import { apiClient } from './client';
 
 export interface UserPermissionFlags {
-  // 10 Granular Feature Flags
-  can_view_master_data: boolean;
-  can_edit_master_data: boolean;
-  can_view_planning: boolean;
-  can_run_calculations: boolean;
-  can_confirm_demand: boolean;
-  can_approve_extra_demand: boolean;
-  can_create_po: boolean;
-  can_approve_po: boolean;
-  can_upload_grn: boolean;
-  can_view_reports: boolean;
+  // 10 Granular Workflow Feature Flags
+  can_access_masters: boolean;
+  can_access_production_mappings: boolean;
+  can_access_consumption_norms: boolean;
+  can_access_prd_planning: boolean;
+  can_access_requirements: boolean;
+  can_access_plant_workflow: boolean;
+  can_access_inventory: boolean;
+  can_access_purchase: boolean;
+  can_access_purchase_orders: boolean;
+  can_access_goods_receipts: boolean;
 
   // 5 Plant Access Flags
   can_access_plant_1: boolean;

@@ -61,12 +61,13 @@ const ALL_COLUMNS: {
 
 export default function GRNs() {
   const { user } = useAuth();
-  const canRead = !!user?.permissions.includes('purchase.grns.read');
-  const canImport = !!user?.permissions.includes('purchase.grns.import') || !!user?.permissions.includes('inventory.stock.import');
-  const canCreate = !!user?.permissions.includes('purchase.grns.create') || !!user?.roles.includes('ADMIN');
-  const canUpdate = !!user?.permissions.includes('purchase.grns.update') || !!user?.roles.includes('ADMIN');
-  const canDelete = !!user?.permissions.includes('purchase.grns.delete') || !!user?.roles.includes('ADMIN');
-  const canExport = !!user?.permissions.includes('purchase.grns.export') || canRead;
+  const isAdmin = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN'));
+  const canRead = isAdmin || Boolean(user?.can_access_goods_receipts);
+  const canImport = isAdmin || Boolean(user?.can_access_goods_receipts);
+  const canCreate = isAdmin || Boolean(user?.can_access_goods_receipts);
+  const canUpdate = isAdmin || Boolean(user?.can_access_goods_receipts);
+  const canDelete = isAdmin || Boolean(user?.can_access_goods_receipts);
+  const canExport = canRead;
 
   const [records, setRecords] = useState<WorkspaceRecord[]>([]);
   const [originalMap, setOriginalMap] = useState<Map<string, WorkspaceRecord>>(new Map());

@@ -25,9 +25,10 @@ export default function Requirements() {
   const { user } = useAuth();
 
   // RBAC checks
-  const canRead = canPerform(user, 'requirements', 'read') || !!user?.permissions.includes('inventory.stock.read') || true;
-  const canExport = canPerform(user, 'requirements', 'export') || canRead;
-  const canRecalculate = canPerform(user, 'requirements', 'update') || !!user?.roles.includes('ADMIN') || !!user?.roles.includes('PLANNER');
+  const isAdmin = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN'));
+  const canRead = isAdmin || Boolean(user?.can_access_requirements);
+  const canExport = canRead;
+  const canRecalculate = isAdmin || Boolean(user?.can_access_requirements);
 
   // Data state
   const [records, setRecords] = useState<RequirementRecord[]>([]);

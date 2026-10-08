@@ -19,6 +19,19 @@ import PRDPlanning from './features/prd/PRDPlanning';
 import Requirements from './features/requirements/Requirements';
 import UserManagement from './features/admin/UserManagement';
 
+interface ProtectedRouteProps {
+  isAllowed: boolean;
+  children: React.ReactElement;
+  redirectTo?: string;
+}
+
+function ProtectedRoute({ isAllowed, children, redirectTo = '/dashboard' }: ProtectedRouteProps) {
+  if (!isAllowed) {
+    return <Navigate to={redirectTo} replace />;
+  }
+  return children;
+}
+
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen w-screen overflow-hidden">
@@ -44,28 +57,87 @@ function Application() {
     return <Login />;
   }
 
+  const isAdmin = Boolean(user.is_super_admin || user.roles.includes('ADMIN'));
+
+  const hasPlantAccess = Boolean(
+    user.can_access_plant_1 ||
+    user.can_access_plant_2 ||
+    user.can_access_plant_3 ||
+    user.can_access_plant_4 ||
+    user.can_access_plant_5
+  );
+
+  const canMasters = isAdmin || Boolean(user.can_access_masters);
+  const canMappings = isAdmin || Boolean(user.can_access_production_mappings);
+  const canNorms = isAdmin || Boolean(user.can_access_consumption_norms);
+  const canPrd = isAdmin || Boolean(user.can_access_prd_planning);
+  const canRequirements = isAdmin || Boolean(user.can_access_requirements);
+  const canPlantWorkflow = isAdmin || Boolean(user.can_access_plant_workflow) || hasPlantAccess;
+  const canInventory = isAdmin || Boolean(user.can_access_inventory);
+  const canPurchase = isAdmin || Boolean(user.can_access_purchase);
+  const canPurchaseOrders = isAdmin || Boolean(user.can_access_purchase_orders);
+  const canGRNs = isAdmin || Boolean(user.can_access_goods_receipts);
+  const canReports = isAdmin || Boolean(user.can_access_inventory || user.can_access_purchase || user.can_access_requirements);
+
   return (
     <BrowserRouter>
       <AppShell>
         <Routes>
           <Route path="/" element={<ExecutiveDashboard />} />
           <Route path="/dashboard" element={<ExecutiveDashboard />} />
-          <Route path="/masters/*" element={<Masters />} />
-          <Route path="/mappings/*" element={<ProductionMappings />} />
-          <Route path="/rules/*" element={<ConsumptionNorms />} />
-          <Route path="/prd" element={<PRDPlanning />} />
-          <Route path="/requirements" element={<Requirements />} />
-          <Route
-            path="/plant-workflow/*"
-            element={<PlantWorkflow currentUserId={user.id} />}
-          />
-          <Route path="/inventory" element={<Inventory />} />
-          <Route path="/purchase/*" element={<PurchaseApprovals currentUserId={user.id} />} />
-          <Route path="/purchase-orders" element={<PurchaseOrders />} />
-          <Route path="/grns" element={<GRNs />} />
-          <Route path="/alerts/*" element={<AlertsCenter />} />
-          <Route path="/reports" element={<InventoryPurchaseReports />} />
-          <Route path="/admin" element={<UserManagement />} />
+          
+          <Route path="/masters/*" element={
+            <ProtectedRoute isAllowed={canMasters}><Masters /></ProtectedRoute>
+          } />
+          
+          <Route path="/mappings/*" element={
+            <ProtectedRoute isAllowed={canMappings}><ProductionMappings /></ProtectedRoute>
+          } />
+          
+          <Route path="/rules/*" element={
+            <ProtectedRoute isAllowed={canNorms}><ConsumptionNorms /></ProtectedRoute>
+          } />
+          
+          <Route path="/prd" element={
+            <ProtectedRoute isAllowed={canPrd}><PRDPlanning /></ProtectedRoute>
+          } />
+          
+          <Route path="/requirements" element={
+            <ProtectedRoute isAllowed={canRequirements}><Requirements /></ProtectedRoute>
+          } />
+          
+          <Route path="/plant-workflow/*" element={
+            <ProtectedRoute isAllowed={canPlantWorkflow}><PlantWorkflow currentUserId={user.id} /></ProtectedRoute>
+          } />
+          
+          <Route path="/inventory" element={
+            <ProtectedRoute isAllowed={canInventory}><Inventory /></ProtectedRoute>
+          } />
+          
+          <Route path="/purchase/*" element={
+            <ProtectedRoute isAllowed={canPurchase}><PurchaseApprovals currentUserId={user.id} /></ProtectedRoute>
+          } />
+          
+          <Route path="/purchase-orders" element={
+            <ProtectedRoute isAllowed={canPurchaseOrders}><PurchaseOrders /></ProtectedRoute>
+          } />
+          
+          <Route path="/grns" element={
+            <ProtectedRoute isAllowed={canGRNs}><GRNs /></ProtectedRoute>
+          } />
+          
+          <Route path="/alerts/*" element={
+            <ProtectedRoute isAllowed={canReports}><AlertsCenter /></ProtectedRoute>
+          } />
+          
+          <Route path="/reports" element={
+            <ProtectedRoute isAllowed={canReports}><InventoryPurchaseReports /></ProtectedRoute>
+          } />
+          
+          <Route path="/admin" element={
+            <ProtectedRoute isAllowed={isAdmin}><UserManagement /></ProtectedRoute>
+          } />
+          
           <Route path="/status" element={<SystemStatus />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

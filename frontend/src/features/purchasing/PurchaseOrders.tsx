@@ -23,8 +23,9 @@ const button = 'rounded bg-brand-navy text-white px-4 py-2 disabled:opacity-50';
 
 export default function PurchaseOrders() {
   const { user } = useAuth();
-  const can = (permission: string) => !!user?.permissions.includes(permission);
-  const canRead = can('purchase.orders.read');
+  const isAdmin = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN'));
+  const canRead = isAdmin || Boolean(user?.can_access_purchase_orders || user?.can_access_purchase);
+  const can = (_perm: string) => isAdmin || Boolean(user?.can_access_purchase_orders);
   const [orders, setOrders] = useState<Order[]>([]);
   const [demands, setDemands] = useState<Demand[]>([]);
   const [selected, setSelected] = useState<Order | null>(null);

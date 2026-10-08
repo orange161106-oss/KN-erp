@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import type { UserResponse, UserCreate, UserUpdate } from '../../api/users';
 import { usersApi } from '../../api/users';
 import { User, Shield, Edit, Plus, X, Building, Key, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { TableSkeleton } from '../../components/ui/Skeleton';
 
 const BASE_ROLES = [
   { code: 'PLANNER', label: 'Planner' },
@@ -13,16 +14,16 @@ const BASE_ROLES = [
 ];
 
 const FEATURE_FLAGS: { key: keyof UserCreate; label: string; desc: string }[] = [
-  { key: 'can_view_master_data', label: 'View Master Data', desc: 'Can view items, customers, suppliers' },
-  { key: 'can_edit_master_data', label: 'Edit Master Data', desc: 'Can modify items, customers, suppliers' },
-  { key: 'can_view_planning', label: 'View Planning Workspace', desc: 'Access PRD orders & requirement planning' },
-  { key: 'can_run_calculations', label: 'Run Requirement Calculations', desc: 'Execute requirement engines' },
-  { key: 'can_confirm_demand', label: 'Confirm Plant Demand', desc: 'Confirm plant-wise requirements' },
-  { key: 'can_approve_extra_demand', label: 'Approve Extra Demand', desc: 'Approve additional/override requests' },
-  { key: 'can_create_po', label: 'Create Purchase Orders', desc: 'Generate draft POs' },
-  { key: 'can_approve_po', label: 'Approve Purchase Orders', desc: 'Approve issued POs' },
-  { key: 'can_upload_grn', label: 'Upload GRN', desc: 'Post goods receipt notes' },
-  { key: 'can_view_reports', label: 'View Analytical Reports', desc: 'Access reports & executive dashboard' },
+  { key: 'can_access_masters', label: '1. Masters', desc: 'Access units, consumables, and suppliers masters' },
+  { key: 'can_access_production_mappings', label: '2. Production Mappings', desc: 'Access process and equipment mappings' },
+  { key: 'can_access_consumption_norms', label: '3. Consumption Norms', desc: 'Access consumption norms and rules' },
+  { key: 'can_access_prd_planning', label: '4. PRD / Planning', desc: 'Access PRD planning workspace' },
+  { key: 'can_access_requirements', label: '5. Requirements', desc: 'Access consumable requirements workspace' },
+  { key: 'can_access_plant_workflow', label: '6. Plant Workflow', desc: 'Access plant confirmation workflow' },
+  { key: 'can_access_inventory', label: '7. Inventory', desc: 'Access inventory management' },
+  { key: 'can_access_purchase', label: '8. Purchase', desc: 'Access purchase requests & planning' },
+  { key: 'can_access_purchase_orders', label: '9. Purchase Orders', desc: 'Access purchase orders management' },
+  { key: 'can_access_goods_receipts', label: '10. Goods Receipts', desc: 'Access goods receipt notes (GRN)' },
 ];
 
 const PLANT_FLAGS: { key: keyof UserCreate; label: string }[] = [
@@ -36,6 +37,7 @@ const PLANT_FLAGS: { key: keyof UserCreate; label: string }[] = [
 export default function UserManagement() {
   const [users, setUsers] = useState<UserResponse[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [editingUser, setEditingUser] = useState<UserResponse | null>(null);
@@ -49,16 +51,16 @@ export default function UserManagement() {
   const [selectedRole, setSelectedRole] = useState('PLANNER');
   const [isActive, setIsActive] = useState(true);
   const [permissions, setPermissions] = useState<Record<string, boolean>>({
-    can_view_master_data: false,
-    can_edit_master_data: false,
-    can_view_planning: false,
-    can_run_calculations: false,
-    can_confirm_demand: false,
-    can_approve_extra_demand: false,
-    can_create_po: false,
-    can_approve_po: false,
-    can_upload_grn: false,
-    can_view_reports: false,
+    can_access_masters: false,
+    can_access_production_mappings: false,
+    can_access_consumption_norms: false,
+    can_access_prd_planning: false,
+    can_access_requirements: false,
+    can_access_plant_workflow: false,
+    can_access_inventory: false,
+    can_access_purchase: false,
+    can_access_purchase_orders: false,
+    can_access_goods_receipts: false,
     can_access_plant_1: false,
     can_access_plant_2: false,
     can_access_plant_3: false,
@@ -93,16 +95,16 @@ export default function UserManagement() {
     setSelectedRole('PLANNER');
     setIsActive(true);
     setPermissions({
-      can_view_master_data: false,
-      can_edit_master_data: false,
-      can_view_planning: false,
-      can_run_calculations: false,
-      can_confirm_demand: false,
-      can_approve_extra_demand: false,
-      can_create_po: false,
-      can_approve_po: false,
-      can_upload_grn: false,
-      can_view_reports: false,
+      can_access_masters: false,
+      can_access_production_mappings: false,
+      can_access_consumption_norms: false,
+      can_access_prd_planning: false,
+      can_access_requirements: false,
+      can_access_plant_workflow: false,
+      can_access_inventory: false,
+      can_access_purchase: false,
+      can_access_purchase_orders: false,
+      can_access_goods_receipts: false,
       can_access_plant_1: false,
       can_access_plant_2: false,
       can_access_plant_3: false,
@@ -136,6 +138,7 @@ export default function UserManagement() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsSaving(true);
     try {
       const finalPermissions = { ...permissions };
       if (selectedRole !== 'PLANT_INCHARGE') {
@@ -169,6 +172,8 @@ export default function UserManagement() {
       fetchUsers();
     } catch (err: any) {
       alert(err.message || 'Failed to save user');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -201,28 +206,27 @@ export default function UserManagement() {
       )}
 
       {/* Users Table */}
-      <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
-        <table className="w-full text-left text-sm text-gray-600">
-          <thead className="bg-gray-50 text-gray-700 border-b border-gray-200 uppercase text-xs font-semibold">
-            <tr>
-              <th className="py-3 px-4">Employee / Username</th>
-              <th className="py-3 px-4">Base Role</th>
-              <th className="py-3 px-4">Status</th>
-              <th className="py-3 px-4">Plant Access</th>
-              <th className="py-3 px-4">Active Feature Flags</th>
-              <th className="py-3 px-4 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {loading ? (
+      {loading ? (
+        <TableSkeleton columns={6} rows={5} />
+      ) : (
+        <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+          <table className="w-full text-left text-sm text-gray-600">
+            <thead className="bg-gray-50 text-gray-700 border-b border-gray-200 uppercase text-xs font-semibold">
               <tr>
-                <td colSpan={6} className="text-center py-8 text-gray-400">Loading user accounts...</td>
+                <th className="py-3 px-4">Employee / Username</th>
+                <th className="py-3 px-4">Base Role</th>
+                <th className="py-3 px-4">Status</th>
+                <th className="py-3 px-4">Plant Access</th>
+                <th className="py-3 px-4">Active Feature Flags</th>
+                <th className="py-3 px-4 text-right">Actions</th>
               </tr>
-            ) : users.filter(u => !u.is_super_admin).length === 0 ? (
-              <tr>
-                <td colSpan={6} className="text-center py-8 text-gray-400">No users found.</td>
-              </tr>
-            ) : (
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {users.filter(u => !u.is_super_admin).length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="text-center py-8 text-gray-400">No users found.</td>
+                </tr>
+              ) : (
               users.filter(u => !u.is_super_admin).map(u => {
                 const activeFeatureCount = FEATURE_FLAGS.filter(f => Boolean(u[f.key as keyof UserResponse])).length;
                 const activePlants = PLANT_FLAGS.filter(p => Boolean(u[p.key as keyof UserResponse])).map(p => p.label);
@@ -296,6 +300,7 @@ export default function UserManagement() {
           </tbody>
         </table>
       </div>
+      )}
 
       {/* Form Modal */}
       {isModalOpen && (
@@ -358,21 +363,34 @@ export default function UserManagement() {
                   </label>
                   <div className="relative">
                     <input
-                      type={showPassword ? "text" : "password"}
+                      type={showPassword ? 'text' : 'password'}
                       required={!editingUser}
-                      autoComplete="new-password"
+                      autoComplete={showPassword ? 'off' : 'new-password'}
                       value={password}
                       onChange={e => setPassword(e.target.value)}
                       className="w-full border border-gray-300 rounded px-3 py-2 pr-10 text-sm focus:ring-indigo-500 focus:border-indigo-500"
                       placeholder="••••••••"
                     />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(prev => !prev)}
-                      className="absolute right-2.5 top-2.5 text-gray-400 hover:text-gray-600 focus:outline-none"
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
+                    {password.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setShowPassword(prev => !prev);
+                        }}
+                        onMouseDown={(e) => e.preventDefault()}
+                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-500 hover:text-gray-700 cursor-pointer pointer-events-auto z-20 focus:outline-none"
+                        style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showPassword ? (
+                          <EyeOff className="w-4 h-4 cursor-pointer pointer-events-auto" />
+                        ) : (
+                          <Eye className="w-4 h-4 cursor-pointer pointer-events-auto" />
+                        )}
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -459,9 +477,32 @@ export default function UserManagement() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700"
+                  disabled={isSaving}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
-                  Save User & Matrix
+                  {isSaving && (
+                    <svg
+                      className="animate-spin -ml-1 mr-1 h-4 w-4 text-white"
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      ></circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                  )}
+                  <span>{isSaving ? 'Saving...' : 'Save User & Matrix'}</span>
                 </button>
               </div>
             </form>

@@ -33,17 +33,17 @@ class CurrentUser(BaseModel):
     roles: list[str]
     permissions: list[str]
 
-    # Granular Feature Access
-    can_view_master_data: bool = False
-    can_edit_master_data: bool = False
-    can_view_planning: bool = False
-    can_run_calculations: bool = False
-    can_confirm_demand: bool = False
-    can_approve_extra_demand: bool = False
-    can_create_po: bool = False
-    can_approve_po: bool = False
-    can_upload_grn: bool = False
-    can_view_reports: bool = False
+    # Granular Feature Access (10 Workflow Flags)
+    can_access_masters: bool = False
+    can_access_production_mappings: bool = False
+    can_access_consumption_norms: bool = False
+    can_access_prd_planning: bool = False
+    can_access_requirements: bool = False
+    can_access_plant_workflow: bool = False
+    can_access_inventory: bool = False
+    can_access_purchase: bool = False
+    can_access_purchase_orders: bool = False
+    can_access_goods_receipts: bool = False
 
     # Plant Scope Access
     can_access_plant_1: bool = False

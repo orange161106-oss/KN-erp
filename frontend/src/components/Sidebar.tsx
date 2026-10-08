@@ -7,15 +7,15 @@ export default function Sidebar() {
 
   if (!user) return null;
 
-  const canSee = (allowedRoles: string[]) =>
-    user.is_super_admin || user.roles.includes('ADMIN') || allowedRoles.some(role => user.roles.includes(role));
+  const isAdmin = Boolean(user.is_super_admin || user.roles.includes('ADMIN'));
 
-  const canReadMasters =
-    user.is_super_admin ||
-    Boolean(user.can_view_master_data) ||
-    ['units', 'consumables', 'suppliers'].some(resource =>
-      user.permissions.includes(`masters.${resource}.read`)
-    );
+  const hasPlantAccess = Boolean(
+    user.can_access_plant_1 ||
+    user.can_access_plant_2 ||
+    user.can_access_plant_3 ||
+    user.can_access_plant_4 ||
+    user.can_access_plant_5
+  );
 
   const isActive = (path: string) => {
     if (path === '/') return location.pathname === '/' || location.pathname === '/dashboard';
@@ -28,6 +28,19 @@ export default function Sidebar() {
         ? 'bg-brand-steel text-white font-semibold shadow-xs'
         : 'text-gray-200 hover:text-white hover:bg-white/10'
     }`;
+
+  // 1-to-1 Feature Flag authorization checks for each section
+  const showMasters = isAdmin || Boolean(user.can_access_masters);
+  const showMappings = isAdmin || Boolean(user.can_access_production_mappings);
+  const showNorms = isAdmin || Boolean(user.can_access_consumption_norms);
+  const showPrdPlanning = isAdmin || Boolean(user.can_access_prd_planning);
+  const showRequirements = isAdmin || Boolean(user.can_access_requirements);
+  const showPlantWorkflow = isAdmin || Boolean(user.can_access_plant_workflow) || hasPlantAccess;
+  const showInventory = isAdmin || Boolean(user.can_access_inventory);
+  const showPurchase = isAdmin || Boolean(user.can_access_purchase);
+  const showPurchaseOrders = isAdmin || Boolean(user.can_access_purchase_orders);
+  const showGoodsReceipts = isAdmin || Boolean(user.can_access_goods_receipts);
+  const showReports = isAdmin || Boolean(user.can_access_inventory || user.can_access_purchase || user.can_access_requirements);
 
   return (
     <aside className="w-64 bg-brand-navy text-white flex flex-col select-none">
@@ -43,96 +56,90 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex-1 p-3 space-y-1 flex flex-col overflow-y-auto">
-        {/* 1. Dashboard */}
+        {/* 1. Dashboard - Always Visible */}
         <Link to="/" className={navItemClass('/')}>
           Dashboard
         </Link>
 
         {/* 2. Masters */}
-        {canReadMasters && (
+        {showMasters && (
           <Link to="/masters" className={navItemClass('/masters')}>
             Masters
           </Link>
         )}
 
         {/* 3. Production Mappings */}
-        {(canReadMasters || canSee(['PLANNER'])) && (
+        {showMappings && (
           <Link to="/mappings" className={navItemClass('/mappings')}>
             Production Mappings
           </Link>
         )}
 
         {/* 4. Consumption Norms */}
-        {(canReadMasters || canSee(['PLANNER'])) && (
+        {showNorms && (
           <Link to="/rules" className={navItemClass('/rules')}>
             Consumption Norms
           </Link>
         )}
 
         {/* 5. PRD / Planning */}
-        {(canSee(['PLANNER', 'ADMIN', 'PLANT_INCHARGE', 'PURCHASE', 'STORE', 'MANAGEMENT']) ||
-          user.permissions.includes('prd.records.read') || Boolean(user.can_view_planning)) && (
+        {showPrdPlanning && (
           <Link to="/prd" className={navItemClass('/prd')}>
             PRD / Planning
           </Link>
         )}
 
         {/* 6. Requirements */}
-        {(canSee(['PLANT_INCHARGE', 'ADMIN', 'PLANNER', 'PURCHASE', 'STORE', 'MANAGEMENT']) ||
-          user.permissions.includes('requirements.records.read') || Boolean(user.can_run_calculations)) && (
+        {showRequirements && (
           <Link to="/requirements" className={navItemClass('/requirements')}>
             Requirements
           </Link>
         )}
 
         {/* 7. Plant Workflow */}
-        {(canSee(['PLANT_INCHARGE', 'ADMIN', 'PLANNER']) || Boolean(user.can_confirm_demand)) && (
+        {showPlantWorkflow && (
           <Link to="/plant-workflow" className={navItemClass('/plant-workflow')}>
             Plant Workflow
           </Link>
         )}
 
         {/* 8. Inventory */}
-        {(user.permissions.includes('inventory.stock.read') || canSee(['STORE', 'ADMIN', 'PLANNER'])) && (
+        {showInventory && (
           <Link to="/inventory" className={navItemClass('/inventory')}>
             Inventory
           </Link>
         )}
 
         {/* 9. Purchase */}
-        {(canSee(['PURCHASE', 'APPROVER', 'MANAGEMENT', 'ADMIN']) ||
-          user.permissions.includes('purchasing:view') || Boolean(user.can_approve_po)) && (
+        {showPurchase && (
           <Link to="/purchase" className={navItemClass('/purchase')}>
             Purchase
           </Link>
         )}
 
         {/* 10. Purchase Orders */}
-        {(user.permissions.includes('purchase.orders.read') || canSee(['PURCHASE', 'ADMIN', 'PLANNER']) || Boolean(user.can_create_po)) && (
+        {showPurchaseOrders && (
           <Link to="/purchase-orders" className={navItemClass('/purchase-orders')}>
             Purchase orders
           </Link>
         )}
 
         {/* 11. Goods Receipts */}
-        {(user.permissions.includes('purchase.grns.read') || canSee(['STORE', 'ADMIN', 'PURCHASE']) || Boolean(user.can_upload_grn)) && (
+        {showGoodsReceipts && (
           <Link to="/grns" className={navItemClass('/grns')}>
             Goods receipts
           </Link>
         )}
 
         {/* 12. Alerts */}
-        {(canSee(['STORE', 'PLANT_INCHARGE', 'ADMIN', 'PLANNER']) || user.permissions.includes('alerts:view')) && (
+        {showReports && (
           <Link to="/alerts" className={navItemClass('/alerts')}>
             Alerts
           </Link>
         )}
 
         {/* 13. Reports */}
-        {(user.permissions.includes('reports.inventory.read') ||
-          user.permissions.includes('reports.purchase.read') ||
-          Boolean(user.can_view_reports) ||
-          canSee(['MANAGEMENT', 'ADMIN'])) && (
+        {showReports && (
           <Link to="/reports" className={navItemClass('/reports')}>
             Reports
           </Link>
@@ -140,7 +147,7 @@ export default function Sidebar() {
 
         {/* Bottom System & Admin Navigation */}
         <div className="mt-auto pt-3 border-t border-brand-steel/40 flex flex-col space-y-1">
-          {(user.roles.includes('ADMIN') || user.is_super_admin) && (
+          {isAdmin && (
             <Link to="/admin" className={navItemClass('/admin')}>
               Administration
             </Link>

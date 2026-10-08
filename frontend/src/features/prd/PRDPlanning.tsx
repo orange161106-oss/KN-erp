@@ -27,12 +27,13 @@ export default function PRDPlanning() {
   const { user } = useAuth();
 
   // RBAC checks
-  const canRead = canPerform(user, 'prd', 'read') || !!user?.permissions.includes('prd.plan.read') || true;
-  const canCreate = canPerform(user, 'prd', 'create') || !!user?.permissions.includes('prd.plan.create') || !!user?.roles.includes('ADMIN');
-  const canUpdate = canPerform(user, 'prd', 'update') || !!user?.permissions.includes('prd.plan.update') || !!user?.roles.includes('ADMIN');
-  const canDelete = canPerform(user, 'prd', 'delete') || !!user?.permissions.includes('prd.plan.delete') || !!user?.roles.includes('ADMIN');
-  const canImport = canPerform(user, 'prd', 'import') || !!user?.permissions.includes('prd.plan.import') || !!user?.roles.includes('ADMIN');
-  const canExport = canPerform(user, 'prd', 'export') || canRead;
+  const isAdmin = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN'));
+  const canRead = isAdmin || Boolean(user?.can_access_prd_planning);
+  const canCreate = isAdmin || Boolean(user?.can_access_prd_planning);
+  const canUpdate = isAdmin || Boolean(user?.can_access_prd_planning);
+  const canDelete = isAdmin || Boolean(user?.can_access_prd_planning);
+  const canImport = isAdmin || Boolean(user?.can_access_prd_planning);
+  const canExport = canRead;
 
   // Data state
   const [records, setRecords] = useState<PRDRecord[]>([]);
