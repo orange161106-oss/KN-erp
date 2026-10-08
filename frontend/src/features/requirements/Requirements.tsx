@@ -40,6 +40,7 @@ export default function Requirements() {
   // Selection state
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [selectedCell, setSelectedCell] = useState<{ rowId: string; colKey: keyof RequirementRecord & string } | null>(null);
+  const [selectedAuditRow, setSelectedAuditRow] = useState<RequirementRecord | null>(null);
 
   // Filters state
   const [searchQuery, setSearchQuery] = useState('');
@@ -278,6 +279,24 @@ export default function Requirements() {
         width: 'w-52',
         align: 'left',
       },
+      {
+        key: 'id' as any,
+        label: 'Audit Trail',
+        width: 'w-32',
+        align: 'center',
+        render: (_val, row) => (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setSelectedAuditRow(row);
+            }}
+            className="px-2 py-0.5 rounded text-2xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition-colors shadow-2xs"
+          >
+            🔍 Audit Trail
+          </button>
+        ),
+      },
     ],
     []
   );
@@ -437,6 +456,144 @@ export default function Requirements() {
           />
         </div>
       </div>
+
+      {/* Audit & Formula Explanation Modal */}
+      {selectedAuditRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-lg shadow-xl border border-gray-200 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gray-50/70">
+              <div>
+                <h3 className="text-base font-bold text-gray-900">
+                  Consumable Requirement Calculation Audit
+                </h3>
+                <p className="text-xs text-gray-500">
+                  Deterministic KNL Formula Traceability & Net Available Supply Netting
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedAuditRow(null)}
+                className="text-gray-400 hover:text-gray-600 font-bold text-lg p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5 text-xs text-gray-700">
+              {/* Item Card */}
+              <div className="p-4 bg-indigo-50/60 rounded-md border border-indigo-100 flex justify-between items-start">
+                <div>
+                  <span className="text-2xs font-bold uppercase tracking-wider text-indigo-700">
+                    Consumable / Item ID
+                  </span>
+                  <div className="text-base font-bold text-indigo-950 mt-0.5">
+                    {selectedAuditRow.consumable_code}
+                  </div>
+                  <div className="text-xs text-gray-600 mt-0.5">{selectedAuditRow.description}</div>
+                </div>
+                <div className="text-right space-y-1">
+                  <div className="text-xs font-semibold text-gray-800">
+                    Plant: <span className="font-bold text-indigo-900">{selectedAuditRow.plant}</span>
+                  </div>
+                  <div className="text-xs text-gray-600">
+                    Process: <span className="font-semibold text-gray-800">{selectedAuditRow.process}</span>
+                  </div>
+                  <div className="text-2xs text-gray-500">
+                    Unit: <span className="font-bold">{selectedAuditRow.unit}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Numerical Metrics Matrix */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <div className="p-3 bg-gray-50 border border-gray-200 rounded">
+                  <div className="text-2xs font-semibold text-gray-500 uppercase">1. Gross Requirement</div>
+                  <div className="text-base font-bold text-gray-900 mt-1">
+                    {selectedAuditRow.required_qty} <span className="text-2xs font-normal text-gray-500">{selectedAuditRow.unit}</span>
+                  </div>
+                  <div className="text-3xs text-gray-400 mt-0.5">PRD Plan Qty × Consumption Norm</div>
+                </div>
+
+                <div className="p-3 bg-gray-50 border border-gray-200 rounded">
+                  <div className="text-2xs font-semibold text-gray-500 uppercase">2. Current Stock</div>
+                  <div className="text-base font-bold text-gray-900 mt-1">
+                    {selectedAuditRow.stock_qty} <span className="text-2xs font-normal text-gray-500">{selectedAuditRow.unit}</span>
+                  </div>
+                  <div className="text-3xs text-gray-400 mt-0.5">Physical closing stock on hand</div>
+                </div>
+
+                <div className="p-3 bg-gray-50 border border-gray-200 rounded">
+                  <div className="text-2xs font-semibold text-gray-500 uppercase">3. Confirmed Incoming PO</div>
+                  <div className="text-base font-bold text-blue-700 mt-1">
+                    {selectedAuditRow.po_pending_qty} <span className="text-2xs font-normal text-gray-500">{selectedAuditRow.unit}</span>
+                  </div>
+                  <div className="text-3xs text-gray-400 mt-0.5">On order (not yet received)</div>
+                </div>
+
+                <div className="p-3 bg-blue-50/70 border border-blue-200 rounded">
+                  <div className="text-2xs font-semibold text-blue-800 uppercase">4. Available Supply</div>
+                  <div className="text-base font-bold text-blue-900 mt-1">
+                    {(parseFloat(selectedAuditRow.stock_qty) + parseFloat(selectedAuditRow.po_pending_qty)).toFixed(4)}{' '}
+                    <span className="text-2xs font-normal text-gray-500">{selectedAuditRow.unit}</span>
+                  </div>
+                  <div className="text-3xs text-blue-600 mt-0.5">Current Stock + Confirmed PO</div>
+                </div>
+
+                <div className="p-3 bg-amber-50/70 border border-amber-200 rounded">
+                  <div className="text-2xs font-semibold text-amber-800 uppercase">5. Min Stock Level (MSL)</div>
+                  <div className="text-base font-bold text-amber-900 mt-1">
+                    {selectedAuditRow.msl} <span className="text-2xs font-normal text-gray-500">{selectedAuditRow.unit}</span>
+                  </div>
+                  <div className="text-3xs text-amber-600 mt-0.5">Safety cover per stock policy</div>
+                </div>
+
+                <div className={`p-3 border rounded ${
+                  selectedAuditRow.status === 'Critical shortage'
+                    ? 'bg-red-50/80 border-red-200'
+                    : selectedAuditRow.status === 'Low'
+                    ? 'bg-amber-50/80 border-amber-200'
+                    : 'bg-emerald-50/80 border-emerald-200'
+                }`}>
+                  <div className="text-2xs font-semibold uppercase">6. Net Shortage</div>
+                  <div className={`text-base font-bold mt-1 ${
+                    selectedAuditRow.status === 'Critical shortage'
+                      ? 'text-red-700'
+                      : selectedAuditRow.status === 'Low'
+                      ? 'text-amber-700'
+                      : 'text-emerald-700'
+                  }`}>
+                    {selectedAuditRow.shortage_qty} <span className="text-2xs font-normal text-gray-500">{selectedAuditRow.unit}</span>
+                  </div>
+                  <div className="text-3xs text-gray-500 mt-0.5">Status: {selectedAuditRow.status}</div>
+                </div>
+              </div>
+
+              {/* Traceability Audit Trail */}
+              <div className="border border-gray-200 rounded p-4 bg-gray-50 space-y-2.5">
+                <div className="font-bold text-gray-800 uppercase tracking-wide text-2xs">
+                  End-to-End Calculation Flow:
+                </div>
+                <div className="text-xs space-y-1 font-mono text-gray-600 bg-white p-3 rounded border border-gray-200">
+                  <div>• PRD Plan Production Qty × Approved Consumption Norm = Gross Requirement ({selectedAuditRow.required_qty})</div>
+                  <div>• Available Supply = Current Stock ({selectedAuditRow.stock_qty}) + Incoming PO ({selectedAuditRow.po_pending_qty})</div>
+                  <div>• Net Purchase Need = max(0, Gross Requirement - Available Supply)</div>
+                  <div>• Shortage Status: {selectedAuditRow.remarks || 'Sufficient stock on hand'}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-3 border-t border-gray-200 bg-gray-50 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedAuditRow(null)}
+                className="px-4 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded font-medium text-xs"
+              >
+                Close Audit View
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

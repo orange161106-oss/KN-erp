@@ -308,7 +308,7 @@ def calculate_planning_version_requirements(
                 rule_version=selected_norm.version,
                 parameters=selected_norm.parameters,
                 production_quantity=item.planned_quantity,
-                rounding_policy=RoundingPolicy(selected_norm.rounding_policy),
+                rounding_policy=RoundingPolicy.parse(selected_norm.rounding_policy),
                 rounding_precision=selected_norm.rounding_precision,
                 unit=calc_unit,
             )

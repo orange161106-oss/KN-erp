@@ -4,6 +4,33 @@ import type { ConsumptionNorm, EvaluationResult } from './types';
 import { useAuth } from '../auth/context';
 import NormSetup from './NormSetup';
 
+const RULE_TYPES = [
+  'PRODUCTION_RATE',
+  'AREA_COVERAGE',
+  'PACKING_RATIO',
+  'TOOL_LIFE',
+  'FIXED_QUANTITY',
+  'PLANT_REQUEST',
+  'MAINTENANCE',
+  'MIN_MAX',
+] as const;
+
+const ROUNDING_POLICIES = [
+  'NONE',
+  'ROUND',
+  'ROUNDUP',
+  'ROUNDDOWN',
+  'CEILING',
+  'FLOOR',
+  'ROUND_HALF_UP',
+] as const;
+
+interface MasterItem {
+  id: string;
+  code: string;
+  name?: string;
+}
+
 export default function ConsumptionNorms() {
   const { user } = useAuth();
   const canEdit = Boolean(user?.is_super_admin || user?.permissions.includes('masters.write'));
@@ -11,6 +38,10 @@ export default function ConsumptionNorms() {
   const [norms, setNorms] = useState<ConsumptionNorm[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Filtering
+  const [selectedRuleTypeFilter, setSelectedRuleTypeFilter] = useState<string>('ALL');
+  const [searchTerm, setSearchTerm] = useState('');
 
   // Evaluation Simulator State
   const [evalNormId, setEvalNormId] = useState('');
@@ -21,8 +52,46 @@ export default function ConsumptionNorms() {
   const [evalDate, setEvalDate] = useState('');
   const [requestedQty, setRequestedQty] = useState('');
 
+  // Create Norm Modal State
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [consumablesList, setConsumablesList] = useState<MasterItem[]>([]);
+  const [unitsList, setUnitsList] = useState<MasterItem[]>([]);
+  const [createLoading, setCreateLoading] = useState(false);
+  const [createError, setCreateError] = useState('');
+
+  // Form State
+  const [formRuleType, setFormRuleType] = useState<string>('PRODUCTION_RATE');
+  const [formConsumableId, setFormConsumableId] = useState('');
+  const [formUnitId, setFormUnitId] = useState('');
+  const [formRoundingPolicy, setFormRoundingPolicy] = useState('NONE');
+  const [formRoundingPrecision, setFormRoundingPrecision] = useState(2);
+  const [formEffectiveFrom, setFormEffectiveFrom] = useState(
+    new Date().toISOString().split('T')[0]
+  );
+
+  // Dynamic Parameter Form State
+  const [paramRate, setParamRate] = useState('0.005');
+  const [paramScrapFactor, setParamScrapFactor] = useState('0');
+  const [paramAreaPerUnit, setParamAreaPerUnit] = useState('2.5');
+  const [paramCoverage, setParamCoverage] = useState('100');
+  const [paramLossFactor, setParamLossFactor] = useState('0');
+  const [paramUnitsPerPack, setParamUnitsPerPack] = useState('24');
+  const [paramMaterialPerPack, setParamMaterialPerPack] = useState('1');
+  const [paramOpsPerUnit, setParamOpsPerUnit] = useState('1');
+  const [paramToolLife, setParamToolLife] = useState('2000');
+  const [paramQuantity, setParamQuantity] = useState('50');
+  const [paramDefaultQty, setParamDefaultQty] = useState('100');
+  const [paramFixedAmount, setParamFixedAmount] = useState('20');
+  const [paramVariableRate, setParamVariableRate] = useState('0.002');
+  const [paramMslDays, setParamMslDays] = useState('10');
+  const [paramWorkingDays, setParamWorkingDays] = useState('26');
+  const [paramLeadTimeDays, setParamLeadTimeDays] = useState('0');
+  const [paramMoq, setParamMoq] = useState('675');
+  const [paramOrderMultiple, setParamOrderMultiple] = useState('0');
+
   useEffect(() => {
     loadNorms();
+    loadMasters();
   }, []);
 
   async function loadNorms(preferredId?: string) {
@@ -36,6 +105,25 @@ export default function ConsumptionNorms() {
       setError(err instanceof Error ? err.message : 'Failed to load consumption norms');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadMasters() {
+    try {
+      const consRes = await apiClient.get<{ items: MasterItem[] }>('/api/v1/masters/consumables?limit=100');
+      if (consRes?.items) setConsumablesList(consRes.items);
+    } catch {
+      // Non-blocking if permissions restrict master access
+    }
+
+    try {
+      const unitRes = await apiClient.get<{ items: MasterItem[] }>('/api/v1/masters/units?limit=100');
+      if (unitRes?.items) {
+        setUnitsList(unitRes.items);
+        if (unitRes.items.length > 0) setFormUnitId(unitRes.items[0].id);
+      }
+    } catch {
+      // Non-blocking
     }
   }
 
@@ -77,15 +165,117 @@ export default function ConsumptionNorms() {
     }
   }
 
+  function buildParameters(): Record<string, any> {
+    switch (formRuleType) {
+      case 'PRODUCTION_RATE':
+        return { rate: paramRate, scrap_factor: paramScrapFactor };
+      case 'AREA_COVERAGE':
+        return {
+          area_per_unit: paramAreaPerUnit,
+          coverage: paramCoverage,
+          loss_factor: paramLossFactor,
+        };
+      case 'PACKING_RATIO':
+        return {
+          units_per_pack: paramUnitsPerPack,
+          material_per_pack: paramMaterialPerPack,
+        };
+      case 'TOOL_LIFE':
+        return {
+          operations_per_unit: paramOpsPerUnit,
+          tool_life: paramToolLife,
+        };
+      case 'FIXED_QUANTITY':
+        return { quantity: paramQuantity };
+      case 'PLANT_REQUEST':
+        return { default_quantity: paramDefaultQty };
+      case 'MAINTENANCE':
+        return {
+          fixed_amount: paramFixedAmount,
+          variable_rate: paramVariableRate,
+        };
+      case 'MIN_MAX':
+        return {
+          msl_days: paramMslDays,
+          working_days: paramWorkingDays,
+          lead_time_days: paramLeadTimeDays,
+          moq: paramMoq,
+          order_multiple: paramOrderMultiple,
+        };
+      default:
+        return {};
+    }
+  }
+
+  async function handleCreateNorm(e: React.FormEvent) {
+    e.preventDefault();
+    if (!formConsumableId) {
+      setCreateError('Please select a consumable.');
+      return;
+    }
+    if (!formUnitId) {
+      setCreateError('Please select a measurement unit.');
+      return;
+    }
+
+    setCreateLoading(true);
+    setCreateError('');
+    try {
+      const payload = {
+        rule_type: formRuleType,
+        consumable_id: formConsumableId,
+        unit_id: formUnitId,
+        parameters: buildParameters(),
+        rounding_policy: formRoundingPolicy,
+        rounding_precision: formRoundingPrecision,
+        effective_from: formEffectiveFrom,
+      };
+
+      await apiClient.post('/api/v1/consumption-norms', payload);
+      setShowCreateModal(false);
+      await loadNorms();
+    } catch (err: unknown) {
+      setCreateError(err instanceof Error ? err.message : 'Failed to create consumption norm');
+    } finally {
+      setCreateLoading(false);
+    }
+  }
+
+  const filteredNorms = norms.filter(n => {
+    if (selectedRuleTypeFilter !== 'ALL' && n.rule_type !== selectedRuleTypeFilter) {
+      return false;
+    }
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      const code = (n.consumable_code || '').toLowerCase();
+      const name = (n.consumable_name || '').toLowerCase();
+      if (!code.includes(term) && !name.includes(term)) return false;
+    }
+    return true;
+  });
+
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Consumption Rules & Norms</h2>
-          <p className="text-sm text-gray-500 mt-1">
-            Configure approved consumable usage rules, then check the calculated requirement.
-          </p>
-        </div>
+  <h2 className="text-2xl font-bold text-gray-900 tracking-tight">
+    Consumption Rules & Norms
+  </h2>
+  <p className="text-sm text-gray-500 mt-0.5">
+    KNL-Verified Consumable Calculation Engine: 8 Deterministic Rule Families with Full Traceability
+  </p>
+</div>
+        <button
+          type="button"
+          onClick={() => {
+            setShowCreateModal(true);
+            setCreateError('');
+          }}
+          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-sm font-semibold shadow-xs flex items-center gap-1.5"
+        >
+          <span>＋</span> New Consumption Norm
+        </button>
       </div>
 
       {canEdit && <NormSetup onCreated={async id => { await loadNorms(id); setEvalResult(null); setEvalError(''); }} />}
@@ -205,7 +395,51 @@ export default function ConsumptionNorms() {
 
       {/* Norms Directory Table */}
       <div className="space-y-4">
-        <h3 className="text-lg font-semibold text-gray-800">Active & Historical Norms</h3>
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <h3 className="text-lg font-semibold text-gray-800">Rule Master Registry ({filteredNorms.length})</h3>
+
+          <div className="flex items-center gap-3 w-full sm:w-auto">
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              placeholder="🔍 Search consumable..."
+              className="border border-gray-300 rounded px-3 py-1.5 text-xs bg-white w-full sm:w-48"
+            />
+          </div>
+        </div>
+
+        {/* Rule Type Filter Tabs */}
+        <div className="flex flex-wrap gap-1 border-b border-gray-200 pb-2">
+          <button
+            type="button"
+            onClick={() => setSelectedRuleTypeFilter('ALL')}
+            className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+              selectedRuleTypeFilter === 'ALL'
+                ? 'bg-indigo-600 text-white font-bold'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            All Rules ({norms.length})
+          </button>
+          {RULE_TYPES.map(rt => {
+            const count = norms.filter(n => n.rule_type === rt).length;
+            return (
+              <button
+                key={rt}
+                type="button"
+                onClick={() => setSelectedRuleTypeFilter(rt)}
+                className={`px-2.5 py-1 rounded text-2xs font-semibold transition-colors ${
+                  selectedRuleTypeFilter === rt
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {rt} ({count})
+              </button>
+            );
+          })}
+        </div>
 
         {loading && <div className="text-gray-500 py-4 text-center">Loading consumption norms…</div>}
         {error && <div className="text-red-700 p-3 bg-red-50 rounded border border-red-200">{error}</div>}
@@ -225,14 +459,14 @@ export default function ConsumptionNorms() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {norms.length === 0 ? (
+              {filteredNorms.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-4 py-6 text-center text-gray-500">
-                    No consumption norms configured.
+                    No consumption norms match the selected filter.
                   </td>
                 </tr>
               ) : (
-                norms.map(norm => (
+                filteredNorms.map(norm => (
                   <tr key={norm.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 font-medium text-gray-900">
                       {norm.consumable_code || norm.consumable_id}
@@ -241,7 +475,7 @@ export default function ConsumptionNorms() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <span className="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-100 text-indigo-800">
+                      <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-indigo-100 text-indigo-800">
                         {norm.rule_type}
                       </span>
                     </td>
@@ -280,6 +514,392 @@ export default function ConsumptionNorms() {
           </table>
         </div>
       </div>
+
+      {/* Create Consumption Norm Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-lg shadow-xl border border-gray-200 max-w-xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gray-50/70">
+              <div>
+                <h3 className="text-base font-bold text-gray-900">Define New Consumption Norm</h3>
+                <p className="text-xs text-gray-500">
+                  Versioned deterministic business rule foundation
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(false)}
+                className="text-gray-400 hover:text-gray-600 font-bold text-lg p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateNorm} className="p-6 space-y-4 text-xs">
+              {createError && (
+                <div className="p-3 bg-red-50 text-red-700 rounded border border-red-200">
+                  {createError}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-gray-700 mb-1">Rule Type *</label>
+                  <select
+                    value={formRuleType}
+                    onChange={e => setFormRuleType(e.target.value)}
+                    className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-xs bg-white font-medium text-indigo-950"
+                  >
+                    {RULE_TYPES.map(rt => (
+                      <option key={rt} value={rt}>{rt}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-medium text-gray-700 mb-1">Measurement Unit *</label>
+                  {unitsList.length > 0 ? (
+                    <select
+                      value={formUnitId}
+                      onChange={e => setFormUnitId(e.target.value)}
+                      className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-xs bg-white"
+                      required
+                    >
+                      <option value="">Select Unit</option>
+                      {unitsList.map(u => (
+                        <option key={u.id} value={u.id}>{u.code} {u.name ? `(${u.name})` : ''}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={formUnitId}
+                      onChange={e => setFormUnitId(e.target.value)}
+                      placeholder="Unit ID or Code"
+                      required
+                      className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-xs"
+                    />
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-medium text-gray-700 mb-1">Consumable *</label>
+                {consumablesList.length > 0 ? (
+                  <select
+                    value={formConsumableId}
+                    onChange={e => setFormConsumableId(e.target.value)}
+                    className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-xs bg-white"
+                    required
+                  >
+                    <option value="">Select Consumable</option>
+                    {consumablesList.map(c => (
+                      <option key={c.id} value={c.id}>{c.code} - {c.name || 'Consumable'}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={formConsumableId}
+                    onChange={e => setFormConsumableId(e.target.value)}
+                    placeholder="Consumable UUID"
+                    required
+                    className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-xs"
+                  />
+                )}
+              </div>
+
+              {/* Dynamic Parameter Fields */}
+              <div className="p-3.5 bg-gray-50 border border-gray-200 rounded-md space-y-3">
+                <div className="font-bold text-indigo-900 uppercase tracking-wide text-2xs">
+                  {formRuleType} Parameters
+                </div>
+
+                {formRuleType === 'PRODUCTION_RATE' && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">Consumption Rate *</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramRate}
+                        onChange={e => setParamRate(e.target.value)}
+                        required
+                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
+                        placeholder="e.g. 0.005"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">Scrap Factor (e.g. 0.05)</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramScrapFactor}
+                        onChange={e => setParamScrapFactor(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {formRuleType === 'AREA_COVERAGE' && (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">Area / Unit (Sq.ft)</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramAreaPerUnit}
+                        onChange={e => setParamAreaPerUnit(e.target.value)}
+                        required
+                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">Coverage (Sq.ft/kg) *</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramCoverage}
+                        onChange={e => setParamCoverage(e.target.value)}
+                        required
+                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">Loss Factor</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramLossFactor}
+                        onChange={e => setParamLossFactor(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {formRuleType === 'PACKING_RATIO' && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">Pieces Per Pack *</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramUnitsPerPack}
+                        onChange={e => setParamUnitsPerPack(e.target.value)}
+                        required
+                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">Material Factor / Pack</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramMaterialPerPack}
+                        onChange={e => setParamMaterialPerPack(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {formRuleType === 'TOOL_LIFE' && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">Operations Per Part</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramOpsPerUnit}
+                        onChange={e => setParamOpsPerUnit(e.target.value)}
+                        required
+                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">Rated Tool Life (Operations) *</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramToolLife}
+                        onChange={e => setParamToolLife(e.target.value)}
+                        required
+                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {formRuleType === 'FIXED_QUANTITY' && (
+                  <div>
+                    <label className="block text-gray-600 mb-0.5">Fixed Periodic Quantity *</label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={paramQuantity}
+                      onChange={e => setParamQuantity(e.target.value)}
+                      required
+                      className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
+                    />
+                  </div>
+                )}
+
+                {formRuleType === 'PLANT_REQUEST' && (
+                  <div>
+                    <label className="block text-gray-600 mb-0.5">Default Fallback Quantity</label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={paramDefaultQty}
+                      onChange={e => setParamDefaultQty(e.target.value)}
+                      required
+                      className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
+                    />
+                  </div>
+                )}
+
+                {formRuleType === 'MAINTENANCE' && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">Fixed Baseline Amount</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramFixedAmount}
+                        onChange={e => setParamFixedAmount(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">Variable Wear Rate</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramVariableRate}
+                        onChange={e => setParamVariableRate(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {formRuleType === 'MIN_MAX' && (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">MSL Days (e.g. 10)</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramMslDays}
+                        onChange={e => setParamMslDays(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">Working Days (26)</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramWorkingDays}
+                        onChange={e => setParamWorkingDays(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">MOQ</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramMoq}
+                        onChange={e => setParamMoq(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">Lead Time Days</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramLeadTimeDays}
+                        onChange={e => setParamLeadTimeDays(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-600 mb-0.5">Pack Multiple</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={paramOrderMultiple}
+                        onChange={e => setParamOrderMultiple(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Rounding & Effective Date */}
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="block font-medium text-gray-700 mb-1">Rounding Policy</label>
+                  <select
+                    value={formRoundingPolicy}
+                    onChange={e => setFormRoundingPolicy(e.target.value)}
+                    className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs bg-white"
+                  >
+                    {ROUNDING_POLICIES.map(rp => (
+                      <option key={rp} value={rp}>{rp}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-medium text-gray-700 mb-1">Precision</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="6"
+                    value={formRoundingPrecision}
+                    onChange={e => setFormRoundingPrecision(Number(e.target.value))}
+                    className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-medium text-gray-700 mb-1">Effective Date</label>
+                  <input
+                    type="date"
+                    value={formEffectiveFrom}
+                    onChange={e => setFormEffectiveFrom(e.target.value)}
+                    required
+                    className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-gray-200 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateModal(false)}
+                  className="px-3.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded font-medium text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={createLoading}
+                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded font-medium text-xs disabled:opacity-50"
+                >
+                  {createLoading ? 'Creating…' : 'Save & Publish Norm'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

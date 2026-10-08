@@ -8,6 +8,20 @@ class PlantRequestHandler(BaseRuleHandler):
         params = PlantRequestParams.model_validate(input_data.parameters)
         steps: list[CalculationStep] = []
 
+        dept_requests = input_data.department_requests or params.department_requests
+        if dept_requests:
+            total_dept = sum(dept_requests.values(), Decimal("0"))
+            items_str = " + ".join(f"{dept} ({qty})" for dept, qty in dept_requests.items())
+            steps.append(
+                CalculationStep(
+                    step_number=1,
+                    description=f"Sum plant and department requests: {items_str}",
+                    formula=" + ".join(str(qty) for qty in dept_requests.values()),
+                    result=total_dept,
+                )
+            )
+            return total_dept, steps
+
         if input_data.requested_quantity is not None:
             raw_qty = input_data.requested_quantity
             steps.append(
