@@ -5,19 +5,21 @@ import StatusForm from './StatusForm';
 import SupplierMappings from './SupplierMappings';
 import ReferenceName from './ReferenceName';
 import { useApi } from './useApi';
+import { useDebouncedValue } from './useDebouncedValue';
 import { endpoint, titles } from './types';
 import type { Master, Page, Resource } from './types';
 import { TableSkeleton } from '../../components/ui/Skeleton';
 export default function MasterPage({ resource }: { resource: Resource }) {
   const { user } = useAuth();
   const [search, setSearch] = useState('');
+  const settledSearch = useDebouncedValue(search);
   const [status, setStatus] = useState('true');
   const [offset, setOffset] = useState(0);
   const [revision, setRevision] = useState(0);
   const [form, setForm] = useState<{ kind: 'create' | 'edit' | 'status'; record?: Master } | null>(null);
   const [supplier, setSupplier] = useState<Master | null>(null);
   const canWrite = Boolean(user?.is_super_admin || user?.permissions.includes(`masters.${resource}.write`));
-  const url = `${endpoint(resource)}?limit=25&offset=${offset}&q=${encodeURIComponent(search)}${status ? `&is_active=${status}` : ''}`;
+  const url = `${endpoint(resource)}?limit=25&offset=${offset}&q=${encodeURIComponent(settledSearch)}${status ? `&is_active=${status}` : ''}`;
   const result = useApi<Page<Master>>(url, revision);
   const saved = () => { setForm(null); setSupplier(null); setRevision(value => value + 1); };
   return <section className="space-y-5">

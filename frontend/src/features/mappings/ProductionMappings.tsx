@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiClient } from '../../api/client';
 import type {
   MappingValidationReport,
@@ -12,6 +12,10 @@ export default function ProductionMappings() {
   const [activeTab, setActiveTab] = useState<'traceability' | 'productPlants' | 'processConsumables' | 'validation'>('traceability');
   const [products, setProducts] = useState<MasterOption[]>([]);
   const [consumables, setConsumables] = useState<MasterOption[]>([]);
+  const loadedTabs = useRef(new Set<string>());
+  const resolutionRequest = useRef(0);
+  const [lookupLoading, setLookupLoading] = useState(true);
+  const [lookupError, setLookupError] = useState('');
 
   // Traceability State
   const [selectedProductId, setSelectedProductId] = useState<string>('');
@@ -22,6 +26,7 @@ export default function ProductionMappings() {
   // Product-Plant State
   const [productPlants, setProductPlants] = useState<ProductPlant[]>([]);
   const [ppLoading, setPpLoading] = useState(false);
+  const [ppLoaded, setPpLoaded] = useState(false);
   const [ppError, setPpError] = useState('');
   const [showAddPp, setShowAddPp] = useState(false);
   const [newPpProduct, setNewPpProduct] = useState('');
@@ -32,6 +37,7 @@ export default function ProductionMappings() {
   // PPC State
   const [ppcList, setPpcList] = useState<ProductProcessConsumable[]>([]);
   const [ppcLoading, setPpcLoading] = useState(false);
+  const [ppcLoaded, setPpcLoaded] = useState(false);
   const [ppcError, setPpcError] = useState('');
   const [showAddPpc, setShowAddPpc] = useState(false);
   const [newPpcProduct, setNewPpcProduct] = useState('');
@@ -45,31 +51,43 @@ export default function ProductionMappings() {
 
   // Initial Data Load
   useEffect(() => {
-    loadMasterLookups();
-    loadProductPlants();
-    loadPpcList();
+    void loadMasterLookups();
   }, []);
 
+  // Hidden tabs should not compete with the screen the user is opening.
+  useEffect(() => {
+    if (loadedTabs.current.has(activeTab)) return;
+    loadedTabs.current.add(activeTab);
+    if (activeTab === 'productPlants') void loadProductPlants();
+    if (activeTab === 'processConsumables') {
+      void loadPpcList();
+      void loadConsumables();
+    }
+  }, [activeTab]);
+
   async function loadMasterLookups() {
+    setLookupLoading(true);
+    setLookupError('');
     try {
       const prods = await apiClient.get<Array<{ id: string; code: string; name: string }>>('/api/v1/masters/products');
       if (Array.isArray(prods)) {
         setProducts(prods.map(p => ({ id: p.id, code: p.code, name: `${p.code} - ${p.name}` })));
-        if (prods.length > 0 && !selectedProductId) {
-          setSelectedProductId(prods[0].id);
-        }
+        if (prods.length > 0) setSelectedProductId(current => current || prods[0].id);
       }
-    } catch {
-      // Ignore fallback if masters list fails
-    }
+    } catch (error) {
+      setLookupError(error instanceof Error ? error.message : 'Failed to load products');
+    } finally { setLookupLoading(false); }
+  }
 
+  async function loadConsumables() {
     try {
       const cons = await apiClient.get<{ items: Array<{ id: string; code: string; name: string }> }>('/api/v1/masters/consumables?limit=100');
       if (cons && Array.isArray(cons.items)) {
         setConsumables(cons.items.map(c => ({ id: c.id, code: c.code, name: `${c.code} - ${c.name}` })));
       }
-    } catch {
-      // Fallback
+    } catch (error) {
+      loadedTabs.current.delete('processConsumables');
+      setPpcError(error instanceof Error ? error.message : 'Failed to load consumable choices');
     }
   }
 
@@ -79,7 +97,9 @@ export default function ProductionMappings() {
     try {
       const res = await apiClient.get<ProductPlant[]>('/api/v1/mappings/product-plants');
       setProductPlants(res);
+      setPpLoaded(true);
     } catch (err: unknown) {
+      loadedTabs.current.delete('productPlants');
       setPpError(err instanceof Error ? err.message : 'Failed to load product plants');
     } finally {
       setPpLoading(false);
@@ -92,7 +112,9 @@ export default function ProductionMappings() {
     try {
       const res = await apiClient.get<ProductProcessConsumable[]>('/api/v1/mappings/product-process-consumables');
       setPpcList(res);
+      setPpcLoaded(true);
     } catch (err: unknown) {
+      loadedTabs.current.delete('processConsumables');
       setPpcError(err instanceof Error ? err.message : 'Failed to load consumable mappings');
     } finally {
       setPpcLoading(false);
@@ -101,21 +123,25 @@ export default function ProductionMappings() {
 
   // Load Resolution Tree when selectedProductId changes
   useEffect(() => {
-    if (!selectedProductId) return;
-    loadResolution(selectedProductId);
-  }, [selectedProductId]);
+    if (!selectedProductId || activeTab !== 'traceability') return;
+    void loadResolution(selectedProductId);
+    return () => { resolutionRequest.current += 1; };
+  }, [selectedProductId, activeTab]);
 
   async function loadResolution(productId: string) {
+    const attempt = ++resolutionRequest.current;
     setResolutionLoading(true);
     setResolutionError('');
     try {
       const data = await apiClient.get<ProductResolutionResponse>(`/api/v1/mappings/resolve/${productId}`);
-      setResolution(data);
+      if (attempt === resolutionRequest.current) setResolution(data);
     } catch (err: unknown) {
-      setResolutionError(err instanceof Error ? err.message : 'Failed to load resolution tree');
-      setResolution(null);
+      if (attempt === resolutionRequest.current) {
+        setResolutionError(err instanceof Error ? err.message : 'Failed to load resolution tree');
+        setResolution(null);
+      }
     } finally {
-      setResolutionLoading(false);
+      if (attempt === resolutionRequest.current) setResolutionLoading(false);
     }
   }
 
@@ -223,7 +249,7 @@ export default function ProductionMappings() {
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
             }`}
           >
-            Product-Plant Routes ({productPlants.length})
+            Product-Plant Routes{ppLoaded ? ` (${productPlants.length})` : ''}
           </button>
           <button
             onClick={() => setActiveTab('processConsumables')}
@@ -233,7 +259,7 @@ export default function ProductionMappings() {
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
             }`}
           >
-            Process Consumables ({ppcList.length})
+            Process Consumables{ppcLoaded ? ` (${ppcList.length})` : ''}
           </button>
           <button
             onClick={() => {
@@ -250,6 +276,9 @@ export default function ProductionMappings() {
           </button>
         </nav>
       </div>
+
+      {lookupLoading && <p role="status">Loading product choices…</p>}
+      {lookupError && <div role="alert" className="text-red-700">{lookupError} <button className="underline" onClick={() => void loadMasterLookups()}>Retry products</button></div>}
 
       {/* TAB 1: Traceability & Resolution (Gate Demonstration) */}
       {activeTab === 'traceability' && (
@@ -466,7 +495,7 @@ export default function ProductionMappings() {
           )}
 
           {ppLoading && <div className="text-gray-500 py-4 text-center">Loading product plant mappings…</div>}
-          {ppError && <div className="text-red-700 p-3 bg-red-50 rounded border border-red-200">{ppError}</div>}
+          {ppError && <div role="alert" className="text-red-700 p-3 bg-red-50 rounded border border-red-200">{ppError} <button className="underline" onClick={() => void loadProductPlants()}>Retry mappings</button></div>}
 
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm">
             <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -592,7 +621,7 @@ export default function ProductionMappings() {
           )}
 
           {ppcLoading && <div className="text-gray-500 py-4 text-center">Loading consumable mappings…</div>}
-          {ppcError && <div className="text-red-700 p-3 bg-red-50 rounded border border-red-200">{ppcError}</div>}
+          {ppcError && <div role="alert" className="text-red-700 p-3 bg-red-50 rounded border border-red-200">{ppcError} <button className="underline" onClick={() => { void loadPpcList(); void loadConsumables(); }}>Retry consumables</button></div>}
 
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm">
             <table className="min-w-full divide-y divide-gray-200 text-sm">

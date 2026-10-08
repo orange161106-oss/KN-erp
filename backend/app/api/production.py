@@ -1,7 +1,7 @@
 from app.security.permissions import require_permissions
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import select
 
 # ADJUST THIS IMPORT based on your project's auth setup to secure the routes
@@ -133,7 +133,7 @@ def create_route(route_in: RouteCreate, db: Session = Depends(get_db)):
 
 @router.get("/routes", response_model=list[RouteResponse], dependencies=[Depends(require_permissions('masters.read'))])
 def get_routes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return db.scalars(select(Route).where(Route.is_active == True).offset(skip).limit(limit)).all()
+    return db.scalars(select(Route).options(selectinload(Route.steps)).where(Route.is_active == True).offset(skip).limit(limit)).all()
 
 @router.get("/routes/{route_id}", response_model=RouteResponse, dependencies=[Depends(require_permissions('masters.read'))])
 def get_route(route_id: UUID, db: Session = Depends(get_db)):

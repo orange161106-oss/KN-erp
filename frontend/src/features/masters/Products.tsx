@@ -20,6 +20,7 @@ export default function Products() {
   const [uploadName, setUploadName] = useState('');
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [manual, setManual] = useState<Product>({ code: '', name: '', uom: '', item_id: '', part_number: '' });
   const sourceChoices = [
     { field: 'item_id', label: 'Item ID' },
@@ -31,8 +32,19 @@ export default function Products() {
     descriptions: candidates.filter(p => !p.name.trim()).length,
     units: candidates.filter(p => !p.uom.trim()).length,
   };
-  const load = async () => { setProducts(await apiClient.get<Product[]>('/api/v1/masters/products')); };
-  useEffect(() => { void load().catch(e => { setFailed(true); setMessage(e.message); }); }, []);
+  const load = async () => {
+    setLoading(true);
+    try { setProducts(await apiClient.get<Product[]>('/api/v1/masters/products')); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => {
+    let cancelled = false;
+    void apiClient.get<Product[]>('/api/v1/masters/products')
+      .then(data => { if (!cancelled) setProducts(data); })
+      .catch(error => { if (!cancelled) { setFailed(true); setMessage(error.message); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
   const act = async (operation: () => Promise<void>) => {
     setBusy(true); setMessage(''); setFailed(false);
     try { await operation(); } catch (e) { setFailed(true); setMessage(e instanceof Error ? e.message : 'Operation failed.'); }
@@ -132,8 +144,9 @@ export default function Products() {
         </>}
       </div>
     </>}
+    {loading && <p role="status">Loading products…</p>}
     <table className="w-full"><thead><tr><th>Code</th><th>Item ID</th><th>Part No.</th><th>Description</th><th>Unit</th></tr></thead>
       <tbody>{products.map(p => <tr key={p.id}><td>{p.code}</td><td>{p.item_id}</td><td>{p.part_number}</td><td>{p.name}</td><td>{p.uom}</td></tr>)}</tbody></table>
-    {!products.length && <p>No products yet. An authorised master-data editor can create one or review a workbook.</p>}
+    {!loading && !failed && !products.length && <p>No products yet. An authorised master-data editor can create one or review a workbook.</p>}
   </section>;
 }

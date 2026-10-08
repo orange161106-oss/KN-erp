@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { useApi } from './useApi';
+import { useDebouncedValue } from './useDebouncedValue';
 import { endpoint } from './types';
 import type { Master, Page, Resource } from './types';
 export default function ReferenceSelect({ resource, label, value, onChange }: {
   resource: Resource; label: string; value: string; onChange: (value: string) => void;
 }) {
   const [search, setSearch] = useState('');
-  const options = useApi<Page<Master>>(`${endpoint(resource)}?is_active=true&limit=100&q=${encodeURIComponent(search)}`);
+  const settledSearch = useDebouncedValue(search);
+  const options = useApi<Page<Master>>(`${endpoint(resource)}?is_active=true&limit=100&q=${encodeURIComponent(settledSearch)}`);
   return <fieldset className="space-y-2">
     <label className="block text-sm">Search {label.toLowerCase()}<input value={search} onChange={e => setSearch(e.target.value)} maxLength={100} className="mt-1 w-full border rounded p-2" /></label>
     <label className="block text-sm font-medium">{label}<select aria-label={label} required value={value} onChange={e => onChange(e.target.value)} className="mt-1 w-full border rounded p-2">

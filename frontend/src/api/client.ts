@@ -1,7 +1,10 @@
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 let accessToken: string | null = null;
 let unauthorizedHandler: (() => void) | null = null;
-export function setAccessToken(value: string | null) { accessToken = value; }
+// Share simultaneous reads (including React StrictMode's repeated effects).
+// Completed responses are not cached, so new reads see current permissions/data.
+const pendingReads = new Map<string, Promise<unknown>>();
+export function setAccessToken(value: string | null) { pendingReads.clear(); accessToken = value; }
 export function setUnauthorizedHandler(handler: (() => void) | null) { unauthorizedHandler = handler; }
 
 export class ApiError extends Error {
@@ -40,11 +43,28 @@ async function request<T>(endpoint: string, method: string, data?: unknown, time
   }
   return response.status === 204 ? undefined as T : response.json();
 }
+function read<T>(endpoint: string): Promise<T> {
+  const pending = pendingReads.get(endpoint);
+  if (pending) return pending as Promise<T>;
+  const operation = request<T>(endpoint, 'GET');
+  pendingReads.set(endpoint, operation);
+  const clear = () => { if (pendingReads.get(endpoint) === operation) pendingReads.delete(endpoint); };
+  // Both outcomes release the entry; failures can always be retried.
+  void operation.then(clear, clear);
+  return operation;
+}
+
+async function write<T>(endpoint: string, method: string, data?: unknown, timeoutMs?: number): Promise<T> {
+  pendingReads.clear();
+  try { return await request<T>(endpoint, method, data, timeoutMs); }
+  finally { pendingReads.clear(); }
+}
+
 export const apiClient = {
-  get: <T>(endpoint: string) => request<T>(endpoint, 'GET'),
-  post: <T>(endpoint: string, data: unknown) => request<T>(endpoint, 'POST', data),
-  put: <T>(endpoint: string, data: unknown) => request<T>(endpoint, 'PUT', data),
-  patch: <T>(endpoint: string, data: unknown) => request<T>(endpoint, 'PATCH', data),
-  delete: <T>(endpoint: string, data?: unknown) => request<T>(endpoint, 'DELETE', data),
-  postFormData: <T>(endpoint: string, data: FormData, timeoutMs?: number) => request<T>(endpoint, 'POST', data, timeoutMs),
+  get: read,
+  post: <T>(endpoint: string, data: unknown) => write<T>(endpoint, 'POST', data),
+  put: <T>(endpoint: string, data: unknown) => write<T>(endpoint, 'PUT', data),
+  patch: <T>(endpoint: string, data: unknown) => write<T>(endpoint, 'PATCH', data),
+  delete: <T>(endpoint: string, data?: unknown) => write<T>(endpoint, 'DELETE', data),
+  postFormData: <T>(endpoint: string, data: FormData, timeoutMs?: number) => write<T>(endpoint, 'POST', data, timeoutMs),
 };

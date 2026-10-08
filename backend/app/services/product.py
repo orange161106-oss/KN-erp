@@ -2,7 +2,7 @@ from typing import Sequence
 from uuid import UUID, uuid4
 
 from sqlalchemy import insert, inspect, select
-from sqlalchemy.exc import NoSuchTableError
+from sqlalchemy.exc import NoSuchTableError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.models.masters import Product
@@ -28,8 +28,18 @@ def require_product_schema(db: Session) -> None:
 
 
 def list_products(db: Session) -> Sequence[Product]:
-    require_product_schema(db)
-    return db.scalars(select(Product).order_by(Product.code)).all()
+    # Read the data directly rather than reflecting PostgreSQL metadata on
+    # every page load. Preserve the actionable error for an unmigrated schema.
+    try:
+        return db.scalars(select(Product).order_by(Product.code)).all()
+    except ProgrammingError as error:
+        if getattr(error.orig, 'sqlstate', None) not in {'42703', '42P01'}:
+            raise
+        raise ApplicationError(
+            'PRODUCT_DATABASE_SETUP_REQUIRED',
+            'Product database setup is incomplete. Ask the administrator to apply the pending database updates, then retry loading products.',
+            503,
+        ) from None
 
 
 def get_product_by_code(db: Session, code: str) -> Product | None:
