@@ -29,18 +29,18 @@ export default function Sidebar() {
         : 'text-gray-200 hover:text-white hover:bg-white/10'
     }`;
 
-  // 1-to-1 Feature Flag authorization checks for each section
-  const showMasters = isAdmin || Boolean(user.can_access_masters);
-  const showMappings = isAdmin || Boolean(user.can_access_production_mappings);
-  const showNorms = isAdmin || Boolean(user.can_access_consumption_norms);
-  const showPrdPlanning = isAdmin || Boolean(user.can_access_prd_planning);
-  const showRequirements = isAdmin || Boolean(user.can_access_requirements);
-  const showPlantWorkflow = isAdmin || Boolean(user.can_access_plant_workflow) || hasPlantAccess;
-  const showInventory = isAdmin || Boolean(user.can_access_inventory);
-  const showPurchase = isAdmin || Boolean(user.can_access_purchase);
-  const showPurchaseOrders = isAdmin || Boolean(user.can_access_purchase_orders);
-  const showGoodsReceipts = isAdmin || Boolean(user.can_access_goods_receipts);
-  const showReports = isAdmin || Boolean(user.can_access_inventory || user.can_access_purchase || user.can_access_requirements);
+  // 1-to-1 CRUD Read authorization checks for each section
+  const showMasters = isAdmin || Boolean(user.masters_read);
+  const showMappings = isAdmin || Boolean(user.production_mappings_read);
+  const showNorms = isAdmin || Boolean(user.consumption_norms_read);
+  const showPrdPlanning = isAdmin || Boolean(user.prd_planning_read);
+  const showRequirements = isAdmin || Boolean(user.requirements_read);
+  const showPlantWorkflow = isAdmin || Boolean(user.plant_workflow_read) || hasPlantAccess;
+  const showInventory = isAdmin || Boolean(user.inventory_read);
+  const showPurchase = isAdmin || Boolean(user.purchase_read);
+  const showPurchaseOrders = isAdmin || Boolean(user.purchase_orders_read);
+  const showGoodsReceipts = isAdmin || Boolean(user.goods_receipts_read);
+  const showReports = isAdmin || Boolean(user.inventory_read || user.purchase_read || user.requirements_read);
 
   return (
     <aside className="w-64 bg-brand-navy text-white flex flex-col select-none">

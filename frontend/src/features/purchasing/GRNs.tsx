@@ -62,11 +62,11 @@ const ALL_COLUMNS: {
 export default function GRNs() {
   const { user } = useAuth();
   const isAdmin = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN'));
-  const canRead = isAdmin || Boolean(user?.can_access_goods_receipts);
-  const canImport = isAdmin || Boolean(user?.can_access_goods_receipts);
-  const canCreate = isAdmin || Boolean(user?.can_access_goods_receipts);
-  const canUpdate = isAdmin || Boolean(user?.can_access_goods_receipts);
-  const canDelete = isAdmin || Boolean(user?.can_access_goods_receipts);
+  const canRead = isAdmin || Boolean(user?.goods_receipts_read);
+  const canCreate = isAdmin || Boolean(user?.goods_receipts_create);
+  const canImport = canCreate;
+  const canUpdate = isAdmin || Boolean(user?.goods_receipts_update);
+  const canDelete = isAdmin || Boolean(user?.goods_receipts_delete);
   const canExport = canRead;
 
   const [records, setRecords] = useState<WorkspaceRecord[]>([]);

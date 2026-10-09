@@ -5,17 +5,56 @@ from app.security.identity import normalize_username
 
 
 class UserPermissionFlags(BaseModel):
-    # 10 Workflow Feature Flags
-    can_access_masters: bool = False
-    can_access_production_mappings: bool = False
-    can_access_consumption_norms: bool = False
-    can_access_prd_planning: bool = False
-    can_access_requirements: bool = False
-    can_access_plant_workflow: bool = False
-    can_access_inventory: bool = False
-    can_access_purchase: bool = False
-    can_access_purchase_orders: bool = False
-    can_access_goods_receipts: bool = False
+    # 40-Point Granular CRUD Permission Matrix
+    masters_read: bool = False
+    masters_create: bool = False
+    masters_update: bool = False
+    masters_delete: bool = False
+
+    production_mappings_read: bool = False
+    production_mappings_create: bool = False
+    production_mappings_update: bool = False
+    production_mappings_delete: bool = False
+
+    consumption_norms_read: bool = False
+    consumption_norms_create: bool = False
+    consumption_norms_update: bool = False
+    consumption_norms_delete: bool = False
+
+    prd_planning_read: bool = False
+    prd_planning_create: bool = False
+    prd_planning_update: bool = False
+    prd_planning_delete: bool = False
+
+    requirements_read: bool = False
+    requirements_create: bool = False
+    requirements_update: bool = False
+    requirements_delete: bool = False
+
+    plant_workflow_read: bool = False
+    plant_workflow_create: bool = False
+    plant_workflow_update: bool = False
+    plant_workflow_delete: bool = False
+
+    inventory_read: bool = False
+    inventory_create: bool = False
+    inventory_update: bool = False
+    inventory_delete: bool = False
+
+    purchase_read: bool = False
+    purchase_create: bool = False
+    purchase_update: bool = False
+    purchase_delete: bool = False
+
+    purchase_orders_read: bool = False
+    purchase_orders_create: bool = False
+    purchase_orders_update: bool = False
+    purchase_orders_delete: bool = False
+
+    goods_receipts_read: bool = False
+    goods_receipts_create: bool = False
+    goods_receipts_update: bool = False
+    goods_receipts_delete: bool = False
 
     # Plant Access Flags
     can_access_plant_1: bool = False
@@ -49,17 +88,56 @@ class UserUpdate(BaseModel):
     is_active: Optional[bool] = None
     roles: Optional[list[str]] = None
 
-    # Optional Feature Flags
-    can_access_masters: Optional[bool] = None
-    can_access_production_mappings: Optional[bool] = None
-    can_access_consumption_norms: Optional[bool] = None
-    can_access_prd_planning: Optional[bool] = None
-    can_access_requirements: Optional[bool] = None
-    can_access_plant_workflow: Optional[bool] = None
-    can_access_inventory: Optional[bool] = None
-    can_access_purchase: Optional[bool] = None
-    can_access_purchase_orders: Optional[bool] = None
-    can_access_goods_receipts: Optional[bool] = None
+    # Optional 40 CRUD Permissions
+    masters_read: Optional[bool] = None
+    masters_create: Optional[bool] = None
+    masters_update: Optional[bool] = None
+    masters_delete: Optional[bool] = None
+
+    production_mappings_read: Optional[bool] = None
+    production_mappings_create: Optional[bool] = None
+    production_mappings_update: Optional[bool] = None
+    production_mappings_delete: Optional[bool] = None
+
+    consumption_norms_read: Optional[bool] = None
+    consumption_norms_create: Optional[bool] = None
+    consumption_norms_update: Optional[bool] = None
+    consumption_norms_delete: Optional[bool] = None
+
+    prd_planning_read: Optional[bool] = None
+    prd_planning_create: Optional[bool] = None
+    prd_planning_update: Optional[bool] = None
+    prd_planning_delete: Optional[bool] = None
+
+    requirements_read: Optional[bool] = None
+    requirements_create: Optional[bool] = None
+    requirements_update: Optional[bool] = None
+    requirements_delete: Optional[bool] = None
+
+    plant_workflow_read: Optional[bool] = None
+    plant_workflow_create: Optional[bool] = None
+    plant_workflow_update: Optional[bool] = None
+    plant_workflow_delete: Optional[bool] = None
+
+    inventory_read: Optional[bool] = None
+    inventory_create: Optional[bool] = None
+    inventory_update: Optional[bool] = None
+    inventory_delete: Optional[bool] = None
+
+    purchase_read: Optional[bool] = None
+    purchase_create: Optional[bool] = None
+    purchase_update: Optional[bool] = None
+    purchase_delete: Optional[bool] = None
+
+    purchase_orders_read: Optional[bool] = None
+    purchase_orders_create: Optional[bool] = None
+    purchase_orders_update: Optional[bool] = None
+    purchase_orders_delete: Optional[bool] = None
+
+    goods_receipts_read: Optional[bool] = None
+    goods_receipts_create: Optional[bool] = None
+    goods_receipts_update: Optional[bool] = None
+    goods_receipts_delete: Optional[bool] = None
 
     # Optional Plant Access Flags
     can_access_plant_1: Optional[bool] = None

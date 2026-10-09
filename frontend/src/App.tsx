@@ -67,17 +67,17 @@ function Application() {
     user.can_access_plant_5
   );
 
-  const canMasters = isAdmin || Boolean(user.can_access_masters);
-  const canMappings = isAdmin || Boolean(user.can_access_production_mappings);
-  const canNorms = isAdmin || Boolean(user.can_access_consumption_norms);
-  const canPrd = isAdmin || Boolean(user.can_access_prd_planning);
-  const canRequirements = isAdmin || Boolean(user.can_access_requirements);
-  const canPlantWorkflow = isAdmin || Boolean(user.can_access_plant_workflow) || hasPlantAccess;
-  const canInventory = isAdmin || Boolean(user.can_access_inventory);
-  const canPurchase = isAdmin || Boolean(user.can_access_purchase);
-  const canPurchaseOrders = isAdmin || Boolean(user.can_access_purchase_orders);
-  const canGRNs = isAdmin || Boolean(user.can_access_goods_receipts);
-  const canReports = isAdmin || Boolean(user.can_access_inventory || user.can_access_purchase || user.can_access_requirements);
+  const canMasters = isAdmin || Boolean(user.masters_read);
+  const canMappings = isAdmin || Boolean(user.production_mappings_read);
+  const canNorms = isAdmin || Boolean(user.consumption_norms_read);
+  const canPrd = isAdmin || Boolean(user.prd_planning_read);
+  const canRequirements = isAdmin || Boolean(user.requirements_read);
+  const canPlantWorkflow = isAdmin || Boolean(user.plant_workflow_read) || hasPlantAccess;
+  const canInventory = isAdmin || Boolean(user.inventory_read);
+  const canPurchase = isAdmin || Boolean(user.purchase_read);
+  const canPurchaseOrders = isAdmin || Boolean(user.purchase_orders_read);
+  const canGRNs = isAdmin || Boolean(user.goods_receipts_read);
+  const canReports = isAdmin || Boolean(user.inventory_read || user.purchase_read || user.requirements_read);
 
   return (
     <BrowserRouter>

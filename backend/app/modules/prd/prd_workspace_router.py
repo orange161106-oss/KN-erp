@@ -19,12 +19,15 @@ from app.security.permissions import require_feature_flag
 from app.services import prd_workspace as service
 
 router = APIRouter(prefix="/prd/workspace", tags=["prd-workspace"])
-ViewPlanning = Annotated[CurrentUser, Depends(require_feature_flag("can_access_prd_planning"))]
+CanReadPRD = Annotated[CurrentUser, Depends(require_feature_flag("prd_planning_read"))]
+CanCreatePRD = Annotated[CurrentUser, Depends(require_feature_flag("prd_planning_create"))]
+CanUpdatePRD = Annotated[CurrentUser, Depends(require_feature_flag("prd_planning_update"))]
+CanDeletePRD = Annotated[CurrentUser, Depends(require_feature_flag("prd_planning_delete"))]
 
 
 @router.get("/records", response_model=list[PRDWorkspaceRecordResponse])
 def get_prd_workspace_records(
-    user: ViewPlanning,
+    user: CanReadPRD,
     session: Annotated[Session, Depends(get_db)],
     search: Optional[str] = None,
     plant: Optional[str] = None,
@@ -49,7 +52,7 @@ def get_prd_workspace_records(
 @router.post("/save", response_model=PRDWorkspaceSaveResponse)
 def save_prd_workspace_records(
     data: PRDWorkspaceSaveRequest,
-    user: ViewPlanning,
+    user: CanUpdatePRD,
     session: Annotated[Session, Depends(get_db)],
 ):
     return service.save_prd_records(session, data, user.id)
@@ -58,7 +61,7 @@ def save_prd_workspace_records(
 @router.delete("/records/{identity}", status_code=204)
 def delete_prd_workspace_record(
     identity: UUID,
-    user: ViewPlanning,
+    user: CanDeletePRD,
     session: Annotated[Session, Depends(get_db)],
     reason: str = Query(default="Deleted via PRD workspace"),
 ):
@@ -69,7 +72,7 @@ def delete_prd_workspace_record(
 @router.post("/bulk-delete", response_model=PRDWorkspaceBulkDeleteResponse)
 def bulk_delete_prd_workspace(
     data: PRDWorkspaceBulkDeleteRequest,
-    user: ViewPlanning,
+    user: CanDeletePRD,
     session: Annotated[Session, Depends(get_db)],
 ):
     count = service.bulk_delete_prd_records(
@@ -89,7 +92,7 @@ def bulk_delete_prd_workspace(
 
 @router.post("/inspect", response_model=PRDExcelInspectResponse)
 async def inspect_prd_excel(
-    user: ViewPlanning,
+    user: CanCreatePRD,
     file: UploadFile = File(...),
 ):
     contents = await file.read()
@@ -98,7 +101,7 @@ async def inspect_prd_excel(
 
 @router.post("/import-sheet", response_model=PRDExcelImportResponse)
 async def import_prd_sheet(
-    user: ViewPlanning,
+    user: CanCreatePRD,
     session: Annotated[Session, Depends(get_db)],
     file: UploadFile = File(...),
     sheet_name: str = Form(...),

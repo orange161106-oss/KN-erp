@@ -51,18 +51,63 @@ def seed_users():
             p_hash = passwords.hash(password)
 
             is_super = (username == "admin")
+            CRUD_MODULES = [
+                "masters", "production_mappings", "consumption_norms",
+                "prd_planning", "requirements", "plant_workflow",
+                "inventory", "purchase", "purchase_orders", "goods_receipts",
+            ]
+            crud_permissions = {}
+            for mod in CRUD_MODULES:
+                if is_super:
+                    crud_permissions[f"{mod}_read"] = True
+                    crud_permissions[f"{mod}_create"] = True
+                    crud_permissions[f"{mod}_update"] = True
+                    crud_permissions[f"{mod}_delete"] = True
+                elif username == "planner":
+                    can_full = mod in ["production_mappings", "consumption_norms", "prd_planning", "requirements"]
+                    can_edit = mod in ["masters"]
+                    can_view = mod in ["plant_workflow", "inventory"]
+                    crud_permissions[f"{mod}_read"] = can_full or can_edit or can_view
+                    crud_permissions[f"{mod}_create"] = can_full or can_edit
+                    crud_permissions[f"{mod}_update"] = can_full or can_edit
+                    crud_permissions[f"{mod}_delete"] = can_full
+                elif username == "plant_incharge":
+                    can_full = mod in ["plant_workflow"]
+                    can_view = mod in ["inventory"]
+                    crud_permissions[f"{mod}_read"] = can_full or can_view
+                    crud_permissions[f"{mod}_create"] = can_full
+                    crud_permissions[f"{mod}_update"] = can_full
+                    crud_permissions[f"{mod}_delete"] = can_full
+                elif username == "purchase":
+                    can_full = mod in ["purchase", "purchase_orders"]
+                    can_view = mod in ["masters"]
+                    crud_permissions[f"{mod}_read"] = can_full or can_view
+                    crud_permissions[f"{mod}_create"] = can_full
+                    crud_permissions[f"{mod}_update"] = can_full
+                    crud_permissions[f"{mod}_delete"] = can_full
+                elif username == "store":
+                    can_full = mod in ["inventory", "goods_receipts"]
+                    can_view = mod in ["masters"]
+                    crud_permissions[f"{mod}_read"] = can_full or can_view
+                    crud_permissions[f"{mod}_create"] = can_full
+                    crud_permissions[f"{mod}_update"] = can_full
+                    crud_permissions[f"{mod}_delete"] = can_full
+                elif username == "manager":
+                    can_view = mod in ["prd_planning", "requirements", "purchase"]
+                    can_manage = mod in ["purchase_orders"]
+                    crud_permissions[f"{mod}_read"] = can_view or can_manage
+                    crud_permissions[f"{mod}_create"] = False
+                    crud_permissions[f"{mod}_update"] = can_manage
+                    crud_permissions[f"{mod}_delete"] = False
+                else:
+                    crud_permissions[f"{mod}_read"] = False
+                    crud_permissions[f"{mod}_create"] = False
+                    crud_permissions[f"{mod}_update"] = False
+                    crud_permissions[f"{mod}_delete"] = False
+
             all_flags = {
                 "is_super_admin": is_super,
-                "can_access_masters": True if is_super else (username in ["planner", "store", "purchase"]),
-                "can_access_production_mappings": True if is_super else (username in ["planner"]),
-                "can_access_consumption_norms": True if is_super else (username in ["planner"]),
-                "can_access_prd_planning": True if is_super else (username in ["planner", "manager"]),
-                "can_access_requirements": True if is_super else (username in ["planner", "manager"]),
-                "can_access_plant_workflow": True if is_super else (username in ["plant_incharge", "planner"]),
-                "can_access_inventory": True if is_super else (username in ["store", "planner"]),
-                "can_access_purchase": True if is_super else (username in ["purchase"]),
-                "can_access_purchase_orders": True if is_super else (username in ["manager", "purchase"]),
-                "can_access_goods_receipts": True if is_super else (username in ["store"]),
+                **crud_permissions,
                 "can_access_plant_1": True,
                 "can_access_plant_2": True,
                 "can_access_plant_3": True,

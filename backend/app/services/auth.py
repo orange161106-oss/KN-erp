@@ -60,22 +60,23 @@ def current_user(session: Session, token: str, settings: Settings) -> CurrentUse
         user = find_user_with_permissions(session, user_id)
         if user is None or not user.is_active:
             raise authentication_required()
+        crud_modules = [
+            "masters", "production_mappings", "consumption_norms",
+            "prd_planning", "requirements", "plant_workflow",
+            "inventory", "purchase", "purchase_orders", "goods_receipts",
+        ]
+        crud_flags = {
+            f"{module}_{op}": getattr(user, f"{module}_{op}", False)
+            for module in crud_modules
+            for op in ("read", "create", "update", "delete")
+        }
         return CurrentUser(
             id=user.id,
             username=user.username,
             is_super_admin=getattr(user, "is_super_admin", False),
             roles=sorted(role.code for role in user.roles),
             permissions=sorted({permission.code for role in user.roles for permission in role.permissions}),
-            can_access_masters=getattr(user, "can_access_masters", False),
-            can_access_production_mappings=getattr(user, "can_access_production_mappings", False),
-            can_access_consumption_norms=getattr(user, "can_access_consumption_norms", False),
-            can_access_prd_planning=getattr(user, "can_access_prd_planning", False),
-            can_access_requirements=getattr(user, "can_access_requirements", False),
-            can_access_plant_workflow=getattr(user, "can_access_plant_workflow", False),
-            can_access_inventory=getattr(user, "can_access_inventory", False),
-            can_access_purchase=getattr(user, "can_access_purchase", False),
-            can_access_purchase_orders=getattr(user, "can_access_purchase_orders", False),
-            can_access_goods_receipts=getattr(user, "can_access_goods_receipts", False),
+            **crud_flags,
             can_access_plant_1=getattr(user, "can_access_plant_1", False),
             can_access_plant_2=getattr(user, "can_access_plant_2", False),
             can_access_plant_3=getattr(user, "can_access_plant_3", False),

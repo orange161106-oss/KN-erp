@@ -5,7 +5,7 @@ import { titles } from './types';
 import type { Resource } from './types';
 export default function Masters() {
   const { user } = useAuth();
-  const canView = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN') || user?.can_access_masters);
+  const canView = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN') || user?.masters_read);
   const resources: Resource[] = ['units', 'consumables', 'suppliers'];
   const allowed = canView ? resources : [];
   const forbidden = <p role="alert">You do not have permission to view these master records.</p>;

@@ -15,6 +15,16 @@ router = APIRouter(prefix="/users", tags=["user-management"])
 passwords = PasswordService()
 
 
+CRUD_MODULES = [
+    "masters", "production_mappings", "consumption_norms",
+    "prd_planning", "requirements", "plant_workflow",
+    "inventory", "purchase", "purchase_orders", "goods_receipts",
+]
+CRUD_FLAGS = [f"{m}_{op}" for m in CRUD_MODULES for op in ("read", "create", "update", "delete")]
+PLANT_FLAGS = [f"can_access_plant_{i}" for i in range(1, 6)]
+ALL_PERMISSION_FLAGS = CRUD_FLAGS + PLANT_FLAGS
+
+
 def check_admin_access(current_user: CurrentUser):
     if not current_user.is_super_admin and "ADMIN" not in current_user.roles:
         raise HTTPException(
@@ -56,30 +66,19 @@ def create_user(
     roles = session.scalars(select(Role).where(Role.code.in_(data.roles))).all() if data.roles else []
     p_hash = passwords.hash(data.password.get_secret_value())
 
-    user = User(
-        username=data.username,
-        full_name=data.full_name,
-        employee_id=data.employee_id,
-        password_hash=p_hash,
-        is_active=True,
-        is_super_admin=False,
-        roles=roles,
-        can_access_masters=data.can_access_masters,
-        can_access_production_mappings=data.can_access_production_mappings,
-        can_access_consumption_norms=data.can_access_consumption_norms,
-        can_access_prd_planning=data.can_access_prd_planning,
-        can_access_requirements=data.can_access_requirements,
-        can_access_plant_workflow=data.can_access_plant_workflow,
-        can_access_inventory=data.can_access_inventory,
-        can_access_purchase=data.can_access_purchase,
-        can_access_purchase_orders=data.can_access_purchase_orders,
-        can_access_goods_receipts=data.can_access_goods_receipts,
-        can_access_plant_1=data.can_access_plant_1,
-        can_access_plant_2=data.can_access_plant_2,
-        can_access_plant_3=data.can_access_plant_3,
-        can_access_plant_4=data.can_access_plant_4,
-        can_access_plant_5=data.can_access_plant_5,
-    )
+    user_kwargs = {
+        "username": data.username,
+        "full_name": data.full_name,
+        "employee_id": data.employee_id,
+        "password_hash": p_hash,
+        "is_active": True,
+        "is_super_admin": False,
+        "roles": roles,
+    }
+    for flag in ALL_PERMISSION_FLAGS:
+        user_kwargs[flag] = getattr(data, flag, False)
+
+    user = User(**user_kwargs)
     session.add(user)
     session.commit()
     session.refresh(user)
@@ -116,15 +115,8 @@ def update_user(
         user.roles = roles
 
     # Update permission flags if specified
-    flag_fields = [
-        "can_access_masters", "can_access_production_mappings", "can_access_consumption_norms",
-        "can_access_prd_planning", "can_access_requirements", "can_access_plant_workflow",
-        "can_access_inventory", "can_access_purchase", "can_access_purchase_orders",
-        "can_access_goods_receipts", "can_access_plant_1", "can_access_plant_2",
-        "can_access_plant_3", "can_access_plant_4", "can_access_plant_5",
-    ]
-    for field in flag_fields:
-        val = getattr(data, field)
+    for field in ALL_PERMISSION_FLAGS:
+        val = getattr(data, field, None)
         if val is not None:
             setattr(user, field, val)
 

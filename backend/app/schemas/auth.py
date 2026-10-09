@@ -33,17 +33,56 @@ class CurrentUser(BaseModel):
     roles: list[str]
     permissions: list[str]
 
-    # Granular Feature Access (10 Workflow Flags)
-    can_access_masters: bool = False
-    can_access_production_mappings: bool = False
-    can_access_consumption_norms: bool = False
-    can_access_prd_planning: bool = False
-    can_access_requirements: bool = False
-    can_access_plant_workflow: bool = False
-    can_access_inventory: bool = False
-    can_access_purchase: bool = False
-    can_access_purchase_orders: bool = False
-    can_access_goods_receipts: bool = False
+    # 40-Point Granular CRUD Permission Matrix
+    masters_read: bool = False
+    masters_create: bool = False
+    masters_update: bool = False
+    masters_delete: bool = False
+
+    production_mappings_read: bool = False
+    production_mappings_create: bool = False
+    production_mappings_update: bool = False
+    production_mappings_delete: bool = False
+
+    consumption_norms_read: bool = False
+    consumption_norms_create: bool = False
+    consumption_norms_update: bool = False
+    consumption_norms_delete: bool = False
+
+    prd_planning_read: bool = False
+    prd_planning_create: bool = False
+    prd_planning_update: bool = False
+    prd_planning_delete: bool = False
+
+    requirements_read: bool = False
+    requirements_create: bool = False
+    requirements_update: bool = False
+    requirements_delete: bool = False
+
+    plant_workflow_read: bool = False
+    plant_workflow_create: bool = False
+    plant_workflow_update: bool = False
+    plant_workflow_delete: bool = False
+
+    inventory_read: bool = False
+    inventory_create: bool = False
+    inventory_update: bool = False
+    inventory_delete: bool = False
+
+    purchase_read: bool = False
+    purchase_create: bool = False
+    purchase_update: bool = False
+    purchase_delete: bool = False
+
+    purchase_orders_read: bool = False
+    purchase_orders_create: bool = False
+    purchase_orders_update: bool = False
+    purchase_orders_delete: bool = False
+
+    goods_receipts_read: bool = False
+    goods_receipts_create: bool = False
+    goods_receipts_update: bool = False
+    goods_receipts_delete: bool = False
 
     # Plant Scope Access
     can_access_plant_1: bool = False

@@ -13,17 +13,23 @@ const BASE_ROLES = [
   { code: 'ADMIN', label: 'Admin' },
 ];
 
-const FEATURE_FLAGS: { key: keyof UserCreate; label: string; desc: string }[] = [
-  { key: 'can_access_masters', label: '1. Masters', desc: 'Access units, consumables, and suppliers masters' },
-  { key: 'can_access_production_mappings', label: '2. Production Mappings', desc: 'Access process and equipment mappings' },
-  { key: 'can_access_consumption_norms', label: '3. Consumption Norms', desc: 'Access consumption norms and rules' },
-  { key: 'can_access_prd_planning', label: '4. PRD / Planning', desc: 'Access PRD planning workspace' },
-  { key: 'can_access_requirements', label: '5. Requirements', desc: 'Access consumable requirements workspace' },
-  { key: 'can_access_plant_workflow', label: '6. Plant Workflow', desc: 'Access plant confirmation workflow' },
-  { key: 'can_access_inventory', label: '7. Inventory', desc: 'Access inventory management' },
-  { key: 'can_access_purchase', label: '8. Purchase', desc: 'Access purchase requests & planning' },
-  { key: 'can_access_purchase_orders', label: '9. Purchase Orders', desc: 'Access purchase orders management' },
-  { key: 'can_access_goods_receipts', label: '10. Goods Receipts', desc: 'Access goods receipt notes (GRN)' },
+interface ModuleDef {
+  key: string;
+  label: string;
+  desc: string;
+}
+
+const MODULES: ModuleDef[] = [
+  { key: 'masters', label: '1. Masters', desc: 'Units, consumables, and suppliers masters' },
+  { key: 'production_mappings', label: '2. Production Mappings', desc: 'Process and equipment mappings' },
+  { key: 'consumption_norms', label: '3. Consumption Norms', desc: 'Consumption norms and rules' },
+  { key: 'prd_planning', label: '4. PRD / Planning', desc: 'PRD planning workspace' },
+  { key: 'requirements', label: '5. Requirements', desc: 'Consumable requirements workspace' },
+  { key: 'plant_workflow', label: '6. Plant Workflow', desc: 'Plant confirmation workflow' },
+  { key: 'inventory', label: '7. Inventory', desc: 'Inventory management and stock' },
+  { key: 'purchase', label: '8. Purchase', desc: 'Purchase requests and planning' },
+  { key: 'purchase_orders', label: '9. Purchase Orders', desc: 'Purchase orders management' },
+  { key: 'goods_receipts', label: '10. Goods Receipts', desc: 'Goods receipt notes (GRN)' },
 ];
 
 const PLANT_FLAGS: { key: keyof UserCreate; label: string }[] = [
@@ -33,6 +39,22 @@ const PLANT_FLAGS: { key: keyof UserCreate; label: string }[] = [
   { key: 'can_access_plant_4', label: 'Plant IV' },
   { key: 'can_access_plant_5', label: 'Plant V' },
 ];
+
+const ALL_CRUD_KEYS: string[] = MODULES.flatMap(m => [
+  `${m.key}_read`,
+  `${m.key}_create`,
+  `${m.key}_update`,
+  `${m.key}_delete`,
+]);
+
+const DEFAULT_PERMISSIONS: Record<string, boolean> = {
+  ...Object.fromEntries(ALL_CRUD_KEYS.map(k => [k, false])),
+  can_access_plant_1: false,
+  can_access_plant_2: false,
+  can_access_plant_3: false,
+  can_access_plant_4: false,
+  can_access_plant_5: false,
+};
 
 export default function UserManagement() {
   const [users, setUsers] = useState<UserResponse[]>([]);
@@ -50,23 +72,7 @@ export default function UserManagement() {
   const [showPassword, setShowPassword] = useState(false);
   const [selectedRole, setSelectedRole] = useState('PLANNER');
   const [isActive, setIsActive] = useState(true);
-  const [permissions, setPermissions] = useState<Record<string, boolean>>({
-    can_access_masters: false,
-    can_access_production_mappings: false,
-    can_access_consumption_norms: false,
-    can_access_prd_planning: false,
-    can_access_requirements: false,
-    can_access_plant_workflow: false,
-    can_access_inventory: false,
-    can_access_purchase: false,
-    can_access_purchase_orders: false,
-    can_access_goods_receipts: false,
-    can_access_plant_1: false,
-    can_access_plant_2: false,
-    can_access_plant_3: false,
-    can_access_plant_4: false,
-    can_access_plant_5: false,
-  });
+  const [permissions, setPermissions] = useState<Record<string, boolean>>({ ...DEFAULT_PERMISSIONS });
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -94,23 +100,7 @@ export default function UserManagement() {
     setShowPassword(false);
     setSelectedRole('PLANNER');
     setIsActive(true);
-    setPermissions({
-      can_access_masters: false,
-      can_access_production_mappings: false,
-      can_access_consumption_norms: false,
-      can_access_prd_planning: false,
-      can_access_requirements: false,
-      can_access_plant_workflow: false,
-      can_access_inventory: false,
-      can_access_purchase: false,
-      can_access_purchase_orders: false,
-      can_access_goods_receipts: false,
-      can_access_plant_1: false,
-      can_access_plant_2: false,
-      can_access_plant_3: false,
-      can_access_plant_4: false,
-      can_access_plant_5: false,
-    });
+    setPermissions({ ...DEFAULT_PERMISSIONS });
     setIsModalOpen(true);
   };
 
@@ -124,15 +114,38 @@ export default function UserManagement() {
     setSelectedRole(user.roles[0] || 'PLANNER');
     setIsActive(user.is_active);
 
-    const userPerms: Record<string, boolean> = {};
-    [...FEATURE_FLAGS, ...PLANT_FLAGS].forEach(flag => {
-      userPerms[flag.key] = Boolean(user[flag.key as keyof UserResponse]);
+    const userPerms: Record<string, boolean> = { ...DEFAULT_PERMISSIONS };
+    ALL_CRUD_KEYS.forEach(k => {
+      userPerms[k] = Boolean((user as any)[k]);
+    });
+    PLANT_FLAGS.forEach(p => {
+      userPerms[p.key] = Boolean(user[p.key as keyof UserResponse]);
     });
     setPermissions(userPerms);
     setIsModalOpen(true);
   };
 
-  const handleToggleFlag = (key: string) => {
+  const handleToggleCrud = (moduleKey: string, op: 'read' | 'create' | 'update' | 'delete') => {
+    setPermissions(prev => {
+      const field = `${moduleKey}_${op}`;
+      const nextVal = !prev[field];
+      const updated = { ...prev, [field]: nextVal };
+
+      if (op === 'read' && !nextVal) {
+        // Unchecking Read auto-unchecks Create, Update, Delete
+        updated[`${moduleKey}_create`] = false;
+        updated[`${moduleKey}_update`] = false;
+        updated[`${moduleKey}_delete`] = false;
+      } else if (op !== 'read' && nextVal) {
+        // Checking Create, Update, or Delete auto-checks Read
+        updated[`${moduleKey}_read`] = true;
+      }
+
+      return updated;
+    });
+  };
+
+  const handleTogglePlant = (key: string) => {
     setPermissions(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
@@ -217,7 +230,7 @@ export default function UserManagement() {
                 <th className="py-3 px-4">Base Role</th>
                 <th className="py-3 px-4">Status</th>
                 <th className="py-3 px-4">Plant Access</th>
-                <th className="py-3 px-4">Active Feature Flags</th>
+                <th className="py-3 px-4">Active CRUD Permissions</th>
                 <th className="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
@@ -228,7 +241,7 @@ export default function UserManagement() {
                 </tr>
               ) : (
               users.filter(u => !u.is_super_admin).map(u => {
-                const activeFeatureCount = FEATURE_FLAGS.filter(f => Boolean(u[f.key as keyof UserResponse])).length;
+                const activeCrudCount = ALL_CRUD_KEYS.filter(k => Boolean((u as any)[k])).length;
                 const activePlants = PLANT_FLAGS.filter(p => Boolean(u[p.key as keyof UserResponse])).map(p => p.label);
 
                 return (
@@ -278,7 +291,7 @@ export default function UserManagement() {
                     </td>
                     <td className="py-3 px-4">
                       <span className="text-xs font-semibold text-indigo-600 bg-indigo-50 px-2 py-1 rounded border border-indigo-100">
-                        {activeFeatureCount} / 10 Enabled
+                        {activeCrudCount} / 40 Permissions
                       </span>
                     </td>
                     <td className="py-3 px-4 text-right">
@@ -420,27 +433,70 @@ export default function UserManagement() {
                 </div>
               </div>
 
-              {/* 10 Granular Feature Flags */}
+              {/* 40 Granular CRUD Feature Flags (10 Modules) */}
               <div className="border-t pt-4">
-                <h3 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-1.5">
-                  <Key className="w-4 h-4 text-indigo-600" />
-                  Granular Feature Permissions (10 Flags)
-                </h3>
-                <div className="grid grid-cols-2 gap-3 bg-gray-50 p-4 rounded-lg border border-gray-200">
-                  {FEATURE_FLAGS.map(flag => (
-                    <label key={flag.key} className="flex items-start gap-2.5 p-2 bg-white rounded border border-gray-200 cursor-pointer hover:border-indigo-300 transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(permissions[flag.key])}
-                        onChange={() => handleToggleFlag(flag.key)}
-                        className="mt-0.5 h-4 w-4 text-indigo-600 rounded border-gray-300"
-                      />
-                      <div>
-                        <div className="text-xs font-semibold text-gray-800">{flag.label}</div>
-                        <div className="text-[11px] text-gray-500">{flag.desc}</div>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3 gap-1">
+                  <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                    <Key className="w-4 h-4 text-indigo-600" />
+                    CRUD Permission Matrix (10 Modules × 4 Actions)
+                  </h3>
+                  <span className="text-[11px] text-gray-500 italic">
+                    Create/Update/Delete auto-enables Read; unchecking Read revokes all.
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-gray-50 p-4 rounded-lg border border-gray-200 max-h-[380px] overflow-y-auto">
+                  {MODULES.map(mod => {
+                    const isRead = Boolean(permissions[`${mod.key}_read`]);
+                    const isCreate = Boolean(permissions[`${mod.key}_create`]);
+                    const isUpdate = Boolean(permissions[`${mod.key}_update`]);
+                    const isDelete = Boolean(permissions[`${mod.key}_delete`]);
+                    return (
+                      <div key={mod.key} className="p-3 bg-white rounded-lg border border-gray-200 shadow-xs flex flex-col justify-between space-y-2">
+                        <div>
+                          <div className="text-xs font-bold text-gray-800">{mod.label}</div>
+                          <div className="text-[11px] text-gray-500">{mod.desc}</div>
+                        </div>
+                        <div className="grid grid-cols-4 gap-1 pt-2 border-t border-gray-100 text-xs">
+                          <label className="flex items-center gap-1 cursor-pointer font-medium text-gray-700 hover:text-indigo-600">
+                            <input
+                              type="checkbox"
+                              checked={isRead}
+                              onChange={() => handleToggleCrud(mod.key, 'read')}
+                              className="h-3.5 w-3.5 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500"
+                            />
+                            <span className="text-[11px]">Read</span>
+                          </label>
+                          <label className="flex items-center gap-1 cursor-pointer font-medium text-gray-700 hover:text-emerald-600">
+                            <input
+                              type="checkbox"
+                              checked={isCreate}
+                              onChange={() => handleToggleCrud(mod.key, 'create')}
+                              className="h-3.5 w-3.5 text-emerald-600 rounded border-gray-300 focus:ring-emerald-500"
+                            />
+                            <span className="text-[11px]">Create</span>
+                          </label>
+                          <label className="flex items-center gap-1 cursor-pointer font-medium text-gray-700 hover:text-amber-600">
+                            <input
+                              type="checkbox"
+                              checked={isUpdate}
+                              onChange={() => handleToggleCrud(mod.key, 'update')}
+                              className="h-3.5 w-3.5 text-amber-600 rounded border-gray-300 focus:ring-amber-500"
+                            />
+                            <span className="text-[11px]">Update</span>
+                          </label>
+                          <label className="flex items-center gap-1 cursor-pointer font-medium text-gray-700 hover:text-red-600">
+                            <input
+                              type="checkbox"
+                              checked={isDelete}
+                              onChange={() => handleToggleCrud(mod.key, 'delete')}
+                              className="h-3.5 w-3.5 text-red-600 rounded border-gray-300 focus:ring-red-500"
+                            />
+                            <span className="text-[11px]">Delete</span>
+                          </label>
+                        </div>
                       </div>
-                    </label>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -457,7 +513,7 @@ export default function UserManagement() {
                         <input
                           type="checkbox"
                           checked={Boolean(permissions[flag.key])}
-                          onChange={() => handleToggleFlag(flag.key)}
+                          onChange={() => handleTogglePlant(flag.key)}
                           className="h-4 w-4 text-emerald-600 rounded border-gray-300"
                         />
                         <span className="text-xs font-medium text-gray-800">{flag.label}</span>

@@ -18,15 +18,23 @@ def check_permissions(user: CurrentUser, required: frozenset[str]) -> None:
 
     # Evaluate granular feature flags
     for code in required:
-        if "masters." in code and (getattr(user, "can_access_masters", False) or getattr(user, "can_access_production_mappings", False) or getattr(user, "can_access_consumption_norms", False)):
+        if "masters." in code or "masters" in code:
+            if any(getattr(user, f"masters_{op}", False) for op in ("read", "create", "update", "delete")):
+                return
+            if any(getattr(user, f"production_mappings_{op}", False) for op in ("read", "create", "update", "delete")):
+                return
+            if any(getattr(user, f"consumption_norms_{op}", False) for op in ("read", "create", "update", "delete")):
+                return
+        if "prd." in code and any(getattr(user, f"prd_planning_{op}", False) for op in ("read", "create", "update", "delete")):
             return
-        if "prd." in code and getattr(user, "can_access_prd_planning", False):
+        if "requirements." in code and any(getattr(user, f"requirements_{op}", False) for op in ("read", "create", "update", "delete")):
             return
-        if "requirements." in code and getattr(user, "can_access_requirements", False):
+        if "grns" in code and any(getattr(user, f"goods_receipts_{op}", False) for op in ("read", "create", "update", "delete")):
             return
-        if "grns" in code and getattr(user, "can_access_goods_receipts", False):
-            return
-        if "orders" in code and (getattr(user, "can_access_purchase_orders", False) or getattr(user, "can_access_purchase", False)):
+        if "orders" in code and (
+            any(getattr(user, f"purchase_orders_{op}", False) for op in ("read", "create", "update", "delete")) or
+            any(getattr(user, f"purchase_{op}", False) for op in ("read", "create", "update", "delete"))
+        ):
             return
         if code in user.permissions:
             return

@@ -16,15 +16,18 @@ export default function MasterPage({ resource }: { resource: Resource }) {
   const [revision, setRevision] = useState(0);
   const [form, setForm] = useState<{ kind: 'create' | 'edit' | 'status'; record?: Master } | null>(null);
   const [supplier, setSupplier] = useState<Master | null>(null);
-  const canWrite = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN') || user?.can_access_masters);
+  const isAdmin = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN'));
+  const canCreate = Boolean(isAdmin || user?.masters_create);
+  const canUpdate = Boolean(isAdmin || user?.masters_update);
+  const canDelete = Boolean(isAdmin || user?.masters_delete);
   const url = `${endpoint(resource)}?limit=25&offset=${offset}&q=${encodeURIComponent(search)}${status ? `&is_active=${status}` : ''}`;
   const result = useApi<Page<Master>>(url, revision);
   const saved = () => { setForm(null); setSupplier(null); setRevision(value => value + 1); };
   return <section className="space-y-5">
     <div className="flex items-center justify-between"><h2 className="text-xl font-semibold text-brand-navy">{titles[resource]}</h2>
-      {canWrite && <button onClick={() => setForm({ kind: 'create' })} className="bg-brand-navy text-white rounded px-4 py-2">Add {resource === 'units' ? 'unit' : resource === 'suppliers' ? 'supplier' : 'consumable'}</button>}
+      {canCreate && <button onClick={() => setForm({ kind: 'create' })} className="bg-brand-navy text-white rounded px-4 py-2">Add {resource === 'units' ? 'unit' : resource === 'suppliers' ? 'supplier' : 'consumable'}</button>}
     </div>
-    {!canWrite && <p className="text-sm text-gray-600">You have read-only access.</p>}
+    {!canCreate && !canUpdate && <p className="text-sm text-gray-600">You have read-only access.</p>}
     {form?.kind !== 'status' && form && <MasterForm key={`${resource}:${form.record?.id || 'new'}`} resource={resource} record={form.record} onSaved={saved} onCancel={() => setForm(null)} />}
     {form?.kind === 'status' && form.record && <StatusForm key={form.record.id} resource={resource} record={form.record} label={form.record.code} onSaved={saved} onCancel={() => setForm(null)} />}
     <div className="flex flex-wrap gap-4">
@@ -38,10 +41,12 @@ export default function MasterPage({ resource }: { resource: Resource }) {
       <div className="overflow-x-auto bg-white border rounded-lg"><table className="w-full text-sm text-left">
         <thead className="bg-gray-50"><tr><th className="p-3">Code</th><th className="p-3">Name</th>{resource === 'consumables' && <th className="p-3">Unit</th>}<th className="p-3">Status</th><th className="p-3">Actions</th></tr></thead>
         <tbody>{result.data.items.map(record => <tr key={record.id} className="border-t"><td className="p-3 font-medium">{record.code}</td><td className="p-3">{record.name}</td>
-          {resource === 'consumables' && <td className="p-3">{record.unit_id && user?.permissions.includes('masters.units.read') ? <ReferenceName resource="units" id={record.unit_id} /> : 'Unit read access required'}</td>}
+          {resource === 'consumables' && <td className="p-3">{record.unit_id && (isAdmin || user?.masters_read) ? <ReferenceName resource="units" id={record.unit_id} /> : 'Unit read access required'}</td>}
           <td className="p-3">{record.is_active ? 'Active' : 'Inactive'}</td>
-          <td className="p-3"><div className="flex flex-wrap gap-3">{canWrite && <><button onClick={() => setForm({ kind: 'edit', record })} className="text-brand-navy underline">Edit</button><button onClick={() => setForm({ kind: 'status', record })} className="text-brand-navy underline">{record.is_active ? 'Deactivate' : 'Reactivate'}</button></>}
-            {resource === 'suppliers' && user?.permissions.includes('masters.supplier_consumables.read') && <button onClick={() => setSupplier(record)} className="text-brand-navy underline">Consumable mappings</button>}
+          <td className="p-3"><div className="flex flex-wrap gap-3">
+            {canUpdate && <button onClick={() => setForm({ kind: 'edit', record })} className="text-brand-navy underline">Edit</button>}
+            {canDelete && <button onClick={() => setForm({ kind: 'status', record })} className="text-brand-navy underline">{record.is_active ? 'Deactivate' : 'Reactivate'}</button>}
+            {resource === 'suppliers' && (isAdmin || user?.masters_read) && <button onClick={() => setSupplier(record)} className="text-brand-navy underline">Consumable mappings</button>}
           </div></td></tr>)}</tbody>
       </table>{result.data.items.length === 0 && <p className="p-5 text-gray-600">No matching {resource}.</p>}</div>
       <div className="flex items-center gap-4 text-sm"><span>{result.data.total} records</span><button disabled={offset === 0} onClick={() => setOffset(value => Math.max(0, value - 25))} className="border rounded px-3 py-1 disabled:opacity-40">Previous</button><button disabled={offset + 25 >= result.data.total} onClick={() => setOffset(value => value + 25)} className="border rounded px-3 py-1 disabled:opacity-40">Next</button></div>

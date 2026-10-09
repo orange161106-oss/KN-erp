@@ -26,9 +26,9 @@ export default function Requirements() {
 
   // RBAC checks
   const isAdmin = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN'));
-  const canRead = isAdmin || Boolean(user?.can_access_requirements);
+  const canRead = isAdmin || Boolean(user?.requirements_read);
   const canExport = canRead;
-  const canRecalculate = isAdmin || Boolean(user?.can_access_requirements);
+  const canRecalculate = isAdmin || Boolean(user?.requirements_update);
 
   // Data state
   const [records, setRecords] = useState<RequirementRecord[]>([]);

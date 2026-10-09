@@ -30,9 +30,13 @@ Import = Annotated[CurrentUser, Depends(require_permissions('purchase.grns.impor
 
 def require_any_permission(*codes: str):
     def dependency(user: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
-        if not any(code in user.permissions for code in codes):
-            raise ApplicationError("PERMISSION_DENIED", f"Required permission missing. Needs one of: {', '.join(codes)}.", 403)
-        return user
+        if user.is_super_admin or "ADMIN" in user.roles:
+            return user
+        if any(getattr(user, f"goods_receipts_{op}", False) for op in ("read", "create", "update", "delete")):
+            return user
+        if any(code in user.permissions for code in codes):
+            return user
+        raise ApplicationError("PERMISSION_DENIED", f"Required permission missing. Needs one of: {', '.join(codes)}.", 403)
     return dependency
 
 

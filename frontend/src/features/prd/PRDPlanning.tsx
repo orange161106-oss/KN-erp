@@ -28,11 +28,11 @@ export default function PRDPlanning() {
 
   // RBAC checks
   const isAdmin = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN'));
-  const canRead = isAdmin || Boolean(user?.can_access_prd_planning);
-  const canCreate = isAdmin || Boolean(user?.can_access_prd_planning);
-  const canUpdate = isAdmin || Boolean(user?.can_access_prd_planning);
-  const canDelete = isAdmin || Boolean(user?.can_access_prd_planning);
-  const canImport = isAdmin || Boolean(user?.can_access_prd_planning);
+  const canRead = isAdmin || Boolean(user?.prd_planning_read);
+  const canCreate = isAdmin || Boolean(user?.prd_planning_create);
+  const canUpdate = isAdmin || Boolean(user?.prd_planning_update);
+  const canDelete = isAdmin || Boolean(user?.prd_planning_delete);
+  const canImport = canCreate;
   const canExport = canRead;
 
   // Data state

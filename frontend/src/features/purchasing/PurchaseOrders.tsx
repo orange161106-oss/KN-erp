@@ -24,8 +24,10 @@ const button = 'rounded bg-brand-navy text-white px-4 py-2 disabled:opacity-50';
 export default function PurchaseOrders() {
   const { user } = useAuth();
   const isAdmin = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN'));
-  const canRead = isAdmin || Boolean(user?.can_access_purchase_orders || user?.can_access_purchase);
-  const can = (_perm: string) => isAdmin || Boolean(user?.can_access_purchase_orders);
+  const canRead = isAdmin || Boolean(user?.purchase_orders_read || user?.purchase_read);
+  const canCreate = isAdmin || Boolean(user?.purchase_orders_create);
+  const canUpdate = isAdmin || Boolean(user?.purchase_orders_update);
+  const canDelete = isAdmin || Boolean(user?.purchase_orders_delete);
   const [orders, setOrders] = useState<Order[]>([]);
   const [demands, setDemands] = useState<Demand[]>([]);
   const [selected, setSelected] = useState<Order | null>(null);
@@ -108,7 +110,7 @@ export default function PurchaseOrders() {
   return <section className="max-w-7xl mx-auto space-y-5">
     <div className="flex justify-between gap-4"><div><h2 className="text-2xl font-bold">Purchase orders</h2>
       <p className="text-gray-600">A PO commits to a purchase. It does not receive stock or record consumption.</p></div>
-      {can('purchase.orders.create') && <button className={button} onClick={() => { setCreating(!creating); setError(''); }} disabled={busy}>New purchase order</button>}</div>
+      {canCreate && <button className={button} onClick={() => { setCreating(!creating); setError(''); }} disabled={busy}>New purchase order</button>}</div>
     {error && <p role="alert" className="bg-red-50 border border-red-200 p-3 rounded">{error}</p>}
     {success && <p role="status" className="bg-green-50 p-3 rounded">{success}</p>}
     {loading && <p role="status">Loading purchase orders…</p>}
@@ -130,7 +132,7 @@ export default function PurchaseOrders() {
       {lines.map((line, i) => <div className="grid md:grid-cols-4 gap-3 border-t pt-3" key={line.approval_id}>
         <label>Ordered quantity {i + 1}<input required inputMode="decimal" className={field} value={line.quantity} onChange={e => changeLine(i, { quantity: e.target.value })} /></label>
         <label>Expected delivery {i + 1}<input required type="datetime-local" className={field} value={line.delivery} onChange={e => changeLine(i, { delivery: e.target.value })} /></label>
-        {can('purchase.orders.price') && <label>Approved unit rate {i + 1} (optional)<input inputMode="decimal" className={field} value={line.rate} onChange={e => changeLine(i, { rate: e.target.value })} /></label>}
+        {(canCreate || canUpdate) && <label>Approved unit rate {i + 1} (optional)<input inputMode="decimal" className={field} value={line.rate} onChange={e => changeLine(i, { rate: e.target.value })} /></label>}
         <button type="button" onClick={() => setLines(lines.filter((_, index) => index !== i))}>Remove line {i + 1}</button>
       </div>)}
       {lines.some(line => line.rate) && <fieldset className="grid sm:grid-cols-2 gap-3"><legend className="font-semibold">Approved pricing terms</legend>
@@ -162,10 +164,10 @@ export default function PurchaseOrders() {
           <dt>Projection source / stock snapshot</dt><dd>{line.recommendation_evidence.projection.source_set_id} / {line.recommendation_evidence.projection.stock_snapshot_id}</dd>
           {line.pricing && <><dt>Pricing reference</dt><dd>{line.pricing.approval_reference}</dd></>}
         </dl></details></section>)}
-      {selected.status === 'DRAFT' && (can('purchase.orders.issue') || can('purchase.orders.cancel')) && <div className="space-y-3">
+      {selected.status === 'DRAFT' && (canUpdate || canDelete) && <div className="space-y-3">
         <label>Action reason<input className={field} value={actionReason} onChange={e => setActionReason(e.target.value)} /></label>
-        <div className="flex gap-3">{can('purchase.orders.issue') && <button className={button} disabled={busy || !actionReason.trim()} onClick={() => void act('issue')}>Issue PO</button>}
-          {can('purchase.orders.cancel') && <button className={button} disabled={busy || !actionReason.trim()} onClick={() => void act('cancel')}>Cancel draft</button>}</div>
+        <div className="flex gap-3">{canUpdate && <button className={button} disabled={busy || !actionReason.trim()} onClick={() => void act('issue')}>Issue PO</button>}
+          {canDelete && <button className={button} disabled={busy || !actionReason.trim()} onClick={() => void act('cancel')}>Cancel draft</button>}</div>
       </div>}
       <h4 className="font-semibold">History</h4><ul>{selected.history.map((entry, i) => <li key={i}>{entry.action} · {new Date(entry.at).toLocaleString()} · {entry.reason}</li>)}</ul>
     </article>}
