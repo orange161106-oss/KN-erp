@@ -71,6 +71,8 @@ export interface UserResponse extends UserPermissionFlags {
 }
 
 export interface UserCreate extends UserPermissionFlags {
+  is_active: boolean;
+  reason?: string;
   username: string;
   password: string;
   full_name?: string | null;
@@ -79,6 +81,7 @@ export interface UserCreate extends UserPermissionFlags {
 }
 
 export interface UserUpdate extends Partial<UserPermissionFlags> {
+  reason?: string;
   password?: string;
   full_name?: string | null;
   employee_id?: string | null;

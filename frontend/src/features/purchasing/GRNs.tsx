@@ -61,13 +61,14 @@ const ALL_COLUMNS: {
 
 export default function GRNs() {
   const { user } = useAuth();
-  const isAdmin = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN'));
-  const canRead = isAdmin || Boolean(user?.goods_receipts_read);
-  const canCreate = isAdmin || Boolean(user?.goods_receipts_create);
-  const canImport = canCreate;
-  const canUpdate = isAdmin || Boolean(user?.goods_receipts_update);
-  const canDelete = isAdmin || Boolean(user?.goods_receipts_delete);
-  const canExport = canRead;
+  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const hasLegacyPerm = (permission: string) => Boolean(user?.permissions?.includes(permission));
+  const canRead = Boolean(isSuperAdmin || user?.goods_receipts_read || hasLegacyPerm('purchase.grns.read'));
+  const canCreate = Boolean(isSuperAdmin || user?.goods_receipts_create || hasLegacyPerm('purchase.grns.create'));
+  const canImport = Boolean(canCreate || hasLegacyPerm('purchase.grns.import'));
+  const canUpdate = Boolean(isSuperAdmin || user?.goods_receipts_update || hasLegacyPerm('purchase.grns.update'));
+  const canDelete = Boolean(isSuperAdmin || user?.goods_receipts_delete || hasLegacyPerm('purchase.grns.delete'));
+  const canExport = Boolean(canRead || hasLegacyPerm('purchase.grns.export'));
 
   const [records, setRecords] = useState<WorkspaceRecord[]>([]);
   const [originalMap, setOriginalMap] = useState<Map<string, WorkspaceRecord>>(new Map());
@@ -531,7 +532,7 @@ export default function GRNs() {
       <div className="flex items-center justify-between pb-2 border-b border-gray-200">
         <div>
           <h2 className="text-xl font-bold text-gray-800">Goods Receipts</h2>
-          <p className="text-xs text-gray-500">Manage receipt data in an Excel-style workspace.</p>
+          <p className="text-xs text-gray-500">Review source receipt rows here. Workspace edits do not post inventory or fulfil POs. Stock integration requires validated accepted quantities and PO-item references.</p>
         </div>
 
         {/* Global Alerts */}

@@ -14,7 +14,6 @@ from app.security.passwords import PasswordService
 router = APIRouter(prefix="/users", tags=["user-management"])
 passwords = PasswordService()
 
-
 CRUD_MODULES = [
     "masters", "production_mappings", "consumption_norms",
     "prd_planning", "requirements", "plant_workflow",

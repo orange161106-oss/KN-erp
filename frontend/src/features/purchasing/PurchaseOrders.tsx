@@ -23,11 +23,12 @@ const button = 'rounded bg-brand-navy text-white px-4 py-2 disabled:opacity-50';
 
 export default function PurchaseOrders() {
   const { user } = useAuth();
-  const isAdmin = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN'));
-  const canRead = isAdmin || Boolean(user?.purchase_orders_read || user?.purchase_read);
-  const canCreate = isAdmin || Boolean(user?.purchase_orders_create);
-  const canUpdate = isAdmin || Boolean(user?.purchase_orders_update);
-  const canDelete = isAdmin || Boolean(user?.purchase_orders_delete);
+  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const hasLegacyPerm = (p: string) => Boolean(user?.permissions?.includes(p));
+  const canRead = Boolean(isSuperAdmin || user?.purchase_orders_read || user?.purchase_read || hasLegacyPerm('purchase.orders.read'));
+  const canCreate = Boolean(isSuperAdmin || user?.purchase_orders_create || hasLegacyPerm('purchase.orders.create'));
+  const canUpdate = Boolean(isSuperAdmin || user?.purchase_orders_update || hasLegacyPerm('purchase.orders.update') || hasLegacyPerm('purchase.orders.issue'));
+  const canDelete = Boolean(isSuperAdmin || user?.purchase_orders_delete || hasLegacyPerm('purchase.orders.delete') || hasLegacyPerm('purchase.orders.cancel'));
   const [orders, setOrders] = useState<Order[]>([]);
   const [demands, setDemands] = useState<Demand[]>([]);
   const [selected, setSelected] = useState<Order | null>(null);

@@ -50,10 +50,12 @@ def _get_user_plant_ids(session: Session, user_id: UUID) -> set[UUID]:
     return set(rows)
 
 
-def _assert_plant_access(session: Session, user_id: UUID, plant_id: UUID) -> None:
+def _assert_plant_access(session: Session, user: CurrentUser, plant_id: UUID) -> None:
     """Raise 403 if the user is not assigned to the given plant."""
-    allowed = _get_user_plant_ids(session, user_id)
-    if plant_id not in allowed:
+    plant = session.get(Plant, plant_id)
+    if plant is None or not plant.is_active:
+        raise ApplicationError("PLANT_NOT_FOUND", "An active plant is required.", 422)
+    if not user.is_super_admin and plant_id not in user.plant_ids:
         raise ApplicationError(
             "PLANT_ACCESS_DENIED",
             "You are not authorised to act on behalf of this plant.",
@@ -212,8 +214,11 @@ def list_confirmations(
     *,
     planning_version_id: Optional[UUID] = None,
     plant_id: Optional[UUID] = None,
+    allowed_plant_ids: list[UUID] | None = None,
 ) -> list[PlantConfirmationResponse]:
     stmt = select(PlantConfirmation)
+    if allowed_plant_ids is not None:
+        stmt = stmt.where(PlantConfirmation.plant_id.in_(allowed_plant_ids))
     if planning_version_id:
         stmt = stmt.where(PlantConfirmation.planning_version_id == planning_version_id)
     if plant_id:
@@ -244,7 +249,7 @@ def confirm_requirement(
         )
 
     # Plant-scope security — server enforced
-    _assert_plant_access(session, current_user.id, calc_req.plant_id)
+    _assert_plant_access(session, current_user, calc_req.plant_id)
 
     # Idempotency check — one confirmation per calculated requirement
     existing = session.execute(
@@ -301,7 +306,7 @@ def retract_confirmation(
         raise ApplicationError("CONFIRMATION_NOT_FOUND", "Confirmation not found.", 404)
 
     # Plant-scope security
-    _assert_plant_access(session, current_user.id, confirmation.plant_id)
+    _assert_plant_access(session, current_user, confirmation.plant_id)
 
     _write_audit(
         session,
@@ -329,8 +334,11 @@ def list_adjustments(
     planning_version_id: Optional[UUID] = None,
     plant_id: Optional[UUID] = None,
     status: Optional[str] = None,
+    allowed_plant_ids: list[UUID] | None = None,
 ) -> list[RequirementAdjustmentResponse]:
     stmt = select(RequirementAdjustment)
+    if allowed_plant_ids is not None:
+        stmt = stmt.where(RequirementAdjustment.plant_id.in_(allowed_plant_ids))
     if planning_version_id:
         stmt = stmt.where(RequirementAdjustment.planning_version_id == planning_version_id)
     if plant_id:
@@ -356,7 +364,7 @@ def submit_adjustment(
       - Does NOT modify or replace any calculated_requirement.
     """
     # Plant-scope security
-    _assert_plant_access(session, current_user.id, req.plant_id)
+    _assert_plant_access(session, current_user, req.plant_id)
 
     # Guard — Pydantic already enforces > 0 but be explicit in service layer
     if req.requested_qty <= Decimal("0"):
@@ -429,7 +437,7 @@ def withdraw_adjustment(
         raise ApplicationError("ADJUSTMENT_NOT_FOUND", "Adjustment not found.", 404)
 
     # Plant-scope security
-    _assert_plant_access(session, current_user.id, adjustment.plant_id)
+    _assert_plant_access(session, current_user, adjustment.plant_id)
 
     # Only the original requester may withdraw
     if adjustment.requested_by != current_user.id:
@@ -484,6 +492,8 @@ def review_adjustment(
     if not adjustment:
         raise ApplicationError("ADJUSTMENT_NOT_FOUND", "Adjustment not found.", 404)
 
+    _assert_plant_access(session, current_user, adjustment.plant_id)
+
     if adjustment.status != "PENDING":
         raise ApplicationError(
             "ADJUSTMENT_ALREADY_REVIEWED",
@@ -528,6 +538,7 @@ def get_final_requirements(
     planning_version_id: UUID,
     plant_id: Optional[UUID] = None,
     consumable_id: Optional[UUID] = None,
+    allowed_plant_ids: list[UUID] | None = None,
 ) -> list[FinalRequirementItemResponse]:
     """Calculate and return the authoritative Final Requirements for a planning version.
 
@@ -544,6 +555,8 @@ def get_final_requirements(
         )
         .where(CalculatedRequirement.planning_version_id == planning_version_id)
     )
+    if allowed_plant_ids is not None:
+        calc_stmt = calc_stmt.where(CalculatedRequirement.plant_id.in_(allowed_plant_ids))
     if plant_id:
         calc_stmt = calc_stmt.where(CalculatedRequirement.plant_id == plant_id)
     if consumable_id:
@@ -590,6 +603,8 @@ def get_final_requirements(
             RequirementAdjustment.status == "APPROVED",
         )
     )
+    if allowed_plant_ids is not None:
+        adj_stmt = adj_stmt.where(RequirementAdjustment.plant_id.in_(allowed_plant_ids))
     if plant_id:
         adj_stmt = adj_stmt.where(RequirementAdjustment.plant_id == plant_id)
     if consumable_id:

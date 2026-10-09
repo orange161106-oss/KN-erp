@@ -327,17 +327,18 @@ def promote_batch_to_planning_version(
     if not batch.staged_data:
         raise PRDValidationError("NO_STAGED_DATA", "Batch contains no staged valid items to promote")
 
-    # Determine next version number for this period
+    # Revision identity comes from the source, not upload arrival order.
+    if not re.fullmatch(r"R(?:0|[1-9][0-9]*)", revision_label.strip().upper()):
+        raise PRDValidationError("INVALID_REVISION", "Use a numeric revision such as R0 or R3", 422)
+    revision_label = revision_label.strip().upper()
     existing_versions = db.scalars(
         select(PlanningVersion).where(PlanningVersion.planning_period == planning_period).order_by(PlanningVersion.version_number.desc())
     ).all()
 
-    if existing_versions:
-        next_version_num = existing_versions[0].version_number + 1
-        label = f"R{next_version_num}" if revision_label == "R0" else revision_label
-    else:
-        next_version_num = 0
-        label = revision_label
+    next_version_num = int(revision_label[1:])
+    if any(v.version_number == next_version_num for v in existing_versions):
+        raise PRDValidationError("PRD_REVISION_EXISTS", "This period/revision already exists; use a new revision for changes", 409)
+    label = revision_label
 
     version = PlanningVersion(
         planning_period=planning_period,

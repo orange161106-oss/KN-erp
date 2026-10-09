@@ -19,15 +19,17 @@ import PRDPlanning from './features/prd/PRDPlanning';
 import Requirements from './features/requirements/Requirements';
 import UserManagement from './features/admin/UserManagement';
 
+import { canOpen } from './core/rbac';
+
 interface ProtectedRouteProps {
   isAllowed: boolean;
   children: React.ReactElement;
   redirectTo?: string;
 }
 
-function ProtectedRoute({ isAllowed, children, redirectTo = '/dashboard' }: ProtectedRouteProps) {
+function ProtectedRoute({ isAllowed, children }: ProtectedRouteProps) {
   if (!isAllowed) {
-    return <Navigate to={redirectTo} replace />;
+    return <p role="alert">You do not have permission to view this page. Select an available page from the menu.</p>;
   }
   return children;
 }
@@ -57,34 +59,29 @@ function Application() {
     return <Login />;
   }
 
-  const isAdmin = Boolean(user.is_super_admin || user.roles.includes('ADMIN'));
-
-  const hasPlantAccess = Boolean(
-    user.can_access_plant_1 ||
-    user.can_access_plant_2 ||
-    user.can_access_plant_3 ||
-    user.can_access_plant_4 ||
-    user.can_access_plant_5
-  );
-
-  const canMasters = isAdmin || Boolean(user.masters_read);
-  const canMappings = isAdmin || Boolean(user.production_mappings_read);
-  const canNorms = isAdmin || Boolean(user.consumption_norms_read);
-  const canPrd = isAdmin || Boolean(user.prd_planning_read);
-  const canRequirements = isAdmin || Boolean(user.requirements_read);
-  const canPlantWorkflow = isAdmin || Boolean(user.plant_workflow_read) || hasPlantAccess;
-  const canInventory = isAdmin || Boolean(user.inventory_read);
-  const canPurchase = isAdmin || Boolean(user.purchase_read);
-  const canPurchaseOrders = isAdmin || Boolean(user.purchase_orders_read);
-  const canGRNs = isAdmin || Boolean(user.goods_receipts_read);
-  const canReports = isAdmin || Boolean(user.inventory_read || user.purchase_read || user.requirements_read);
+  const canMasters = canOpen(user, '/masters');
+  const canMappings = canOpen(user, '/mappings');
+  const canNorms = canOpen(user, '/rules');
+  const canPrd = canOpen(user, '/prd');
+  const canRequirements = canOpen(user, '/requirements');
+  const canPlantWorkflow = canOpen(user, '/plant-workflow');
+  const canInventory = canOpen(user, '/inventory');
+  const canPurchase = canOpen(user, '/purchase');
+  const canPurchaseOrders = canOpen(user, '/purchase-orders');
+  const canGRNs = canOpen(user, '/grns');
+  const canReports = canOpen(user, '/reports');
+  const isAdmin = canOpen(user, '/admin');
 
   return (
     <BrowserRouter>
       <AppShell>
         <Routes>
-          <Route path="/" element={<ExecutiveDashboard />} />
-          <Route path="/dashboard" element={<ExecutiveDashboard />} />
+          <Route path="/" element={
+            <ProtectedRoute isAllowed={canOpen(user, '/')}><ExecutiveDashboard /></ProtectedRoute>
+          } />
+          <Route path="/dashboard" element={
+            <ProtectedRoute isAllowed={canOpen(user, '/dashboard')}><ExecutiveDashboard /></ProtectedRoute>
+          } />
           
           <Route path="/masters/*" element={
             <ProtectedRoute isAllowed={canMasters}><Masters /></ProtectedRoute>

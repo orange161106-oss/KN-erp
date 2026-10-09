@@ -12,6 +12,12 @@ class CalculationRunRequest(BaseModel):
     force_recalculate: bool = True
 
 
+class CalculatedRevisionApprovalResponse(BaseModel):
+    planning_version_id: UUID
+    status: str
+    replayed: bool
+
+
 class CalculatedRequirementResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -534,6 +534,15 @@ def import_excel_sheet(session, file_bytes: bytes, filename: str, sheet_name: st
             key = str(cell).strip().lower().replace('_', ' ').replace('-', ' ')
 
             # Check specific multi-word tokens first
+            from app.services.product_source import normalize_header
+            specific = {'pono': 'po_number', 'purchaseorderno': 'po_number', 'supname': 'supplier_name',
+                        'suppliername': 'supplier_name', 'no': 'source_grn_id', 'grnno': 'source_grn_id',
+                        'date': 'grn_date', 'actualreceivedquantity': 'quantity', 'actualreceivedqty': 'quantity',
+                        'physicalreceivedquantity': 'quantity', 'receivedquantity': 'quantity'}
+            normalized = normalize_header(cell)
+            if normalized in specific:
+                temp_map.setdefault(specific[normalized], idx)
+                continue
             if any(w in key for w in ['part description', 'item description', 'material description', 'product description', 'particulars']):
                 temp_map.setdefault('description', idx)
             elif any(w in key for w in ['part number', 'part no', 'part code', 'material code', 'item code', 'product code', 'part #']):
@@ -550,7 +559,7 @@ def import_excel_sheet(session, file_bytes: bytes, filename: str, sheet_name: st
                 temp_map.setdefault('supplier_name', idx)
             elif any(w in key for w in ['plant code', 'plant name', 'plant', 'factory', 'location']):
                 temp_map.setdefault('plant', idx)
-            elif any(w in key for w in ['received qty', 'accepted qty', 'rec qty', 'receipt qty', 'quantity', 'qty']):
+            elif key in {'received qty', 'actual received qty', 'actual receipt qty', 'physical received qty', 'rec qty', 'receipt qty', 'quantity'}:
                 temp_map.setdefault('quantity', idx)
             elif any(w in key for w in ['unit of measure', 'unit', 'uom', 'measure']):
                 temp_map.setdefault('unit', idx)
@@ -568,23 +577,17 @@ def import_excel_sheet(session, file_bytes: bytes, filename: str, sheet_name: st
             best_header_idx = r_idx
             header_idx_map = temp_map
 
-    if best_header_idx is None:
-        best_header_idx = 0
-        header_row = non_empty_rows[0]
-        if len(header_row) > 0: header_idx_map.setdefault('part_number', 0)
-        if len(header_row) > 1: header_idx_map.setdefault('item_id', 1)
-        if len(header_row) > 2: header_idx_map.setdefault('description', 2)
-        if len(header_row) > 3: header_idx_map.setdefault('quantity', 3)
-        if len(header_row) > 4: header_idx_map.setdefault('unit', 4)
+    if best_header_idx is None or 'quantity' not in header_idx_map:
+        raise ApplicationError('ACTUAL_RECEIPT_REQUIRED', 'The source needs a separate actual received quantity column. Ordered, GRN/required and billed quantities cannot be used as received stock.', 422)
+    if not {'part_number', 'item_id', 'unit', 'description'}.issubset(header_idx_map):
+        raise ApplicationError('GRN_HEADERS_REQUIRED', 'Part No., Item ID, Description and Unit headers are required.', 422)
 
     data_rows = non_empty_rows[best_header_idx + 1:]
     if not data_rows:
         data_rows = non_empty_rows
 
-    if mode == 'REPLACE':
-        active = session.scalars(select(GoodsReceiptRecord).where(GoodsReceiptRecord.is_deleted.is_(False))).all()
-        for r in active:
-            r.is_deleted = True
+    if mode != 'APPEND':
+        raise ApplicationError('GRN_HISTORY_PROTECTED', 'Use reviewed source corrections instead of replacing receipt history.', 409)
 
     imported_rows: list[GoodsReceiptRecord] = []
     base_idx = session.scalar(select(func.coalesce(func.max(GoodsReceiptRecord.row_index), 0)).where(GoodsReceiptRecord.is_deleted.is_(False))) or 0
@@ -593,19 +596,23 @@ def import_excel_sheet(session, file_bytes: bytes, filename: str, sheet_name: st
         if not any(cell is not None and str(cell).strip() != '' for cell in row):
             continue
 
-        part_no = str(row[header_idx_map['part_number']]).strip() if 'part_number' in header_idx_map and header_idx_map['part_number'] < len(row) and row[header_idx_map['part_number']] is not None else f'P-{i}'
-        item_id = str(row[header_idx_map['item_id']]).strip() if 'item_id' in header_idx_map and header_idx_map['item_id'] < len(row) and row[header_idx_map['item_id']] is not None else str(i)
+        part_no = str(row[header_idx_map['part_number']]).strip() if header_idx_map['part_number'] < len(row) and row[header_idx_map['part_number']] is not None else ''
+        item_id = str(row[header_idx_map['item_id']]).strip() if header_idx_map['item_id'] < len(row) and row[header_idx_map['item_id']] is not None else ''
 
         raw_desc = str(row[header_idx_map['description']]).strip() if 'description' in header_idx_map and header_idx_map['description'] < len(row) and row[header_idx_map['description']] is not None else ''
-        desc = raw_desc if raw_desc else f'{part_no} Item'
+        desc = raw_desc
 
-        raw_qty = row[header_idx_map['quantity']] if 'quantity' in header_idx_map and header_idx_map['quantity'] < len(row) else 1
+        raw_qty = row[header_idx_map['quantity']] if header_idx_map['quantity'] < len(row) else None
         try:
             qty = Decimal(str(raw_qty).strip())
+            if not qty.is_finite() or qty < 0 or qty >= Decimal('100000000000000') or qty != qty.quantize(Decimal('0.0001')):
+                raise ValueError
         except (InvalidOperation, ValueError, TypeError):
-            qty = Decimal('0')
+            raise ApplicationError('INVALID_RECEIVED_QUANTITY', 'Actual received quantity must be provided explicitly.', 422) from None
 
-        unit = str(row[header_idx_map['unit']]).strip() if 'unit' in header_idx_map and header_idx_map['unit'] < len(row) and row[header_idx_map['unit']] is not None else 'Nos'
+        unit = str(row[header_idx_map['unit']]).strip() if header_idx_map['unit'] < len(row) and row[header_idx_map['unit']] is not None else ''
+        if not all((part_no, item_id, desc, unit)):
+            raise ApplicationError('GRN_ROW_INCOMPLETE', 'Every receipt row needs explicit Part No., Item ID, Description and Unit values.', 422)
         po_no = str(row[header_idx_map['po_number']]).strip() if 'po_number' in header_idx_map and header_idx_map['po_number'] < len(row) and row[header_idx_map['po_number']] is not None else None
         supplier = str(row[header_idx_map['supplier_name']]).strip() if 'supplier_name' in header_idx_map and header_idx_map['supplier_name'] < len(row) and row[header_idx_map['supplier_name']] is not None else None
         grn_no = str(row[header_idx_map['source_grn_id']]).strip() if 'source_grn_id' in header_idx_map and header_idx_map['source_grn_id'] < len(row) and row[header_idx_map['source_grn_id']] is not None else f'EXCEL-{sheet_name}'

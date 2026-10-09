@@ -1,21 +1,11 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../features/auth/context';
+import { canOpen } from '../core/rbac';
 
 export default function Sidebar() {
   const { user, logout } = useAuth();
   const location = useLocation();
-
   if (!user) return null;
-
-  const isAdmin = Boolean(user.is_super_admin || user.roles.includes('ADMIN'));
-
-  const hasPlantAccess = Boolean(
-    user.can_access_plant_1 ||
-    user.can_access_plant_2 ||
-    user.can_access_plant_3 ||
-    user.can_access_plant_4 ||
-    user.can_access_plant_5
-  );
 
   const isActive = (path: string) => {
     if (path === '/') return location.pathname === '/' || location.pathname === '/dashboard';
@@ -29,18 +19,19 @@ export default function Sidebar() {
         : 'text-gray-200 hover:text-white hover:bg-white/10'
     }`;
 
-  // 1-to-1 CRUD Read authorization checks for each section
-  const showMasters = isAdmin || Boolean(user.masters_read);
-  const showMappings = isAdmin || Boolean(user.production_mappings_read);
-  const showNorms = isAdmin || Boolean(user.consumption_norms_read);
-  const showPrdPlanning = isAdmin || Boolean(user.prd_planning_read);
-  const showRequirements = isAdmin || Boolean(user.requirements_read);
-  const showPlantWorkflow = isAdmin || Boolean(user.plant_workflow_read) || hasPlantAccess;
-  const showInventory = isAdmin || Boolean(user.inventory_read);
-  const showPurchase = isAdmin || Boolean(user.purchase_read);
-  const showPurchaseOrders = isAdmin || Boolean(user.purchase_orders_read);
-  const showGoodsReceipts = isAdmin || Boolean(user.goods_receipts_read);
-  const showReports = isAdmin || Boolean(user.inventory_read || user.purchase_read || user.requirements_read);
+  // 1-to-1 authorization checks for each section
+  const showMasters = canOpen(user, '/masters');
+  const showMappings = canOpen(user, '/mappings');
+  const showNorms = canOpen(user, '/rules');
+  const showPrdPlanning = canOpen(user, '/prd');
+  const showRequirements = canOpen(user, '/requirements');
+  const showPlantWorkflow = canOpen(user, '/plant-workflow');
+  const showInventory = canOpen(user, '/inventory');
+  const showPurchase = canOpen(user, '/purchase');
+  const showPurchaseOrders = canOpen(user, '/purchase-orders');
+  const showGoodsReceipts = canOpen(user, '/grns');
+  const showReports = canOpen(user, '/reports');
+  const showAdmin = canOpen(user, '/admin');
 
   return (
     <aside className="w-64 bg-brand-navy text-white flex flex-col select-none">
@@ -147,7 +138,7 @@ export default function Sidebar() {
 
         {/* Bottom System & Admin Navigation */}
         <div className="mt-auto pt-3 border-t border-brand-steel/40 flex flex-col space-y-1">
-          {isAdmin && (
+          {showAdmin && (
             <Link to="/admin" className={navItemClass('/admin')}>
               Administration
             </Link>

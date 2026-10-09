@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import Sequence
 from uuid import UUID
 
@@ -378,6 +379,47 @@ def bulk_create_product_process_consumables(
 # Product -> Plant -> Route -> Process -> Consumable
 # ==========================================
 
+def _load_mapping_graph(db: Session, product_ids: list[UUID], plant_id: UUID | None = None):
+    """Batch the graph once instead of querying for every product and step."""
+    plants_by_product = defaultdict(list)
+    steps_by_route = defaultdict(list)
+    consumables_by_process = defaultdict(list)
+    if not product_ids:
+        return plants_by_product, steps_by_route, consumables_by_process
+    statement = (
+        select(ProductPlant)
+        .options(joinedload(ProductPlant.plant), joinedload(ProductPlant.route))
+        .where(ProductPlant.product_id.in_(product_ids), ProductPlant.is_active.is_(True))
+        .order_by(ProductPlant.is_primary.desc())
+    )
+    if plant_id is not None:
+        statement = statement.where(ProductPlant.plant_id == plant_id)
+    plant_mappings = db.scalars(statement).all()
+    for mapping in plant_mappings:
+        plants_by_product[mapping.product_id].append(mapping)
+    route_ids = {mapping.route_id for mapping in plant_mappings}
+    if not route_ids:
+        return plants_by_product, steps_by_route, consumables_by_process
+    steps = db.scalars(
+        select(RouteStep).options(joinedload(RouteStep.process))
+        .where(RouteStep.route_id.in_(route_ids)).order_by(RouteStep.sequence_order.asc())
+    ).all()
+    for step in steps:
+        steps_by_route[step.route_id].append(step)
+    process_ids = {step.process_id for step in steps}
+    if process_ids:
+        records = db.scalars(
+            select(ProductProcessConsumable)
+            .options(joinedload(ProductProcessConsumable.consumable))
+            .where(ProductProcessConsumable.product_id.in_(product_ids),
+                   ProductProcessConsumable.process_id.in_(process_ids),
+                   ProductProcessConsumable.is_active.is_(True))
+        ).all()
+        for record in records:
+            consumables_by_process[(record.product_id, record.process_id)].append(record)
+    return plants_by_product, steps_by_route, consumables_by_process
+
+
 def resolve_product_mapping(
     db: Session, product_id: UUID, plant_id: UUID | None = None
 ) -> ProductResolutionResponse:
@@ -385,55 +427,23 @@ def resolve_product_mapping(
     if not product:
         raise ApplicationError("NOT_FOUND", f"Product with ID '{product_id}' not found", 404)
 
-    plant_mappings_stmt = (
-        select(ProductPlant)
-        .options(
-            joinedload(ProductPlant.plant),
-            joinedload(ProductPlant.route),
-        )
-        .where(
-            ProductPlant.product_id == product_id,
-            ProductPlant.is_active == True,
-        )
-        .order_by(ProductPlant.is_primary.desc())
-    )
-    if plant_id is not None:
-        plant_mappings_stmt = plant_mappings_stmt.where(ProductPlant.plant_id == plant_id)
-
-    plant_mappings = db.scalars(plant_mappings_stmt).all()
+    plants_by_product, steps_by_route, consumables_by_process = _load_mapping_graph(db, [product_id], plant_id)
+    plant_mappings = plants_by_product[product_id]
+    unit_ids = {item.consumable.unit_id for records in consumables_by_process.values()
+                for item in records if item.consumable and item.consumable.unit_id}
+    units_map = {unit.id: unit.code for unit in db.scalars(select(Unit).where(Unit.id.in_(unit_ids)))} if unit_ids else {}
 
     resolved_plants: list[ResolvedPlantMapping] = []
 
     for pm in plant_mappings:
         route = pm.route
-        steps_stmt = (
-            select(RouteStep)
-            .options(joinedload(RouteStep.process))
-            .where(RouteStep.route_id == route.id)
-            .order_by(RouteStep.sequence_order.asc())
-        )
-        steps = db.scalars(steps_stmt).all()
+        steps = steps_by_route[route.id]
 
         resolved_steps: list[ResolvedProcessStep] = []
         for step in steps:
             process = step.process
 
-            ppc_stmt = (
-                select(ProductProcessConsumable)
-                .options(joinedload(ProductProcessConsumable.consumable))
-                .where(
-                    ProductProcessConsumable.product_id == product_id,
-                    ProductProcessConsumable.process_id == process.id,
-                    ProductProcessConsumable.is_active == True,
-                )
-            )
-            ppc_records = db.scalars(ppc_stmt).all()
-
-            unit_ids = {c.consumable.unit_id for c in ppc_records if c.consumable and c.consumable.unit_id}
-            units_map = {}
-            if unit_ids:
-                unit_records = db.scalars(select(Unit).where(Unit.id.in_(unit_ids))).all()
-                units_map = {u.id: u.code for u in unit_records}
+            ppc_records = consumables_by_process[(product_id, process.id)]
 
             resolved_consumables: list[ResolvedConsumable] = []
             for item in ppc_records:
@@ -499,21 +509,12 @@ def validate_mappings(
         products_stmt = products_stmt.where(Product.id == product_id)
 
     products = db.scalars(products_stmt).all()
+    plants_by_product, steps_by_route, consumables_by_process = _load_mapping_graph(db, [product.id for product in products])
     issues: list[MappingValidationIssue] = []
     unmapped_count = 0
 
     for product in products:
-        plant_mappings = db.scalars(
-            select(ProductPlant)
-            .options(
-                joinedload(ProductPlant.plant),
-                joinedload(ProductPlant.route),
-            )
-            .where(
-                ProductPlant.product_id == product.id,
-                ProductPlant.is_active == True,
-            )
-        ).all()
+        plant_mappings = plants_by_product[product.id]
 
         if not plant_mappings:
             unmapped_count += 1
@@ -553,12 +554,7 @@ def validate_mappings(
                 )
 
             # Check process steps
-            steps = db.scalars(
-                select(RouteStep)
-                .options(joinedload(RouteStep.process))
-                .where(RouteStep.route_id == pm.route.id)
-                .order_by(RouteStep.sequence_order.asc())
-            ).all()
+            steps = steps_by_route[pm.route.id]
 
             for step in steps:
                 process = step.process
@@ -574,15 +570,7 @@ def validate_mappings(
                         )
                     )
 
-                ppc_records = db.scalars(
-                    select(ProductProcessConsumable)
-                    .options(joinedload(ProductProcessConsumable.consumable))
-                    .where(
-                        ProductProcessConsumable.product_id == product.id,
-                        ProductProcessConsumable.process_id == process.id,
-                        ProductProcessConsumable.is_active == True,
-                    )
-                ).all()
+                ppc_records = consumables_by_process[(product.id, process.id)]
 
                 if not ppc_records:
                     issues.append(

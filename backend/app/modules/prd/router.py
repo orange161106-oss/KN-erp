@@ -1,3 +1,4 @@
+from app.security.permissions import require_permissions
 from typing import Annotated, Sequence
 from uuid import UUID
 
@@ -28,7 +29,7 @@ from app.services.prd import (
 router = APIRouter(prefix="/prd", tags=["prd"])
 
 
-@router.post("/upload", response_model=ImportBatchResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/upload", response_model=ImportBatchResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permissions('planning.write'))])
 async def upload_prd_file(
     file: UploadFile = File(...),
     planning_period: str = Form("2026-10"),
@@ -47,7 +48,7 @@ async def upload_prd_file(
     return batch
 
 
-@router.get("/batches", response_model=list[ImportBatchResponse])
+@router.get("/batches", response_model=list[ImportBatchResponse], dependencies=[Depends(require_permissions('planning.read'))])
 def get_batches(
     session: Annotated[Session, Depends(get_db)],
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
@@ -55,7 +56,7 @@ def get_batches(
     return list_import_batches(session)
 
 
-@router.get("/batches/{batch_id}", response_model=ImportBatchResponse)
+@router.get("/batches/{batch_id}", response_model=ImportBatchResponse, dependencies=[Depends(require_permissions('planning.read'))])
 def get_batch(
     batch_id: UUID,
     session: Annotated[Session, Depends(get_db)],
@@ -67,7 +68,7 @@ def get_batch(
     return batch
 
 
-@router.get("/batches/{batch_id}/errors", response_model=list[ImportErrorResponse])
+@router.get("/batches/{batch_id}/errors", response_model=list[ImportErrorResponse], dependencies=[Depends(require_permissions('planning.read'))])
 def get_batch_errors(
     batch_id: UUID,
     session: Annotated[Session, Depends(get_db)],
@@ -79,7 +80,7 @@ def get_batch_errors(
     return list_import_errors(session, batch_id)
 
 
-@router.post("/batches/{batch_id}/promote", response_model=PRDPromoteResponse)
+@router.post("/batches/{batch_id}/promote", response_model=PRDPromoteResponse, dependencies=[Depends(require_permissions('planning.write'))])
 def promote_batch(
     batch_id: UUID,
     planning_period: str = Form("2026-10"),
@@ -103,7 +104,7 @@ def promote_batch(
     )
 
 
-@router.get("/planning-versions", response_model=list[PlanningVersionResponse])
+@router.get("/planning-versions", response_model=list[PlanningVersionResponse], dependencies=[Depends(require_permissions('planning.read'))])
 def get_planning_versions(
     session: Annotated[Session, Depends(get_db)],
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
@@ -111,7 +112,7 @@ def get_planning_versions(
     return list_planning_versions(session)
 
 
-@router.get("/planning-versions/{version_id}/items", response_model=list[PRDOrderItemResponse])
+@router.get("/planning-versions/{version_id}/items", response_model=list[PRDOrderItemResponse], dependencies=[Depends(require_permissions('planning.read'))])
 def get_version_items(
     version_id: UUID,
     session: Annotated[Session, Depends(get_db)],

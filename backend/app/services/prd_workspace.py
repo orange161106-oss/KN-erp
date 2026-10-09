@@ -1,4 +1,5 @@
 import io
+import zipfile
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
@@ -96,6 +97,8 @@ def save_prd_records(
     for del_id in data.deleted_ids:
         row = session.get(PRDRecord, del_id)
         if row and not row.is_deleted:
+            if row.status == "VALIDATED":
+                raise ApplicationError("PRD_HISTORY_PROTECTED", "Import a new revision instead of deleting validated history.", 409)
             row.is_deleted = True
             row.updated_at = datetime.now(timezone.utc)
             audit(
@@ -120,6 +123,8 @@ def save_prd_records(
 
         existing = session.get(PRDRecord, item.id) if item.id else None
         if existing and not existing.is_deleted:
+            if existing.status == "VALIDATED":
+                raise ApplicationError("PRD_HISTORY_PROTECTED", "Import a new revision instead of editing validated history.", 409)
             old_vals = {
                 "product_code": existing.product_code,
                 "plant": existing.plant,
@@ -180,6 +185,8 @@ def delete_prd_record(session, identity: UUID, actor: UUID, reason: str = "Row d
     row = session.get(PRDRecord, identity)
     if not row or row.is_deleted:
         raise ApplicationError("RECORD_NOT_FOUND", "PRD planning record not found.", 404)
+    if row.status == "VALIDATED":
+        raise ApplicationError("PRD_HISTORY_PROTECTED", "Validated revision history cannot be deleted.", 409)
     row.is_deleted = True
     row.updated_at = datetime.now(timezone.utc)
     audit(
@@ -231,6 +238,8 @@ def bulk_delete_prd_records(
         return 0
 
     records_to_delete = session.scalars(query).all()
+    if any(r.status == "VALIDATED" for r in records_to_delete):
+        raise ApplicationError("PRD_HISTORY_PROTECTED", "Validated revision history cannot be deleted.", 409)
     count = len(records_to_delete)
     if count == 0:
         return 0
@@ -285,18 +294,22 @@ def inspect_prd_excel(file_bytes: bytes, filename: str) -> PRDExcelInspectRespon
         ))
     else:
         try:
-            workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+            with zipfile.ZipFile(io.BytesIO(file_bytes)) as archive:
+                if sum(info.file_size for info in archive.infolist()) > 200 * 1024 * 1024:
+                    raise ApplicationError('SOURCE_TOO_LARGE', 'The expanded workbook exceeds the import limit.', 422)
+            workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+        except ApplicationError:
+            raise
         except Exception:
-            try:
-                workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
-            except Exception as exc:
-                raise ApplicationError("INVALID_EXCEL", f"Could not read Excel file: {str(exc)}", 422)
+            raise ApplicationError("INVALID_EXCEL", "Could not read Excel workbook.", 422) from None
 
         for sheet_name in workbook.sheetnames:
             sheet = workbook[sheet_name]
             if not hasattr(sheet, "iter_rows"):
                 continue
-            rows = list(sheet.iter_rows(values_only=True))
+            # Inspection only samples the beginning of each sheet. Imports validate
+            # the full selected sheet separately with strict row/column limits.
+            rows = list(sheet.iter_rows(max_row=20, max_col=min(sheet.max_column, 128), values_only=True))
             header_row = None
             data_rows = []
             for r in rows:
@@ -317,11 +330,12 @@ def inspect_prd_excel(file_bytes: bytes, filename: str) -> PRDExcelInspectRespon
 
             sheets_info.append(PRDExcelSheetInspectInfo(
                 name=sheet_name,
-                row_count=len(data_rows),
-                column_count=len(headers),
+                row_count=max(0, sheet.max_row - 1),
+                column_count=sheet.max_column,
                 headers=headers,
                 sample_rows=sample,
             ))
+        workbook.close()
 
     if not sheets_info:
         raise ApplicationError("NO_DATA_SHEETS", "Workbook contains no readable sheets.", 422)
@@ -329,150 +343,64 @@ def inspect_prd_excel(file_bytes: bytes, filename: str) -> PRDExcelInspectRespon
     return PRDExcelInspectResponse(filename=filename, sheets=sheets_info)
 
 
-def import_prd_excel(
-    session,
-    file_bytes: bytes,
-    filename: str,
-    sheet_name: str,
-    actor: UUID,
-    mode: str = "APPEND",
-    reason: str = "Excel sheet import",
-) -> PRDExcelImportResponse:
-    if not file_bytes:
-        raise ApplicationError("EMPTY_FILE", "The uploaded file is empty.", 422)
-
-    if filename.lower().endswith(".csv"):
-        import csv
-        try:
-            text = file_bytes.decode("utf-8", errors="replace")
-            rows = list(csv.reader(io.StringIO(text)))
-        except Exception as exc:
-            raise ApplicationError("INVALID_CSV", f"Could not read CSV file: {str(exc)}", 422)
-    else:
-        try:
-            workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-        except Exception:
-            workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
-
-        if sheet_name not in workbook.sheetnames:
-            raise ApplicationError("SHEET_NOT_FOUND", f"Sheet '{sheet_name}' not found.", 404)
-        sheet = workbook[sheet_name]
-        rows = list(sheet.iter_rows(values_only=True))
-
-    non_empty_rows = [r for r in rows if any(c is not None and str(c).strip() != "" for c in r)]
-    if not non_empty_rows:
-        raise ApplicationError("EMPTY_SHEET", f"Sheet '{sheet_name}' has no data rows.", 422)
-
-    header_idx_map: dict[str, int] = {}
-    best_header_idx = None
-    best_matches = 0
-
-    for r_idx, r in enumerate(non_empty_rows[:10]):
-        temp_map: dict[str, int] = {}
-        for idx, cell in enumerate(r):
-            if cell is None:
-                continue
-            key = str(cell).strip().lower().replace("_", " ").replace("-", " ")
-            if any(w in key for w in ["part description", "product description", "description", "item description"]):
-                temp_map.setdefault("description", idx)
-            elif any(w in key for w in ["plant code", "plant name", "plant", "unit location"]):
-                temp_map.setdefault("plant", idx)
-            elif any(w in key for w in ["customer name", "customer", "client"]):
-                temp_map.setdefault("customer", idx)
-            elif any(w in key for w in ["part number", "part no", "product code", "product no", "part #", "item code"]):
-                temp_map.setdefault("product_code", idx)
-            elif any(w in key for w in ["plan qty", "production plan qty", "planned qty", "plan quantity", "quantity", "qty"]):
-                temp_map.setdefault("planned_quantity", idx)
-            elif any(w in key for w in ["month/date", "month", "target period", "period", "planning month", "date"]):
-                temp_map.setdefault("target_period", idx)
-            elif any(w in key for w in ["planning version", "version", "rev", "revision"]):
-                temp_map.setdefault("planning_version", idx)
-            elif any(w in key for w in ["uom", "unit"]):
-                temp_map.setdefault("uom", idx)
-            elif any(w in key for w in ["remarks", "remark", "notes", "comments"]):
-                temp_map.setdefault("remarks", idx)
-
-        if len(temp_map) > best_matches:
-            best_matches = len(temp_map)
-            best_header_idx = r_idx
-            header_idx_map = temp_map
-
-    if best_header_idx is None:
-        best_header_idx = 0
-        header_idx_map = {
-            "plant": 0,
-            "customer": 1,
-            "product_code": 2,
-            "description": 3,
-            "planned_quantity": 4,
-            "target_period": 5,
-        }
-
-    data_rows = non_empty_rows[best_header_idx + 1:]
-    if not data_rows:
-        data_rows = non_empty_rows
-
-    if mode == "REPLACE":
-        active = session.scalars(select(PRDRecord).where(PRDRecord.is_deleted.is_(False))).all()
-        for r in active:
-            r.is_deleted = True
-
-    imported_rows: list[PRDRecord] = []
-    base_idx = session.scalar(select(func.coalesce(func.max(PRDRecord.row_index), 0)).where(PRDRecord.is_deleted.is_(False))) or 0
-
-    for i, row in enumerate(data_rows, start=1):
-        if not any(c is not None and str(c).strip() != "" for c in row):
-            continue
-
-        plant_val = str(row[header_idx_map["plant"]]).strip() if "plant" in header_idx_map and header_idx_map["plant"] < len(row) and row[header_idx_map["plant"]] is not None else "Plant 1"
-        cust_val = str(row[header_idx_map["customer"]]).strip() if "customer" in header_idx_map and header_idx_map["customer"] < len(row) and row[header_idx_map["customer"]] is not None else None
-        prod_val = str(row[header_idx_map["product_code"]]).strip() if "product_code" in header_idx_map and header_idx_map["product_code"] < len(row) and row[header_idx_map["product_code"]] is not None else f"PART-{i}"
-        raw_desc = str(row[header_idx_map["description"]]).strip() if "description" in header_idx_map and header_idx_map["description"] < len(row) and row[header_idx_map["description"]] is not None else ""
-        desc_val = raw_desc if raw_desc else f"{prod_val} Product"
-
-        raw_qty = row[header_idx_map["planned_quantity"]] if "planned_quantity" in header_idx_map and header_idx_map["planned_quantity"] < len(row) else 0
-        try:
-            qty_val = Decimal(str(raw_qty).strip())
-        except (InvalidOperation, ValueError, TypeError):
-            qty_val = Decimal("0")
-
-        uom_val = str(row[header_idx_map["uom"]]).strip() if "uom" in header_idx_map and header_idx_map["uom"] < len(row) and row[header_idx_map["uom"]] is not None else "Nos"
-        now_period = datetime.now().strftime("%Y-%m")
-        period_val = str(row[header_idx_map["target_period"]]).strip() if "target_period" in header_idx_map and header_idx_map["target_period"] < len(row) and row[header_idx_map["target_period"]] is not None else now_period
-        ver_val = str(row[header_idx_map["planning_version"]]).strip() if "planning_version" in header_idx_map and header_idx_map["planning_version"] < len(row) and row[header_idx_map["planning_version"]] is not None else "V1"
-        rem_val = str(row[header_idx_map["remarks"]]).strip() if "remarks" in header_idx_map and header_idx_map["remarks"] < len(row) and row[header_idx_map["remarks"]] is not None else None
-
-        rec = PRDRecord(
-            id=uuid4(),
-            row_index=base_idx + i,
-            plant=plant_val,
-            customer=cust_val,
-            product_code=prod_val,
-            description=desc_val,
-            planned_quantity=qty_val,
-            uom=uom_val,
-            target_period=period_val,
-            planning_version=ver_val,
-            status="SAVED",
-            remarks=rem_val,
-            created_by=actor,
-        )
-        session.add(rec)
-        imported_rows.append(rec)
-
-    audit(
-        session, actor, uuid4(), "IMPORT_EXCEL_SHEET", reason,
-        {"sheet_name": sheet_name, "filename": filename, "imported_count": len(imported_rows)},
-        entity="prd_records"
-    )
-
-    session.commit()
-    return PRDExcelImportResponse(
-        sheet_name=sheet_name,
-        imported_count=len(imported_rows),
-        records=[to_prd_record_response(r) for r in imported_rows],
-    )
-
+def import_prd_excel(session, file_bytes, filename, sheet_name, actor, mode='APPEND',
+                     reason='Excel PRD import', target_period=None, revision_label=None):
+    from app.services.product_source import source_rows
+    from app.services.prd_source import parse, revision
+    from app.models.masters import Product
+    from app.models.mappings import ProductPlant
+    from app.models.production import Plant
+    from app.models.prd import ImportBatch, PlanningVersion
+    from app.services.prd import promote_batch_to_planning_version
+    if mode != 'APPEND':
+        raise ApplicationError('PRD_HISTORY_PROTECTED', 'Import a new revision instead of replacing revision history.', 409)
+    rows = parse(source_rows(file_bytes, filename, sheet_name), target_period, revision_label)
+    products = list(session.scalars(select(Product).where(Product.is_active.is_(True))))
+    period, label = rows[0]['period'], rows[0]['revision']
+    if session.scalar(select(PlanningVersion.id).where(PlanningVersion.planning_period == period,
+                         PlanningVersion.version_number == revision(label))):
+        raise ApplicationError('PRD_REVISION_EXISTS', 'This revision already exists. Keep its history and use a new revision for changes.', 409)
+    staged, workspace = [], []
+    seen = set()
+    for row in rows:
+        matches = [p for p in products if any(source and source in {p.code, p.item_id, p.part_number}
+                   for source in (row['item_id'], row['part_number'], row['code']))]
+        if len(matches) != 1:
+            raise ApplicationError('PRODUCT_REVIEW_REQUIRED', f"Row {row['source_row_number']} needs one unambiguous active product master. Review it in Masters → Products.", 422)
+        product = matches[0]
+        if row['uom'] and row['uom'].casefold() != product.uom.casefold():
+            raise ApplicationError('PRD_UNIT_MISMATCH', f"Product {product.code}: source production unit differs from its reviewed master.", 422)
+        mappings = list(session.scalars(select(ProductPlant).where(ProductPlant.product_id == product.id,
+                          ProductPlant.is_active.is_(True))))
+        if row['plant']:
+            mappings = [m for m in mappings if session.get(Plant, m.plant_id).name == row['plant']]
+        elif len(mappings) > 1:
+            mappings = [m for m in mappings if m.is_primary]
+        if len(mappings) != 1 or not session.get(Plant, mappings[0].plant_id).is_active:
+            raise ApplicationError('PLANT_MAPPING_REQUIRED', f"Product {product.code} needs one verified active plant mapping or an explicit source plant.", 422)
+        plant = session.get(Plant, mappings[0].plant_id)
+        if (product.id, plant.id) in seen:
+            raise ApplicationError('DUPLICATE_PRD_ITEM', f"Product {product.code} occurs more than once for {plant.name}; review the source rows.", 422)
+        seen.add((product.id, plant.id))
+        staged.append({'product_code': product.code, 'product_id': str(product.id), 'plant_code': plant.name,
+                       'planned_quantity': str(row['quantity']), 'uom': product.uom, 'target_period': period,
+                       'source_row_number': row['source_row_number'], 'customer_id': None,
+                       'source_item_id': row['item_id'], 'source_part_number': row['part_number']})
+        workspace.append(PRDRecord(id=uuid4(), row_index=row['source_row_number'], plant=plant.name,
+                          product_code=product.code, description=product.name, planned_quantity=row['quantity'],
+                          uom=product.uom, target_period=period, planning_version=label, status='VALIDATED', created_by=actor))
+    import hashlib
+    batch = ImportBatch(filename=filename, file_size_bytes=len(file_bytes), uploaded_by=actor, status='VALIDATED',
+                        row_count=len(staged), valid_row_count=len(staged), error_row_count=0, staged_data=staged)
+    session.add(batch)
+    session.add_all(workspace)
+    session.flush()
+    audit(session, actor, batch.id, 'IMPORT_VERIFIED_PRD', reason,
+          {'sheet': sheet_name, 'filename': filename, 'sha256': hashlib.sha256(file_bytes).hexdigest(),
+           'planning_period': period, 'revision': label, 'row_count': len(staged)}, entity='import_batches')
+    promote_batch_to_planning_version(session, batch.id, actor, period, label)
+    return PRDExcelImportResponse(sheet_name=sheet_name, imported_count=len(workspace),
+                                 records=[to_prd_record_response(r) for r in workspace])
 
 def export_prd_excel(
     session,

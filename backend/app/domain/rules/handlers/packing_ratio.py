@@ -8,14 +8,27 @@ class PackingRatioHandler(BaseRuleHandler):
         params = PackingRatioParams.model_validate(input_data.parameters)
         steps: list[CalculationStep] = []
 
-        raw_qty = input_data.production_quantity / params.units_per_pack
+        pack_count = input_data.production_quantity / params.units_per_pack
         steps.append(
             CalculationStep(
                 step_number=1,
-                description="Calculate packaging requirement from production quantity and units per pack",
+                description="Calculate packaging pack requirement from production quantity and units per pack",
                 formula=f"{input_data.production_quantity} / {params.units_per_pack}",
-                result=raw_qty,
+                result=pack_count,
             )
         )
+
+        if params.material_per_pack != Decimal("1"):
+            raw_qty = pack_count * params.material_per_pack
+            steps.append(
+                CalculationStep(
+                    step_number=2,
+                    description=f"Calculate material requirement using factor of {params.material_per_pack} per pack",
+                    formula=f"{pack_count} * {params.material_per_pack}",
+                    result=raw_qty,
+                )
+            )
+        else:
+            raw_qty = pack_count
 
         return raw_qty, steps

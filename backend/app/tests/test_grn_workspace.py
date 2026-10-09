@@ -49,7 +49,7 @@ def workspace_client():
     with Session(engine, expire_on_commit=False) as session:
         grants = [Permission(code=p, description='Workspace test grant') for p in ALL_WORKSPACE_PERMISSIONS]
         role = Role(code="WORKSPACE_TESTER", name="Workspace tester", permissions=grants)
-        user = User(username="workspace_operator", password_hash=passwords.hash("password"), roles=[role])
+        user = User(username="workspace_operator", password_hash=passwords.hash("password"), roles=[role], can_upload_grn=True)
         session.add(user)
         session.commit()
 
@@ -87,7 +87,8 @@ def create_sample_workbook(sheets_data: dict[str, list[list]]) -> bytes:
 
 def test_workspace_records_permission_denied(workspace_client):
     client, session, user, headers = workspace_client
-    # Clear permissions
+    # Revoking the flag must take effect with the same token.
+    user.can_upload_grn = False
     user.roles[0].permissions = []
     session.commit()
     res = client.get(BASE + '/records', headers=headers)

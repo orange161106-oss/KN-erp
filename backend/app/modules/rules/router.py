@@ -1,3 +1,4 @@
+from app.security.permissions import require_permissions
 from typing import Annotated, Optional
 from uuid import UUID
 
@@ -28,7 +29,7 @@ from app.services.rules import (
 router = APIRouter(prefix="/consumption-norms", tags=["consumption norms"])
 
 
-@router.get("", response_model=list[ConsumptionNormResponse])
+@router.get("", response_model=list[ConsumptionNormResponse], dependencies=[Depends(require_permissions('norms.read'))])
 def get_consumption_norms(
     session: Annotated[Session, Depends(get_db)],
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
@@ -48,7 +49,7 @@ def get_consumption_norms(
     )
 
 
-@router.get("/{norm_id}", response_model=ConsumptionNormResponse)
+@router.get("/{norm_id}", response_model=ConsumptionNormResponse, dependencies=[Depends(require_permissions('norms.read'))])
 def get_single_consumption_norm(
     norm_id: UUID,
     session: Annotated[Session, Depends(get_db)],
@@ -57,7 +58,7 @@ def get_single_consumption_norm(
     return get_consumption_norm(session, norm_id)
 
 
-@router.post("", response_model=ConsumptionNormResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ConsumptionNormResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permissions('norms.write'))])
 def post_consumption_norm(
     data: ConsumptionNormCreate,
     session: Annotated[Session, Depends(get_db)],
@@ -66,7 +67,7 @@ def post_consumption_norm(
     return create_consumption_norm(session, data)
 
 
-@router.put("/{norm_id}", response_model=ConsumptionNormResponse)
+@router.put("/{norm_id}", response_model=ConsumptionNormResponse, dependencies=[Depends(require_permissions('norms.write'))])
 def put_consumption_norm(
     norm_id: UUID,
     data: ConsumptionNormUpdate,
@@ -76,7 +77,7 @@ def put_consumption_norm(
     return update_consumption_norm(session, norm_id, data)
 
 
-@router.post("/evaluate", response_model=EvaluationResponse)
+@router.post("/evaluate", response_model=EvaluationResponse, dependencies=[Depends(require_permissions('requirements.calculate'))])
 def post_evaluate_norm(
     req: EvaluationRequest,
     session: Annotated[Session, Depends(get_db)],
@@ -85,7 +86,7 @@ def post_evaluate_norm(
     return evaluate_consumption_norm(session, req)
 
 
-@router.post("/calculate-item", response_model=SingleRequirementCalculationResponse)
+@router.post("/calculate-item", response_model=SingleRequirementCalculationResponse, dependencies=[Depends(require_permissions('requirements.calculate'))])
 def post_calculate_item(
     req: ItemCalculationRequest,
     session: Annotated[Session, Depends(get_db)],

@@ -12,11 +12,14 @@ from app.schemas.auth import CurrentUser
 def get_user_authorized_plant_ids(session: Session, user: CurrentUser) -> list[UUID] | None:
     """Return authorized plant IDs for the user.
 
-    - Returns None if the user has global plant access (Super Admin or ADMIN role).
+    - Returns None if the user has global plant access (Super Admin).
     - Returns list of assigned plant UUIDs for plant-constrained users.
     """
-    if user.is_super_admin or "ADMIN" in user.roles:
+    if user.is_super_admin:
         return None  # Unrestricted access across all plants
+
+    if user.plant_ids:
+        return list(user.plant_ids)
 
     # Query assigned plants from user_plants table
     stmt = select(UserPlant.plant_id).where(UserPlant.user_id == user.id)
@@ -30,7 +33,7 @@ def validate_plant_access(
     target_plant_id: UUID | None,
 ) -> None:
     """Validate that the user is authorized to access target_plant_id."""
-    if user.is_super_admin or "ADMIN" in user.roles:
+    if user.is_super_admin:
         return
 
     authorized_plant_ids = get_user_authorized_plant_ids(session, user)

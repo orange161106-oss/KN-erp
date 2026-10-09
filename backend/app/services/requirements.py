@@ -22,6 +22,8 @@ from app.models.prd import PlanningVersion, PRDOrderItem
 from app.models.production import Plant, Process
 from app.models.requirements import CalculatedRequirement, RequirementCalculationError
 from app.models.rules import ConsumptionNorm
+from app.models.plant_workflow import PlantConfirmation
+from app.models.audit import AuditLog
 from app.schemas.requirements import (
     CalculatedRequirementResponse,
     CalculationRunRequest,
@@ -88,20 +90,22 @@ def calculate_planning_version_requirements(
     current_user_id: UUID,
 ) -> RequirementCalculationRunResponse:
     # 1. Fetch Planning Version & Validate Status
-    version = db.get(PlanningVersion, req.planning_version_id)
+    version = db.scalar(select(PlanningVersion).where(PlanningVersion.id == req.planning_version_id).with_for_update())
     if not version:
         raise ApplicationError(
             "NOT_FOUND",
             f"Planning version '{req.planning_version_id}' not found",
             status_code=404,
         )
+    latest = db.scalar(select(PlanningVersion).where(PlanningVersion.planning_period == version.planning_period)
+                       .order_by(PlanningVersion.version_number.desc()).limit(1))
+    if latest.id != version.id:
+        raise ApplicationError("LATEST_REVISION_REQUIRED", "Calculate the latest revision for this planning period. Older results remain available as history.", 409)
 
     eligible_statuses = {
         "VALIDATED",
-        "LOCKED",
         "CALCULATED",
         "CALCULATED_WITH_ERRORS",
-        "APPROVED",
     }
     if version.status not in eligible_statuses:
         raise ApplicationError(
@@ -109,6 +113,8 @@ def calculate_planning_version_requirements(
             f"Planning version '{version.id}' is in status '{version.status}', must be VALIDATED, LOCKED, or CALCULATED to run requirements calculation",
             status_code=400,
         )
+    if db.scalar(select(PlantConfirmation.id).where(PlantConfirmation.planning_version_id == version.id).limit(1)):
+        raise ApplicationError("CALCULATION_HISTORY_PROTECTED", "Confirmed calculations cannot be replaced. Create a new planning revision.", 409)
 
     # 2. Idempotency & Recalculation Cleanup
     # Atomically purge prior calculation run and error records for this version
@@ -138,13 +144,15 @@ def calculate_planning_version_requirements(
 
     # 4. Process Each Item Deterministically
     for item in items:
+        if item.planned_quantity == Decimal("0"):
+            continue
         # A. Product Resolution
         product = (
             db.get(Product, item.product_id)
             if item.product_id
             else db.scalars(select(Product).where(Product.code == item.product_code)).first()
         )
-        if not product:
+        if not product or not product.is_active:
             err = RequirementCalculationError(
                 planning_version_id=version.id,
                 prd_order_item_id=item.id,
@@ -170,13 +178,15 @@ def calculate_planning_version_requirements(
             # If line specifies plant code, attempt to match plant name/location, else use primary
             if item.plant_code:
                 for pm in plant_mappings:
-                    if pm.plant and (pm.plant.name == item.plant_code or item.plant_code in pm.plant.name):
+                    if pm.plant and (pm.plant.name == item.plant_code):
                         matched_plant = pm.plant
                         break
-            if not matched_plant and plant_mappings[0].plant:
-                matched_plant = plant_mappings[0].plant
+            if not item.plant_code:
+                candidates = [pm for pm in plant_mappings if pm.is_primary] if len(plant_mappings) > 1 else plant_mappings
+                if len(candidates) == 1:
+                    matched_plant = candidates[0].plant
 
-        if not matched_plant:
+        if not matched_plant or not matched_plant.is_active:
             err = RequirementCalculationError(
                 planning_version_id=version.id,
                 prd_order_item_id=item.id,
@@ -298,7 +308,7 @@ def calculate_planning_version_requirements(
                 rule_version=selected_norm.version,
                 parameters=selected_norm.parameters,
                 production_quantity=item.planned_quantity,
-                rounding_policy=RoundingPolicy(selected_norm.rounding_policy),
+                rounding_policy=RoundingPolicy.parse(selected_norm.rounding_policy),
                 rounding_precision=selected_norm.rounding_precision,
                 unit=calc_unit,
             )
@@ -432,6 +442,9 @@ def calculate_planning_version_requirements(
     else:
         version.status = "CALCULATED"
 
+    db.add(AuditLog(actor_id=current_user_id, action="CALCULATE", entity_type="planning_version", entity_id=version.id,
+        old_values=None, new_values={"status": version.status, "requirement_ids": [str(r.id) for r in persisted_requirements],
+                                    "error_count": len(persisted_errors)}, reason="Explicit requirement calculation for validated revision"))
     db.commit()
 
     # Load relationships for error responses

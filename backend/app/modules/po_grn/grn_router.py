@@ -20,6 +20,7 @@ from app.schemas.grn import (
 )
 from app.security.dependencies import get_current_user
 from app.security.permissions import require_permissions
+from app.security.policy import allows
 from app.services import grn as service
 
 router = APIRouter(prefix='/grns', tags=['imported GRNs'], responses={

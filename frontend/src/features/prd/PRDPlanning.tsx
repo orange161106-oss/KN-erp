@@ -28,12 +28,12 @@ export default function PRDPlanning() {
 
   // RBAC checks
   const isAdmin = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN'));
-  const canRead = isAdmin || Boolean(user?.prd_planning_read);
-  const canCreate = isAdmin || Boolean(user?.prd_planning_create);
-  const canUpdate = isAdmin || Boolean(user?.prd_planning_update);
-  const canDelete = isAdmin || Boolean(user?.prd_planning_delete);
-  const canImport = canCreate;
-  const canExport = canRead;
+  const canRead = Boolean(isAdmin || user?.prd_planning_read || canPerform(user, 'prd', 'read'));
+  const canCreate = Boolean(isAdmin || user?.prd_planning_create || canPerform(user, 'prd', 'create') || user?.permissions?.includes('prd.plan.create'));
+  const canUpdate = Boolean(isAdmin || user?.prd_planning_update || canPerform(user, 'prd', 'update') || user?.permissions?.includes('prd.plan.update'));
+  const canDelete = Boolean(isAdmin || user?.prd_planning_delete || canPerform(user, 'prd', 'delete') || user?.permissions?.includes('prd.plan.delete'));
+  const canImport = Boolean(canCreate || canPerform(user, 'prd', 'import') || user?.permissions?.includes('prd.plan.import'));
+  const canExport = Boolean(canRead || canPerform(user, 'prd', 'export'));
 
   // Data state
   const [records, setRecords] = useState<PRDRecord[]>([]);
@@ -53,6 +53,8 @@ export default function PRDPlanning() {
   const [periodFilter, setPeriodFilter] = useState('');
   const [versionFilter, setVersionFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [importPeriod, setImportPeriod] = useState('');
+  const [importRevision, setImportRevision] = useState('');
 
   // Modals state
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -278,6 +280,8 @@ export default function PRDPlanning() {
     const form = new FormData();
     form.append('file', file);
     form.append('sheet_name', sheetName);
+    if (importPeriod) form.append('target_period', importPeriod);
+    if (importRevision.trim()) form.append('revision_label', importRevision.trim());
 
     const res = await apiClient.post<{
       sheet_name: string;
@@ -544,7 +548,13 @@ export default function PRDPlanning() {
         onInspect={handleInspect}
         onImport={handleImport}
         isLoading={isSaving}
-      />
+      >
+        <div className="flex gap-3 border p-3">
+          <label>Planning month <input type="month" value={importPeriod} onChange={e => setImportPeriod(e.target.value)} /></label>
+          <label>Revision (blank selects latest for this month) <input value={importRevision} placeholder="R3" onChange={e => setImportRevision(e.target.value)} /></label>
+        </div>
+        <p>Review products and plant mappings first. Imports preserve revision history and do not approve requirements.</p>
+      </ExcelUploadModal>
 
       <ConfirmDialog
         isOpen={showDeleteConfirm}

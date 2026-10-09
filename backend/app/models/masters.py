@@ -14,6 +14,8 @@ class Product(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    item_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    part_number: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     uom: Mapped[str] = mapped_column(String(16), default="PCS", nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

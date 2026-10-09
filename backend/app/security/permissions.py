@@ -56,7 +56,7 @@ def require_permissions(*codes: str) -> Callable[..., CurrentUser]:
 
 def require_feature_flag(flag_name: str) -> Callable[..., CurrentUser]:
     def dependency(user: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
-        if user.is_super_admin or "ADMIN" in user.roles:
+        if user.is_super_admin:
             return user
         if getattr(user, flag_name, False):
             return user
