@@ -70,7 +70,7 @@ function InventoryContent() {
   if (since) historyParams.set('since', new Date(since).toISOString());
   if (until) historyParams.set('until', new Date(until).toISOString());
   const history = useApi<Page<StockTransaction>>(`${endpoint}/transactions?${historyParams}`, revision);
-  const canImport = user?.is_super_admin || user?.permissions.includes('inventory.stock.import');
+  const canImport = Boolean(user?.is_super_admin || user?.inventory_create || user?.permissions?.includes('inventory.stock.import'));
   function viewHistory(row: Balance) { setMaterial({ id: row.consumable_id, code: row.code }); setHistoryOffset(0); setTab('history'); }
 
   return <div className="max-w-7xl space-y-5">

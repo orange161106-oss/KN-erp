@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { apiClient, ApiError } from '../../api/client';
+import { useAuth } from '../auth/context';
 import type {
   AdjustmentCategory,
   AdjustmentStatus,
@@ -75,6 +76,17 @@ function PlanningVersionSelector({
 // ── Tab 1: Confirmations ───────────────────────────────────────────────────────
 
 function ConfirmationsTab({ planningVersionId }: { planningVersionId: string }) {
+  const { user } = useAuth();
+  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const hasModernFlags = user && (
+    'plant_workflow_read' in user ||
+    'plant_workflow_create' in user ||
+    'plant_workflow_update' in user ||
+    'plant_workflow_delete' in user
+  );
+  const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.plant_workflow_update : true));
+  const hasActions = canUpdate;
+
   const [calcReqs, setCalcReqs] = useState<CalculatedRequirementItem[]>([]);
   const [confirmations, setConfirmations] = useState<PlantConfirmationResponse[]>([]);
   const [loading, setLoading] = useState(false);
@@ -164,8 +176,12 @@ function ConfirmationsTab({ planningVersionId }: { planningVersionId: string }) 
                 <th className="px-3 py-2 text-left font-medium text-gray-600">UOM</th>
                 <th className="px-3 py-2 text-left font-medium text-gray-600">Rule</th>
                 <th className="px-3 py-2 text-left font-medium text-gray-600">Status</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Notes</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Action</th>
+                {hasActions && (
+                  <>
+                    <th className="px-3 py-2 text-left font-medium text-gray-600">Notes</th>
+                    <th className="px-3 py-2 text-left font-medium text-gray-600">Action</th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -191,36 +207,40 @@ function ConfirmationsTab({ planningVersionId }: { planningVersionId: string }) 
                         <span className="text-gray-400 text-xs">Pending</span>
                       )}
                     </td>
-                    <td className="px-3 py-2">
-                      {!confirmed && (
-                        <input
-                          type="text"
-                          placeholder="Optional note…"
-                          className="border rounded px-2 py-1 text-xs w-40"
-                          value={notes[r.id] ?? ''}
-                          onChange={(e) =>
-                            setNotes((prev) => ({ ...prev, [r.id]: e.target.value }))
-                          }
-                        />
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      {confirmed ? (
-                        <button
-                          onClick={() => handleRetract(r.id)}
-                          className="text-xs text-red-600 hover:text-red-800 underline"
-                        >
-                          Retract
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleConfirm(r.id)}
-                          className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-                        >
-                          Confirm
-                        </button>
-                      )}
-                    </td>
+                    {hasActions && (
+                      <>
+                        <td className="px-3 py-2">
+                          {!confirmed && (
+                            <input
+                              type="text"
+                              placeholder="Optional note…"
+                              className="border rounded px-2 py-1 text-xs w-40"
+                              value={notes[r.id] ?? ''}
+                              onChange={(e) =>
+                                setNotes((prev) => ({ ...prev, [r.id]: e.target.value }))
+                              }
+                            />
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {confirmed ? (
+                            <button
+                              onClick={() => handleRetract(r.id)}
+                              className="text-xs text-red-600 hover:text-red-800 underline"
+                            >
+                              Retract
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleConfirm(r.id)}
+                              className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                            >
+                              Confirm
+                            </button>
+                          )}
+                        </td>
+                      </>
+                    )}
                   </tr>
                 );
               })}
@@ -250,6 +270,19 @@ function AdjustmentsTab({
   planningVersionId: string;
   currentUserId: string;
 }) {
+  const { user } = useAuth();
+  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const hasModernFlags = user && (
+    'plant_workflow_read' in user ||
+    'plant_workflow_create' in user ||
+    'plant_workflow_update' in user ||
+    'plant_workflow_delete' in user
+  );
+  const canCreate = Boolean(isSuperAdmin || (hasModernFlags ? user?.plant_workflow_create : true));
+  const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.plant_workflow_update : true));
+  const canDelete = Boolean(isSuperAdmin || (hasModernFlags ? user?.plant_workflow_delete : true));
+  const hasActions = canUpdate || canDelete;
+
   const [adjustments, setAdjustments] = useState<RequirementAdjustmentResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -354,16 +387,18 @@ function AdjustmentsTab({
             <option value="REJECTED">Rejected</option>
           </select>
         </div>
-        <button
-          onClick={() => setShowForm((v) => !v)}
-          className="text-sm bg-blue-600 text-white px-4 py-1.5 rounded hover:bg-blue-700"
-        >
-          {showForm ? 'Cancel' : '+ Submit Additional Requirement'}
-        </button>
+        {canCreate && (
+          <button
+            onClick={() => setShowForm((v) => !v)}
+            className="text-sm bg-blue-600 text-white px-4 py-1.5 rounded hover:bg-blue-700"
+          >
+            {showForm ? 'Cancel' : '+ Submit Additional Requirement'}
+          </button>
+        )}
       </div>
 
       {/* Submit Form */}
-      {showForm && (
+      {canCreate && showForm && (
         <form
           onSubmit={handleSubmit}
           className="bg-gray-50 border rounded p-4 mb-6 space-y-3"
@@ -464,7 +499,7 @@ function AdjustmentsTab({
                 <th className="px-3 py-2 text-left font-medium text-gray-600">Reason</th>
                 <th className="px-3 py-2 text-left font-medium text-gray-600">Requested By</th>
                 <th className="px-3 py-2 text-left font-medium text-gray-600">Status</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Action</th>
+                {hasActions && <th className="px-3 py-2 text-left font-medium text-gray-600">Action</th>}
               </tr>
             </thead>
             <tbody>
@@ -493,35 +528,37 @@ function AdjustmentsTab({
                   <td className="px-3 py-2">
                     <StatusBadge status={adj.status} />
                   </td>
-                  <td className="px-3 py-2">
-                    {adj.status === 'PENDING' && adj.requested_by === currentUserId && (
-                      <button
-                        onClick={() => handleWithdraw(adj.id)}
-                        className="text-xs text-red-600 hover:text-red-800 underline"
-                      >
-                        Withdraw
-                      </button>
-                    )}
-                    {adj.status === 'PENDING' && adj.requested_by !== currentUserId && (
-                      <div className="flex gap-1">
+                  {hasActions && (
+                    <td className="px-3 py-2">
+                      {canDelete && adj.status === 'PENDING' && adj.requested_by === currentUserId && (
                         <button
-                          onClick={() => handleReview(adj.id, 'APPROVED')}
-                          className="text-xs bg-green-600 text-white px-2 py-0.5 rounded hover:bg-green-700"
+                          onClick={() => handleWithdraw(adj.id)}
+                          className="text-xs text-red-600 hover:text-red-800 underline"
                         >
-                          Approve
+                          Withdraw
                         </button>
-                        <button
-                          onClick={() => handleReview(adj.id, 'REJECTED')}
-                          className="text-xs bg-red-600 text-white px-2 py-0.5 rounded hover:bg-red-700"
-                        >
-                          Reject
-                        </button>
-                      </div>
-                    )}
-                    {adj.status !== 'PENDING' && (
-                      <span className="text-xs text-gray-400">Reviewed</span>
-                    )}
-                  </td>
+                      )}
+                      {canUpdate && adj.status === 'PENDING' && adj.requested_by !== currentUserId && (
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => handleReview(adj.id, 'APPROVED')}
+                            className="text-xs bg-green-600 text-white px-2 py-0.5 rounded hover:bg-green-700"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            onClick={() => handleReview(adj.id, 'REJECTED')}
+                            className="text-xs bg-red-600 text-white px-2 py-0.5 rounded hover:bg-red-700"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      )}
+                      {adj.status !== 'PENDING' && (
+                        <span className="text-xs text-gray-400">Reviewed</span>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -631,8 +668,22 @@ interface PlantWorkflowProps {
 }
 
 export default function PlantWorkflow({ currentUserId }: PlantWorkflowProps) {
+  const { user } = useAuth();
+  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const hasModernFlags = user && (
+    'plant_workflow_read' in user ||
+    'plant_workflow_create' in user ||
+    'plant_workflow_update' in user ||
+    'plant_workflow_delete' in user
+  );
+  const canRead = Boolean(isSuperAdmin || (hasModernFlags ? user?.plant_workflow_read : true));
+
   const [activeTab, setActiveTab] = useState<TabKey>('confirmations');
   const [planningVersionId, setPlanningVersionId] = useState('');
+
+  if (!canRead) {
+    return <p role="alert" className="text-red-700">You do not have permission to view plant workflow.</p>;
+  }
 
   const tabs: { key: TabKey; label: string }[] = [
     { key: 'confirmations', label: 'Confirmations' },

@@ -27,9 +27,12 @@ def seed_users():
         roles_by_code = {r.code: r for r in roles}
         print(f"Found {len(roles)} roles and {len(permissions)} permissions.")
 
-        # Assign all permissions to ADMIN and appropriate domain roles
+        # Assign permissions strictly: only ADMIN receives full wildcard permissions
         for r in roles:
-            r.permissions = permissions  # Give full permissions for local dev testing
+            if r.code == "ADMIN":
+                r.permissions = permissions
+            else:
+                r.permissions = []
 
         session.commit()
         print("Assigned permissions to roles.")
@@ -113,6 +116,12 @@ def seed_users():
                 "can_access_plant_3": True,
                 "can_access_plant_4": True,
                 "can_access_plant_5": True,
+                "can_access_dashboard": True if (is_super or username == "manager") else False,
+                "can_access_reports": True if (is_super or username == "manager") else False,
+                "alert_production": True if (is_super or username in ["planner", "plant_incharge"]) else False,
+                "alert_inventory": True if (is_super or username in ["store", "planner"]) else False,
+                "alert_purchasing": True if (is_super or username in ["purchase", "manager"]) else False,
+                "alert_system": True if is_super else False,
             }
 
             if existing:

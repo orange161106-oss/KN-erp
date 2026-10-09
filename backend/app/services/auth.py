@@ -46,9 +46,12 @@ def login(
             "INVALID_CREDENTIALS", "Invalid username or password.", 401,
             headers=BEARER_HEADERS,
         )
+    token = create_access_token(user.id, settings)
+    user_identity = current_user(session, token, settings)
     return TokenResponse(
-        access_token=create_access_token(user.id, settings),
+        access_token=token,
         expires_in=settings.auth_access_token_expire_minutes * 60,
+        user=user_identity,
     )
 
 
@@ -85,6 +88,12 @@ def current_user(session: Session, token: str, settings: Settings) -> CurrentUse
             can_access_plant_3=getattr(user, "can_access_plant_3", False),
             can_access_plant_4=getattr(user, "can_access_plant_4", False),
             can_access_plant_5=getattr(user, "can_access_plant_5", False),
+            can_access_dashboard=getattr(user, "can_access_dashboard", False),
+            can_access_reports=getattr(user, "can_access_reports", False),
+            alert_production=getattr(user, "alert_production", False),
+            alert_inventory=getattr(user, "alert_inventory", False),
+            alert_purchasing=getattr(user, "alert_purchasing", False),
+            alert_system=getattr(user, "alert_system", False),
         )
     except SQLAlchemyError:
         raise database_unavailable() from None

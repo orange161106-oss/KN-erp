@@ -19,10 +19,13 @@ export default function MasterPage({ resource }: { resource: Resource }) {
   const [form, setForm] = useState<{ kind: 'create' | 'edit' | 'status'; record?: Master } | null>(null);
   const [supplier, setSupplier] = useState<Master | null>(null);
   const isSuperAdmin = Boolean(user?.is_super_admin);
-  const canWrite = Boolean(isSuperAdmin || user?.permissions?.includes(`masters.${resource}.write`) || user?.permissions?.includes('masters.write'));
-  const canCreate = Boolean(canWrite || user?.masters_create);
-  const canUpdate = Boolean(canWrite || user?.masters_update);
-  const canDelete = Boolean(canWrite || user?.masters_delete);
+  const hasModernFlags = user && ('masters_read' in user || 'masters_create' in user || 'masters_update' in user || 'masters_delete' in user);
+  const canCreate = Boolean(isSuperAdmin || (hasModernFlags ? user.masters_create : user?.permissions?.includes(`masters.${resource}.write`) || user?.permissions?.includes('masters.write')));
+  const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user.masters_update : user?.permissions?.includes(`masters.${resource}.write`) || user?.permissions?.includes('masters.write')));
+  const canDelete = Boolean(isSuperAdmin || (hasModernFlags ? user.masters_delete : user?.permissions?.includes(`masters.${resource}.write`) || user?.permissions?.includes('masters.write')));
+  const canViewSupplierMappings = resource === 'suppliers' && Boolean(isSuperAdmin || (hasModernFlags ? user.masters_read : user?.permissions?.includes('masters.suppliers.read')));
+  const hasActions = canUpdate || canDelete || canViewSupplierMappings;
+
   const url = `${endpoint(resource)}?limit=25&offset=${offset}&q=${encodeURIComponent(settledSearch)}${status ? `&is_active=${status}` : ''}`;
   const result = useApi<Page<Master>>(url, revision);
   const saved = () => { setForm(null); setSupplier(null); setRevision(value => value + 1); };
@@ -38,21 +41,59 @@ export default function MasterPage({ resource }: { resource: Resource }) {
       <label className="text-sm">Status<select aria-label="Status" value={status} onChange={e => { setStatus(e.target.value); setOffset(0); }} className="block mt-1 border rounded p-2"><option value="true">Active</option><option value="false">Inactive</option><option value="">All</option></select></label>
       <button onClick={() => setRevision(value => value + 1)} className="self-end border rounded px-4 py-2">Refresh</button>
     </div>
-    {!result && <TableSkeleton columns={resource === 'consumables' ? 5 : 4} rows={5} />}
+    {!result && <TableSkeleton columns={(resource === 'consumables' ? 4 : 3) + (hasActions ? 1 : 0)} rows={5} />}
     {result?.error && <p role="alert" className="text-red-700">{result.error}</p>}
     {result?.data && <>
-      <div className="overflow-x-auto bg-white border rounded-lg"><table className="w-full text-sm text-left">
-        <thead className="bg-gray-50"><tr><th className="p-3">Code</th><th className="p-3">Name</th>{resource === 'consumables' && <th className="p-3">Unit</th>}<th className="p-3">Status</th><th className="p-3">Actions</th></tr></thead>
-        <tbody>{result.data.items.map(record => <tr key={record.id} className="border-t"><td className="p-3 font-medium">{record.code}</td><td className="p-3">{record.name}</td>
-          {resource === 'consumables' && <td className="p-3">{record.unit_id && (isSuperAdmin || user?.masters_read || user?.permissions?.includes('masters.units.read')) ? <ReferenceName resource="units" id={record.unit_id} /> : 'Unit read access required'}</td>}
-          <td className="p-3">{record.is_active ? 'Active' : 'Inactive'}</td>
-          <td className="p-3"><div className="flex flex-wrap gap-3">
-            {canUpdate && <button onClick={() => setForm({ kind: 'edit', record })} className="text-brand-navy underline">Edit</button>}
-            {canDelete && <button onClick={() => setForm({ kind: 'status', record })} className="text-brand-navy underline">{record.is_active ? 'Deactivate' : 'Reactivate'}</button>}
-            {resource === 'suppliers' && (isSuperAdmin || user?.masters_read || user?.permissions?.includes('masters.suppliers.read')) && <button onClick={() => setSupplier(record)} className="text-brand-navy underline">Consumable mappings</button>}
-          </div></td></tr>)}</tbody>
-      </table>{result.data.items.length === 0 && <p className="p-5 text-gray-600">No matching {resource}.</p>}</div>
-      <div className="flex items-center gap-4 text-sm"><span>{result.data.total} records</span><button disabled={offset === 0} onClick={() => setOffset(value => Math.max(0, value - 25))} className="border rounded px-3 py-1 disabled:opacity-40">Previous</button><button disabled={offset + 25 >= result.data.total} onClick={() => setOffset(value => value + 25)} className="border rounded px-3 py-1 disabled:opacity-40">Next</button></div>
+      <div className="overflow-x-auto bg-white border border-gray-200 rounded-lg shadow-sm">
+        <table className="w-full text-sm text-left">
+          <thead className="bg-gray-50 border-b border-gray-200 text-gray-700">
+            <tr>
+              <th className="p-3 font-semibold">Code</th>
+              <th className="p-3 font-semibold">Name</th>
+              {resource === 'consumables' && <th className="p-3 font-semibold">Unit</th>}
+              <th className="p-3 font-semibold">Status</th>
+              {hasActions && <th className="p-3 font-semibold text-right">Actions</th>}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {result.data.items.map(record => (
+              <tr key={record.id} className="hover:bg-gray-50/50 transition-colors">
+                <td className="p-3 font-medium text-gray-900">{record.code}</td>
+                <td className="p-3 text-gray-700">{record.name}</td>
+                {resource === 'consumables' && (
+                  <td className="p-3 text-gray-600">
+                    {record.unit_id && (isSuperAdmin || user?.masters_read || user?.permissions?.includes('masters.units.read'))
+                      ? <ReferenceName resource="units" id={record.unit_id} />
+                      : 'Unit read access required'}
+                  </td>
+                )}
+                <td className="p-3">
+                  <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${
+                    record.is_active ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'
+                  }`}>
+                    {record.is_active ? 'Active' : 'Inactive'}
+                  </span>
+                </td>
+                {hasActions && (
+                  <td className="p-3 text-right">
+                    <div className="flex items-center justify-end gap-3">
+                      {canUpdate && <button onClick={() => setForm({ kind: 'edit', record })} className="text-brand-navy hover:text-indigo-800 underline">Edit</button>}
+                      {canDelete && <button onClick={() => setForm({ kind: 'status', record })} className="text-brand-navy hover:text-indigo-800 underline">{record.is_active ? 'Deactivate' : 'Reactivate'}</button>}
+                      {canViewSupplierMappings && <button onClick={() => setSupplier(record)} className="text-brand-navy hover:text-indigo-800 underline">Consumable mappings</button>}
+                    </div>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {result.data.items.length === 0 && <p className="p-5 text-gray-600">No matching {resource}.</p>}
+      </div>
+      <div className="flex items-center gap-4 text-sm">
+        <span>{result.data.total} records</span>
+        <button disabled={offset === 0} onClick={() => setOffset(value => Math.max(0, value - 25))} className="border rounded px-3 py-1 disabled:opacity-40">Previous</button>
+        <button disabled={offset + 25 >= result.data.total} onClick={() => setOffset(value => value + 25)} className="border rounded px-3 py-1 disabled:opacity-40">Next</button>
+      </div>
     </>}
     {supplier && <SupplierMappings key={supplier.id} supplier={supplier} onClose={() => setSupplier(null)} />}
   </section>;

@@ -37,8 +37,10 @@ export default function SupplierMappings({ supplier, onClose }: { supplier: Mast
   const [offset, setOffset] = useState(0);
   const [status, setStatus] = useState('');
   const [form, setForm] = useState<{ kind: 'edit' | 'status'; record: Mapping } | 'create' | null>(null);
-  const canWrite = user?.permissions.includes('masters.supplier_consumables.write');
-  const canReadConsumables = user?.permissions.includes('masters.consumables.read');
+  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const hasModernFlags = user && ('masters_read' in user || 'masters_create' in user || 'masters_update' in user || 'masters_delete' in user);
+  const canWrite = Boolean(isSuperAdmin || (hasModernFlags ? user?.masters_update : user?.permissions?.includes('masters.supplier_consumables.write')));
+  const canReadConsumables = Boolean(isSuperAdmin || (hasModernFlags ? user?.masters_read : user?.permissions?.includes('masters.consumables.read')));
   const result = useApi<Page<Mapping>>(`${endpoint('supplier-consumables')}?supplier_id=${supplier.id}&limit=25&offset=${offset}${status ? `&is_active=${status}` : ''}`, revision);
   const saved = () => { setForm(null); setRevision(value => value + 1); };
   return <section className="border rounded-lg bg-white p-5 space-y-4" aria-label="Supplier mappings">

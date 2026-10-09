@@ -70,6 +70,7 @@ function Application() {
   const canPurchaseOrders = canOpen(user, '/purchase-orders');
   const canGRNs = canOpen(user, '/grns');
   const canReports = canOpen(user, '/reports');
+  const canAlerts = canOpen(user, '/alerts');
   const isAdmin = canOpen(user, '/admin');
 
   return (
@@ -124,7 +125,7 @@ function Application() {
           } />
           
           <Route path="/alerts/*" element={
-            <ProtectedRoute isAllowed={canReports}><AlertsCenter /></ProtectedRoute>
+            <ProtectedRoute isAllowed={canAlerts}><AlertsCenter /></ProtectedRoute>
           } />
           
           <Route path="/reports" element={

@@ -21,7 +21,9 @@ CRUD_MODULES = [
 ]
 CRUD_FLAGS = [f"{m}_{op}" for m in CRUD_MODULES for op in ("read", "create", "update", "delete")]
 PLANT_FLAGS = [f"can_access_plant_{i}" for i in range(1, 6)]
-ALL_PERMISSION_FLAGS = CRUD_FLAGS + PLANT_FLAGS
+GLOBAL_FLAGS = ["can_access_dashboard", "can_access_reports"]
+ALERT_FLAGS = ["alert_production", "alert_inventory", "alert_purchasing", "alert_system"]
+ALL_PERMISSION_FLAGS = CRUD_FLAGS + PLANT_FLAGS + GLOBAL_FLAGS + ALERT_FLAGS
 
 
 def check_admin_access(current_user: CurrentUser):

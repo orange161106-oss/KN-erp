@@ -104,6 +104,16 @@ class User(Base):
     can_access_plant_4: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     can_access_plant_5: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
+    # Global Module Access Flags
+    can_access_dashboard: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    can_access_reports: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+    # Categorized Alert Subscriptions
+    alert_production: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    alert_inventory: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    alert_purchasing: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    alert_system: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     roles: Mapped[list["Role"]] = relationship(secondary=user_roles, passive_deletes=True)

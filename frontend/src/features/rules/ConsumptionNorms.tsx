@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useContext } from 'react';
 import { apiClient } from '../../api/client';
 import type { ConsumptionNorm, EvaluationResult } from './types';
-import { useAuth } from '../auth/context';
+import { AuthContext } from '../auth/context';
 import NormSetup from './NormSetup';
+import { TableSkeleton } from '../../components/ui/Skeleton';
 
 const RULE_TYPES = [
   'PRODUCTION_RATE',
@@ -32,9 +33,22 @@ interface MasterItem {
 }
 
 export default function ConsumptionNorms() {
-  const { user } = useAuth();
-  const canEdit = Boolean(user?.is_super_admin || user?.permissions.includes('masters.write'));
-  const canCalculate = Boolean(user?.is_super_admin || user?.permissions.includes('requirements.calculate'));
+  const auth = useContext(AuthContext);
+  const user = auth?.user ?? null;
+  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const hasModernFlags = user && (
+    'consumption_norms_read' in user ||
+    'consumption_norms_create' in user ||
+    'consumption_norms_update' in user ||
+    'consumption_norms_delete' in user
+  );
+  const canRead = Boolean(isSuperAdmin || (hasModernFlags ? user?.consumption_norms_read : true));
+  const canCreate = Boolean(isSuperAdmin || (hasModernFlags ? user?.consumption_norms_create : user?.permissions?.includes('masters.write')));
+  const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.consumption_norms_update : user?.permissions?.includes('masters.write')));
+  const canDelete = Boolean(isSuperAdmin || (hasModernFlags ? user?.consumption_norms_delete : user?.permissions?.includes('masters.write')));
+  const canEdit = canUpdate || canDelete;
+  const hasActions = canUpdate || canDelete;
+  const canCalculate = Boolean(isSuperAdmin || user?.permissions?.includes('requirements.calculate'));
   const [norms, setNorms] = useState<ConsumptionNorm[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -254,6 +268,10 @@ export default function ConsumptionNorms() {
     return true;
   });
 
+  if (!canRead) {
+    return <p role="alert" className="text-red-700">You do not have permission to view consumption norms.</p>;
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -266,20 +284,22 @@ export default function ConsumptionNorms() {
     KNL-Verified Consumable Calculation Engine: 8 Deterministic Rule Families with Full Traceability
   </p>
 </div>
-        <button
-          type="button"
-          onClick={() => {
-            setShowCreateModal(true);
-            setCreateError('');
-          }}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-sm font-semibold shadow-xs flex items-center gap-1.5"
-        >
-          <span>＋</span> New Consumption Norm
-        </button>
+        {canCreate && (
+          <button
+            type="button"
+            onClick={() => {
+              setShowCreateModal(true);
+              setCreateError('');
+            }}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-sm font-semibold shadow-xs flex items-center gap-1.5"
+          >
+            <span>＋</span> New Consumption Norm
+          </button>
+        )}
       </div>
 
-      {canEdit && <NormSetup onCreated={async id => { await loadNorms(id); setEvalResult(null); setEvalError(''); }} />}
-      {!canEdit && !norms.length && <p>A Super Admin or an employee with Edit master data permission must configure a norm before calculation.</p>}
+      {canCreate && <NormSetup onCreated={async id => { await loadNorms(id); setEvalResult(null); setEvalError(''); }} />}
+      {!canCreate && <p className="text-sm text-gray-600">You have read-only access. A Super Admin or an employee with Create permission can configure norms.</p>}
 
       {/* Evaluation Simulator Card */}
       <div className="bg-white p-6 rounded-lg border border-indigo-200 shadow-sm space-y-4">
@@ -441,7 +461,7 @@ export default function ConsumptionNorms() {
           })}
         </div>
 
-        {loading && <div className="text-gray-500 py-4 text-center">Loading consumption norms…</div>}
+        {loading && <div className="mb-4"><TableSkeleton columns={7 + (hasActions ? 1 : 0)} rows={5} /></div>}
         {error && <div className="text-red-700 p-3 bg-red-50 rounded border border-red-200">{error}</div>}
 
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm">
@@ -455,13 +475,13 @@ export default function ConsumptionNorms() {
                 <th className="px-4 py-3 text-left font-semibold text-gray-700">Parameters</th>
                 <th className="px-4 py-3 text-center font-semibold text-gray-700">Rounding</th>
                 <th className="px-4 py-3 text-center font-semibold text-gray-700">Status</th>
-                <th className="px-4 py-3 text-right font-semibold text-gray-700">Actions</th>
+                {hasActions && <th className="px-4 py-3 text-right font-semibold text-gray-700">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filteredNorms.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-6 text-center text-gray-500">
+                  <td colSpan={7 + (hasActions ? 1 : 0)} className="px-4 py-6 text-center text-gray-500">
                     No consumption norms match the selected filter.
                   </td>
                 </tr>
@@ -499,14 +519,18 @@ export default function ConsumptionNorms() {
                         {norm.is_active ? 'Active' : 'Superseded'}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right">
-                      {canEdit && <button
-                        onClick={() => handleToggleActive(norm)}
-                        className="text-xs text-indigo-600 hover:text-indigo-900 underline font-medium"
-                      >
-                        {norm.is_active ? 'Deactivate' : 'Reactivate'}
-                      </button>}
-                    </td>
+                    {hasActions && (
+                      <td className="px-4 py-3 text-right">
+                        {canDelete && (
+                          <button
+                            onClick={() => handleToggleActive(norm)}
+                            className="text-xs text-indigo-600 hover:text-indigo-900 underline font-medium"
+                          >
+                            {norm.is_active ? 'Deactivate' : 'Reactivate'}
+                          </button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))
               )}

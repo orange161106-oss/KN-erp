@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { UserResponse, UserCreate, UserUpdate } from '../../api/users';
 import { usersApi } from '../../api/users';
-import { User, Shield, Edit, Plus, X, Building, Key, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { User, Shield, Edit, Plus, X, Building, Key, AlertCircle, Eye, EyeOff, Globe, Bell } from 'lucide-react';
 import { TableSkeleton } from '../../components/ui/Skeleton';
 
 const BASE_ROLES = [
@@ -40,6 +40,18 @@ const PLANT_FLAGS: { key: keyof UserCreate; label: string }[] = [
   { key: 'can_access_plant_5', label: 'Plant V' },
 ];
 
+const GLOBAL_MODULE_FLAGS = [
+  { key: 'can_access_dashboard', label: 'Executive Dashboard', desc: 'KPI metrics, stock alerts, and procurement pipeline' },
+  { key: 'can_access_reports', label: 'Analytical Reports', desc: 'Executive analytics, inventory, and purchase reports' },
+] as const;
+
+const ALERT_CATEGORIES = [
+  { key: 'alert_production', label: 'Production Delays', desc: 'Plant & manufacturing delay notifications', badge: 'Plant/Mfg' },
+  { key: 'alert_inventory', label: 'Stock Shortages', desc: 'Store inventory & consumable shortage alerts', badge: 'Store/Stock' },
+  { key: 'alert_purchasing', label: 'Purchasing & PO', desc: 'PO approvals & vendor delivery updates', badge: 'Purchase/PO' },
+  { key: 'alert_system', label: 'System & Admin', desc: 'Critical system errors and administrative notices', badge: 'System/Admin' },
+] as const;
+
 const ALL_CRUD_KEYS: string[] = MODULES.flatMap(m => [
   `${m.key}_read`,
   `${m.key}_create`,
@@ -54,6 +66,12 @@ const DEFAULT_PERMISSIONS: Record<string, boolean> = {
   can_access_plant_3: false,
   can_access_plant_4: false,
   can_access_plant_5: false,
+  can_access_dashboard: false,
+  can_access_reports: false,
+  alert_production: false,
+  alert_inventory: false,
+  alert_purchasing: false,
+  alert_system: false,
 };
 
 export default function UserManagement() {
@@ -121,6 +139,12 @@ export default function UserManagement() {
     PLANT_FLAGS.forEach(p => {
       userPerms[p.key] = Boolean(user[p.key as keyof UserResponse]);
     });
+    GLOBAL_MODULE_FLAGS.forEach(g => {
+      userPerms[g.key] = Boolean((user as any)[g.key]);
+    });
+    ALERT_CATEGORIES.forEach(a => {
+      userPerms[a.key] = Boolean((user as any)[a.key]);
+    });
     setPermissions(userPerms);
     setIsModalOpen(true);
   };
@@ -146,6 +170,10 @@ export default function UserManagement() {
   };
 
   const handleTogglePlant = (key: string) => {
+    setPermissions(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const handleToggleFlag = (key: string) => {
     setPermissions(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
@@ -290,9 +318,22 @@ export default function UserManagement() {
                       </div>
                     </td>
                     <td className="py-3 px-4">
-                      <span className="text-xs font-semibold text-indigo-600 bg-indigo-50 px-2 py-1 rounded border border-indigo-100">
-                        {activeCrudCount} / 40 Permissions
-                      </span>
+                      <div className="flex flex-col gap-1 items-start">
+                        <span className="text-xs font-semibold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+                          {activeCrudCount} / 40 Permissions
+                        </span>
+                        <div className="flex flex-wrap gap-1">
+                          {u.can_access_dashboard && (
+                            <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200 font-medium">Dash</span>
+                          )}
+                          {u.can_access_reports && (
+                            <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200 font-medium">Reports</span>
+                          )}
+                          {(u.alert_production || u.alert_inventory || u.alert_purchasing || u.alert_system) && (
+                            <span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200 font-medium">Alerts</span>
+                          )}
+                        </div>
+                      </div>
                     </td>
                     <td className="py-3 px-4 text-right">
                       {u.is_super_admin ? (
@@ -317,134 +358,153 @@ export default function UserManagement() {
 
       {/* Form Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-white rounded-lg max-w-3xl w-full p-6 shadow-xl space-y-6 my-8">
-            <div className="flex justify-between items-center border-b pb-4">
-              <h2 className="text-lg font-bold text-gray-900">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 sm:p-6 z-50">
+          <div className="bg-white rounded-xl max-w-5xl w-full shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+            <div className="flex justify-between items-center px-6 py-4 border-b border-gray-200 shrink-0 bg-white">
+              <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <Shield className="w-5 h-5 text-indigo-600" />
                 {editingUser ? `Edit User & Permissions: ${editingUser.username}` : 'Provision New User'}
               </h2>
-              <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600">
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 p-1 rounded-md hover:bg-gray-100 transition-colors"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} autoComplete="off" className="space-y-6">
-              {/* Employee Information */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Employee Full Name</label>
-                  <input
-                    type="text"
-                    autoComplete="new-password"
-                    value={fullName}
-                    onChange={e => setFullName(e.target.value)}
-                    className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500"
-                    placeholder="e.g. John Doe"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Employee ID</label>
-                  <input
-                    type="text"
-                    autoComplete="new-password"
-                    value={employeeId}
-                    onChange={e => setEmployeeId(e.target.value)}
-                    className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500"
-                    placeholder="e.g. EMP-1042"
-                  />
-                </div>
-              </div>
+            <form onSubmit={handleSubmit} autoComplete="off" className="flex flex-col flex-1 min-h-0 overflow-hidden">
+              {/* Scrollable Form Body */}
+              <div className="p-6 overflow-y-auto space-y-6 flex-1">
+                {/* Basic User Details */}
+                <div className="space-y-4">
+                  <div className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                    Basic User Details & Credentials
+                  </div>
 
-              {/* Account Credentials */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Username</label>
-                  <input
-                    type="text"
-                    required
-                    autoComplete="new-password"
-                    disabled={Boolean(editingUser?.is_super_admin)}
-                    value={username}
-                    onChange={e => setUsername(e.target.value)}
-                    className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500 disabled:bg-gray-100"
-                    placeholder="e.g. store_user"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    {editingUser ? 'Password (Leave blank to keep existing)' : 'Password'}
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      required={!editingUser}
-                      autoComplete={showPassword ? 'off' : 'new-password'}
-                      value={password}
-                      onChange={e => setPassword(e.target.value)}
-                      className="w-full border border-gray-300 rounded px-3 py-2 pr-10 text-sm focus:ring-indigo-500 focus:border-indigo-500"
-                      placeholder="••••••••"
-                    />
-                    {password.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setShowPassword(prev => !prev);
-                        }}
-                        onMouseDown={(e) => e.preventDefault()}
-                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-500 hover:text-gray-700 cursor-pointer pointer-events-auto z-20 focus:outline-none"
-                        style={{ cursor: 'pointer', pointerEvents: 'auto' }}
-                        aria-label={showPassword ? 'Hide password' : 'Show password'}
-                      >
-                        {showPassword ? (
-                          <EyeOff className="w-4 h-4 cursor-pointer pointer-events-auto" />
-                        ) : (
-                          <Eye className="w-4 h-4 cursor-pointer pointer-events-auto" />
+                  {/* Employee Information */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">Employee Full Name</label>
+                      <input
+                        type="text"
+                        autoComplete="new-password"
+                        value={fullName}
+                        onChange={e => setFullName(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                        placeholder="e.g. John Doe"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">Employee ID</label>
+                      <input
+                        type="text"
+                        autoComplete="new-password"
+                        value={employeeId}
+                        onChange={e => setEmployeeId(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                        placeholder="e.g. EMP-1042"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Account Credentials */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">
+                        Username <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        autoComplete="new-password"
+                        disabled={Boolean(editingUser?.is_super_admin)}
+                        value={username}
+                        onChange={e => setUsername(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500 disabled:bg-gray-100"
+                        placeholder="e.g. store_user"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">
+                        {editingUser ? 'Password (Leave blank to keep existing)' : 'Password *'}
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          required={!editingUser}
+                          autoComplete={showPassword ? 'off' : 'new-password'}
+                          value={password}
+                          onChange={e => setPassword(e.target.value)}
+                          className="w-full border border-gray-300 rounded px-3 py-2 pr-10 text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                          placeholder="••••••••"
+                        />
+                        {password.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setShowPassword(prev => !prev);
+                            }}
+                            onMouseDown={(e) => e.preventDefault()}
+                            className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-500 hover:text-gray-700 cursor-pointer pointer-events-auto z-20 focus:outline-none"
+                            style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+                            aria-label={showPassword ? 'Hide password' : 'Show password'}
+                          >
+                            {showPassword ? (
+                              <EyeOff className="w-4 h-4 cursor-pointer pointer-events-auto" />
+                            ) : (
+                              <Eye className="w-4 h-4 cursor-pointer pointer-events-auto" />
+                            )}
+                          </button>
                         )}
-                      </button>
-                    )}
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Base Role Assignment</label>
-                  <select
-                    value={selectedRole}
-                    onChange={e => setSelectedRole(e.target.value)}
-                    className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500"
-                  >
-                    {BASE_ROLES.map(r => (
-                      <option key={r.code} value={r.code}>{r.label} ({r.code})</option>
-                    ))}
-                  </select>
+                {/* Base Role Assignment & Account Status */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t pt-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Base Role Assignment</label>
+                    <select
+                      value={selectedRole}
+                      onChange={e => setSelectedRole(e.target.value)}
+                      className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500 bg-white"
+                    >
+                      {BASE_ROLES.map(r => (
+                        <option key={r.code} value={r.code}>{r.label} ({r.code})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2 pt-2 sm:pt-6">
+                    <input
+                      type="checkbox"
+                      id="isActive"
+                      checked={isActive}
+                      onChange={e => setIsActive(e.target.checked)}
+                      className="h-4 w-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500"
+                    />
+                    <label htmlFor="isActive" className="text-sm font-medium text-gray-700 cursor-pointer">
+                      Account Active
+                    </label>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 pt-6">
-                  <input
-                    type="checkbox"
-                    id="isActive"
-                    checked={isActive}
-                    onChange={e => setIsActive(e.target.checked)}
-                    className="h-4 w-4 text-indigo-600 rounded border-gray-300"
-                  />
-                  <label htmlFor="isActive" className="text-sm font-medium text-gray-700">Account Active</label>
-                </div>
-              </div>
 
-              {/* 40 Granular CRUD Feature Flags (10 Modules) */}
-              <div className="border-t pt-4">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3 gap-1">
-                  <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
-                    <Key className="w-4 h-4 text-indigo-600" />
-                    CRUD Permission Matrix (10 Modules × 4 Actions)
-                  </h3>
-                  <span className="text-[11px] text-gray-500 italic">
-                    Create/Update/Delete auto-enables Read; unchecking Read revokes all.
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-gray-50 p-4 rounded-lg border border-gray-200 max-h-[380px] overflow-y-auto">
+                {/* 40 Granular CRUD Feature Flags (10 Modules) */}
+                <div className="border-t pt-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3 gap-1">
+                    <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                      <Key className="w-4 h-4 text-indigo-600" />
+                      CRUD Permission Matrix (10 Modules × 4 Actions)
+                    </h3>
+                    <span className="text-[11px] text-gray-500 italic">
+                      Create/Update/Delete auto-enables Read; unchecking Read revokes all.
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 bg-gray-50 p-4 rounded-lg border border-gray-200">
                   {MODULES.map(mod => {
                     const isRead = Boolean(permissions[`${mod.key}_read`]);
                     const isCreate = Boolean(permissions[`${mod.key}_create`]);
@@ -500,6 +560,90 @@ export default function UserManagement() {
                 </div>
               </div>
 
+              {/* Global Modules & Categorized Alerts */}
+              <div className="border-t pt-4">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3 gap-1">
+                  <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                    <Globe className="w-4 h-4 text-blue-600" />
+                    Global & Alert Permissions
+                  </h3>
+                  <span className="text-[11px] text-gray-500 italic">
+                    Standalone modules & domain-specific notification channels
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Global Modules */}
+                  <div className="bg-blue-50/40 p-3.5 rounded-lg border border-blue-200 flex flex-col justify-between">
+                    <div>
+                      <div className="text-xs font-bold text-blue-900 flex items-center gap-1.5 mb-1">
+                        <Globe className="w-3.5 h-3.5 text-blue-600" />
+                        Global Modules Access
+                      </div>
+                      <div className="text-[11px] text-gray-500 mb-3">
+                        Isolated executive modules outside the 10-step workflow matrix
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      {GLOBAL_MODULE_FLAGS.map(mod => (
+                        <label
+                          key={mod.key}
+                          className="flex items-start gap-2.5 p-2 bg-white rounded border border-blue-100 hover:border-blue-300 cursor-pointer shadow-xs transition-colors"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={Boolean(permissions[mod.key])}
+                            onChange={() => handleToggleFlag(mod.key)}
+                            className="mt-0.5 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-semibold text-gray-800">{mod.label}</div>
+                            <div className="text-[11px] text-gray-500">{mod.desc}</div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Categorized Alerts */}
+                  <div className="bg-amber-50/40 p-3.5 rounded-lg border border-amber-200 flex flex-col justify-between">
+                    <div>
+                      <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5 mb-1">
+                        <Bell className="w-3.5 h-3.5 text-amber-600" />
+                        Alert Subscriptions (4 Categories)
+                      </div>
+                      <div className="text-[11px] text-gray-500 mb-3">
+                        Domain-targeted notifications (hidden if none selected)
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {ALERT_CATEGORIES.map(cat => (
+                        <label
+                          key={cat.key}
+                          className="flex items-start gap-2 p-2 bg-white rounded border border-amber-100 hover:border-amber-300 cursor-pointer shadow-xs transition-colors"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={Boolean(permissions[cat.key])}
+                            onChange={() => handleToggleFlag(cat.key)}
+                            className="mt-0.5 h-4 w-4 text-amber-600 rounded border-gray-300 focus:ring-amber-500"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-xs font-semibold text-gray-800 leading-tight">{cat.label}</span>
+                              <span className="text-[9px] px-1 py-0.5 bg-amber-100 text-amber-800 rounded font-medium shrink-0">
+                                {cat.badge}
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-gray-500 mt-0.5 leading-snug">{cat.desc}</div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* 5 Plant Scope Access Flags - Only for Plant Incharge */}
               {selectedRole === 'PLANT_INCHARGE' && (
                 <div className="border-t pt-4">
@@ -522,19 +666,21 @@ export default function UserManagement() {
                   </div>
                 </div>
               )}
+              </div>
 
-              <div className="flex justify-end gap-3 border-t pt-4">
+              {/* Fixed Footer */}
+              <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50 shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-50"
+                  className="px-4 py-2 border border-gray-300 text-gray-700 bg-white rounded-md text-sm font-medium hover:bg-gray-100 transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  className="inline-flex items-center gap-2 px-5 py-2 bg-indigo-600 text-white rounded-md text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-xs"
                 >
                   {isSaving && (
                     <svg

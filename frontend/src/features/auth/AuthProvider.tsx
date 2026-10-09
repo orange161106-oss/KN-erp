@@ -15,10 +15,13 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     const attempt = ++generation.current;
     setAccessToken(null);
     try {
-      const token = await apiClient.post<{ access_token: string }>('/api/v1/auth/login', { username, password });
+      const response = await apiClient.post<{ access_token: string; user?: CurrentUser }>('/api/v1/auth/login', { username, password });
       if (generation.current !== attempt) return;
-      setAccessToken(token.access_token);
-      const identity = await apiClient.get<CurrentUser>('/api/v1/auth/me');
+      setAccessToken(response.access_token);
+      let identity = response.user;
+      if (!identity) {
+        identity = await apiClient.get<CurrentUser>('/api/v1/auth/me');
+      }
       if (generation.current === attempt) setUser(identity);
     } catch (error) { if (generation.current === attempt) logout(); throw error; }
   }

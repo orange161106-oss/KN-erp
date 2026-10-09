@@ -67,6 +67,16 @@ export interface CurrentUser extends Partial<UserPermissionFlags> {
   can_access_plant_4?: boolean;
   can_access_plant_5?: boolean;
 
+  // Global Module Access Flags
+  can_access_dashboard?: boolean;
+  can_access_reports?: boolean;
+
+  // Categorized Alert Subscriptions
+  alert_production?: boolean;
+  alert_inventory?: boolean;
+  alert_purchasing?: boolean;
+  alert_system?: boolean;
+
   can_view_master_data?: boolean;
   can_view_planning?: boolean;
   can_run_calculations?: boolean;

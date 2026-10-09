@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useContext } from 'react';
 import { apiClient } from '../../api/client';
+import { AuthContext } from '../auth/context';
+import { TableSkeleton } from '../../components/ui/Skeleton';
 import type {
   MappingValidationReport,
   MasterOption,
@@ -9,6 +11,21 @@ import type {
 } from './types';
 
 export default function ProductionMappings() {
+  const auth = useContext(AuthContext);
+  const user = auth?.user ?? null;
+  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const hasModernFlags = user && (
+    'production_mappings_read' in user ||
+    'production_mappings_create' in user ||
+    'production_mappings_update' in user ||
+    'production_mappings_delete' in user
+  );
+  const canRead = Boolean(isSuperAdmin || (hasModernFlags ? user?.production_mappings_read : true));
+  const canCreate = Boolean(isSuperAdmin || (hasModernFlags ? user?.production_mappings_create : user?.permissions?.includes('masters.write')));
+  const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.production_mappings_update : user?.permissions?.includes('masters.write')));
+  const canDelete = Boolean(isSuperAdmin || (hasModernFlags ? user?.production_mappings_delete : user?.permissions?.includes('masters.write')));
+  const hasActions = canUpdate || canDelete;
+
   const [activeTab, setActiveTab] = useState<'traceability' | 'productPlants' | 'processConsumables' | 'validation'>('traceability');
   const [products, setProducts] = useState<MasterOption[]>([]);
   const [consumables, setConsumables] = useState<MasterOption[]>([]);
@@ -215,6 +232,10 @@ export default function ProductionMappings() {
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Error updating mapping');
     }
+  }
+
+  if (!canRead) {
+    return <p role="alert" className="text-red-700">You do not have permission to view production mappings.</p>;
   }
 
   return (
@@ -426,15 +447,17 @@ export default function ProductionMappings() {
         <div className="space-y-4">
           <div className="flex justify-between items-center">
             <h3 className="text-lg font-semibold text-gray-800">Product Plant Assignments</h3>
-            <button
-              onClick={() => setShowAddPp(!showAddPp)}
-              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded shadow-sm"
-            >
-              {showAddPp ? 'Cancel' : '+ Map Product to Plant'}
-            </button>
+            {canCreate && (
+              <button
+                onClick={() => setShowAddPp(!showAddPp)}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded shadow-sm"
+              >
+                {showAddPp ? 'Cancel' : '+ Map Product to Plant'}
+              </button>
+            )}
           </div>
 
-          {showAddPp && (
+          {canCreate && showAddPp && (
             <form onSubmit={handleCreatePp} className="bg-white p-5 rounded-lg border border-indigo-200 shadow-sm space-y-4">
               <h4 className="text-sm font-bold text-indigo-900 uppercase">New Product-Plant Route</h4>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -494,7 +517,7 @@ export default function ProductionMappings() {
             </form>
           )}
 
-          {ppLoading && <div className="text-gray-500 py-4 text-center">Loading product plant mappings…</div>}
+          {ppLoading && <div className="mb-4"><TableSkeleton columns={5 + (hasActions ? 1 : 0)} rows={5} /></div>}
           {ppError && <div role="alert" className="text-red-700 p-3 bg-red-50 rounded border border-red-200">{ppError} <button className="underline" onClick={() => void loadProductPlants()}>Retry mappings</button></div>}
 
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm">
@@ -506,13 +529,13 @@ export default function ProductionMappings() {
                   <th className="px-4 py-3 text-left font-semibold text-gray-700">Route</th>
                   <th className="px-4 py-3 text-center font-semibold text-gray-700">Primary</th>
                   <th className="px-4 py-3 text-center font-semibold text-gray-700">Status</th>
-                  <th className="px-4 py-3 text-right font-semibold text-gray-700">Actions</th>
+                  {hasActions && <th className="px-4 py-3 text-right font-semibold text-gray-700">Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {productPlants.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-6 text-center text-gray-500">
+                    <td colSpan={5 + (hasActions ? 1 : 0)} className="px-4 py-6 text-center text-gray-500">
                       No product-plant mappings found.
                     </td>
                   </tr>
@@ -537,14 +560,18 @@ export default function ProductionMappings() {
                           {pp.is_active ? 'Active' : 'Inactive'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-right">
-                        <button
-                          onClick={() => handleTogglePpActive(pp)}
-                          className="text-xs text-indigo-600 hover:text-indigo-900 underline font-medium"
-                        >
-                          {pp.is_active ? 'Deactivate' : 'Reactivate'}
-                        </button>
-                      </td>
+                      {hasActions && (
+                        <td className="px-4 py-3 text-right">
+                          {canDelete && (
+                            <button
+                              onClick={() => handleTogglePpActive(pp)}
+                              className="text-xs text-indigo-600 hover:text-indigo-900 underline font-medium"
+                            >
+                              {pp.is_active ? 'Deactivate' : 'Reactivate'}
+                            </button>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   ))
                 )}
@@ -559,15 +586,17 @@ export default function ProductionMappings() {
         <div className="space-y-4">
           <div className="flex justify-between items-center">
             <h3 className="text-lg font-semibold text-gray-800">Product-Process Consumables</h3>
-            <button
-              onClick={() => setShowAddPpc(!showAddPpc)}
-              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded shadow-sm"
-            >
-              {showAddPpc ? 'Cancel' : '+ Map Consumable to Process'}
-            </button>
+            {canCreate && (
+              <button
+                onClick={() => setShowAddPpc(!showAddPpc)}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded shadow-sm"
+              >
+                {showAddPpc ? 'Cancel' : '+ Map Consumable to Process'}
+              </button>
+            )}
           </div>
 
-          {showAddPpc && (
+          {canCreate && showAddPpc && (
             <form onSubmit={handleCreatePpc} className="bg-white p-5 rounded-lg border border-indigo-200 shadow-sm space-y-4">
               <h4 className="text-sm font-bold text-indigo-900 uppercase">New Process Consumable Mapping</h4>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -620,7 +649,7 @@ export default function ProductionMappings() {
             </form>
           )}
 
-          {ppcLoading && <div className="text-gray-500 py-4 text-center">Loading consumable mappings…</div>}
+          {ppcLoading && <div className="mb-4"><TableSkeleton columns={5 + (hasActions ? 1 : 0)} rows={5} /></div>}
           {ppcError && <div role="alert" className="text-red-700 p-3 bg-red-50 rounded border border-red-200">{ppcError} <button className="underline" onClick={() => { void loadPpcList(); void loadConsumables(); }}>Retry consumables</button></div>}
 
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm">
@@ -632,13 +661,13 @@ export default function ProductionMappings() {
                   <th className="px-4 py-3 text-left font-semibold text-gray-700">Consumable</th>
                   <th className="px-4 py-3 text-center font-semibold text-gray-700">UOM</th>
                   <th className="px-4 py-3 text-center font-semibold text-gray-700">Status</th>
-                  <th className="px-4 py-3 text-right font-semibold text-gray-700">Actions</th>
+                  {hasActions && <th className="px-4 py-3 text-right font-semibold text-gray-700">Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {ppcList.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-6 text-center text-gray-500">
+                    <td colSpan={5 + (hasActions ? 1 : 0)} className="px-4 py-6 text-center text-gray-500">
                       No process consumable mappings found.
                     </td>
                   </tr>
@@ -660,14 +689,18 @@ export default function ProductionMappings() {
                           {item.is_active ? 'Active' : 'Inactive'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-right">
-                        <button
-                          onClick={() => handleTogglePpcActive(item)}
-                          className="text-xs text-indigo-600 hover:text-indigo-900 underline font-medium"
-                        >
-                          {item.is_active ? 'Deactivate' : 'Reactivate'}
-                        </button>
-                      </td>
+                      {hasActions && (
+                        <td className="px-4 py-3 text-right">
+                          {canDelete && (
+                            <button
+                              onClick={() => handleTogglePpcActive(item)}
+                              className="text-xs text-indigo-600 hover:text-indigo-900 underline font-medium"
+                            >
+                              {item.is_active ? 'Deactivate' : 'Reactivate'}
+                            </button>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   ))
                 )}

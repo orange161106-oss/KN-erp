@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { apiClient } from '../../api/client';
 import { useAuth } from '../auth/context';
+import { TableSkeleton } from '../../components/ui/Skeleton';
 
 interface Product { id?: string; code: string; name: string; uom: string; item_id?: string | null; part_number?: string | null; }
 interface Candidate { code: string; item_id: string; part_number: string; name: string; uom: string; source_rows: number[]; description_options?: string[]; unit_options?: string[]; }
@@ -8,7 +9,18 @@ interface Preview { filename: string; sheet: string; sha256: string; products: C
 
 export default function Products() {
   const { user } = useAuth();
-  const canWrite = Boolean(user?.is_super_admin || user?.permissions.includes('masters.write'));
+  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const hasModernFlags = user && (
+    'masters_read' in user ||
+    'masters_create' in user ||
+    'masters_update' in user ||
+    'masters_delete' in user
+  );
+  const canRead = Boolean(isSuperAdmin || (hasModernFlags ? user?.masters_read : user?.permissions?.includes('masters.read')));
+  const canCreate = Boolean(isSuperAdmin || (hasModernFlags ? user?.masters_create : user?.permissions?.includes('masters.write')));
+  const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.masters_update : user?.permissions?.includes('masters.write')));
+  const canWrite = canCreate || canUpdate;
+
   const [products, setProducts] = useState<Product[]>([]);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [candidates, setCandidates] = useState<Product[]>([]);
@@ -84,13 +96,18 @@ export default function Products() {
       setPreview(null); setCandidates([]); await load(); setMessage('Reviewed products saved. Continue to Product–Plant Routes.');
     } finally { setSaving(false); }
   });
+
+  if (!canRead) {
+    return <p role="alert" className="text-red-700">You do not have permission to view products.</p>;
+  }
+
   return <section className="space-y-4">
-    <h2 className="text-xl font-semibold">Products</h2>
+    <h2 className="text-xl font-semibold text-brand-navy">Products</h2>
     <p>Products are the parts KNL plans to manufacture. Create or review them before assigning plants, routes and consumption rules.</p>
-    {!canWrite && <p role="note">You have read-only access. A Super Admin or an employee with Edit master data permission can upload and save products.</p>}
-    {!canWrite && message && <p role={failed ? 'alert' : 'status'}>{message}</p>}
+    {!canWrite && <p role="note" className="text-sm text-gray-600">You have read-only access. A Super Admin or an employee with Edit master data permission can upload and save products.</p>}
+    {!canWrite && message && <p role={failed ? 'alert' : 'status'} className="text-sm">{message}</p>}
     {canWrite && <>
-      <form className="flex flex-wrap gap-3 border p-3" onSubmit={e => { e.preventDefault(); void act(async () => {
+      <form className="flex flex-wrap gap-3 border p-3 bg-white rounded-lg shadow-sm" onSubmit={e => { e.preventDefault(); void act(async () => {
         await apiClient.post('/api/v1/masters/products', manual); await load(); setMessage('Product created. Continue to Product–Plant Routes.');
       }); }}>
         {(['code', 'item_id', 'part_number', 'name', 'uom'] as const).map(field => <label key={field}>
@@ -98,9 +115,9 @@ export default function Products() {
           <input className="block border p-1" value={manual[field] || ''} required={['code', 'name', 'uom'].includes(field)}
             onChange={e => setManual({ ...manual, [field]: e.target.value })} />
         </label>)}
-        <button disabled={busy}>Create product</button>
+        <button disabled={busy} className="bg-brand-navy text-white rounded px-4 py-1.5 self-end">Create product</button>
       </form>
-      <div className="border p-3 space-y-2">
+      <div className="border p-3 space-y-2 bg-white rounded-lg shadow-sm">
         <h3 className="font-semibold">Review products from the production-order workbook</h3>
         {busy && <p role="status" aria-live="polite">{saving ? 'Saving reviewed products… Keep this page open.' : `Processing ${uploadName || 'products'}… Please wait.`}</p>}
         {message && <p role={failed ? 'alert' : 'status'} className={`rounded border p-3 ${failed ? 'border-red-300 bg-red-50 text-red-800' : 'border-blue-300 bg-blue-50 text-blue-900'}`}>{message}</p>}
@@ -144,9 +161,40 @@ export default function Products() {
         </>}
       </div>
     </>}
-    {loading && <p role="status">Loading products…</p>}
-    <table className="w-full"><thead><tr><th>Code</th><th>Item ID</th><th>Part No.</th><th>Description</th><th>Unit</th></tr></thead>
-      <tbody>{products.map(p => <tr key={p.id}><td>{p.code}</td><td>{p.item_id}</td><td>{p.part_number}</td><td>{p.name}</td><td>{p.uom}</td></tr>)}</tbody></table>
-    {!loading && !failed && !products.length && <p>No products yet. An authorised master-data editor can create one or review a workbook.</p>}
+    {loading ? (
+      <TableSkeleton columns={5} rows={5} />
+    ) : (
+      <div className="overflow-x-auto bg-white border border-gray-200 rounded-lg shadow-sm">
+        <table className="w-full text-sm text-left">
+          <thead className="bg-gray-50 border-b border-gray-200 text-gray-700">
+            <tr>
+              <th className="p-3 font-semibold">Code</th>
+              <th className="p-3 font-semibold">Item ID</th>
+              <th className="p-3 font-semibold">Part No.</th>
+              <th className="p-3 font-semibold">Description</th>
+              <th className="p-3 font-semibold">Unit</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {products.map(p => (
+              <tr key={p.id} className="hover:bg-gray-50/50 transition-colors">
+                <td className="p-3 font-medium text-gray-900">{p.code}</td>
+                <td className="p-3 text-gray-600">{p.item_id || '—'}</td>
+                <td className="p-3 text-gray-600">{p.part_number || '—'}</td>
+                <td className="p-3 text-gray-700">{p.name}</td>
+                <td className="p-3 text-gray-600">{p.uom}</td>
+              </tr>
+            ))}
+            {!products.length && !failed && (
+              <tr>
+                <td colSpan={5} className="p-8 text-center text-gray-500">
+                  No products yet. An authorised master-data editor can create one or review a workbook.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    )}
   </section>;
 }

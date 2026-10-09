@@ -19,7 +19,8 @@ export default function Sidebar() {
         : 'text-gray-200 hover:text-white hover:bg-white/10'
     }`;
 
-  // 1-to-1 authorization checks for each section
+  // Authorization checks for each section
+  const showDashboard = canOpen(user, '/');
   const showMasters = canOpen(user, '/masters');
   const showMappings = canOpen(user, '/mappings');
   const showNorms = canOpen(user, '/rules');
@@ -30,6 +31,7 @@ export default function Sidebar() {
   const showPurchase = canOpen(user, '/purchase');
   const showPurchaseOrders = canOpen(user, '/purchase-orders');
   const showGoodsReceipts = canOpen(user, '/grns');
+  const showAlerts = canOpen(user, '/alerts');
   const showReports = canOpen(user, '/reports');
   const showAdmin = canOpen(user, '/admin');
 
@@ -47,10 +49,12 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex-1 p-3 space-y-1 flex flex-col overflow-y-auto">
-        {/* 1. Dashboard - Always Visible */}
-        <Link to="/" className={navItemClass('/')}>
-          Dashboard
-        </Link>
+        {/* 1. Dashboard */}
+        {showDashboard && (
+          <Link to="/" className={navItemClass('/')}>
+            Dashboard
+          </Link>
+        )}
 
         {/* 2. Masters */}
         {showMasters && (
@@ -123,7 +127,7 @@ export default function Sidebar() {
         )}
 
         {/* 12. Alerts */}
-        {showReports && (
+        {showAlerts && (
           <Link to="/alerts" className={navItemClass('/alerts')}>
             Alerts
           </Link>

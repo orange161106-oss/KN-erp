@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Literal
 from uuid import UUID
 
@@ -22,6 +24,7 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"
     expires_in: int
+    user: CurrentUser | None = None
 
 
 class CurrentUser(BaseModel):
@@ -91,3 +94,11 @@ class CurrentUser(BaseModel):
     can_access_plant_3: bool = False
     can_access_plant_4: bool = False
     can_access_plant_5: bool = False
+
+    # Global Module Access & Categorized Alerts
+    can_access_dashboard: bool = False
+    can_access_reports: bool = False
+    alert_production: bool = False
+    alert_inventory: bool = False
+    alert_purchasing: bool = False
+    alert_system: bool = False

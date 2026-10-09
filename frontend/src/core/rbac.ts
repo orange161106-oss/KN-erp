@@ -21,8 +21,19 @@ export function canPerform(user: (UserContextData & Record<string, any>) | null 
     purchase: 'purchase',
   };
   const modKey = moduleMap[module] || module;
-  if (user[`${modKey}_${crudOp}`] === true) return true;
 
+  // If modern 40-point CRUD flags exist on user, strictly enforce them
+  const hasModernFlags =
+    'masters_read' in user ||
+    'prd_planning_read' in user ||
+    'inventory_read' in user ||
+    'can_access_dashboard' in user;
+
+  if (hasModernFlags) {
+    return Boolean(user[`${modKey}_${crudOp}`]);
+  }
+
+  // Legacy fallback ONLY for mock test objects that omit modern flags
   const prefix: Record<string, string> = {
     grns: 'purchase.grns', purchase_orders: 'purchase.orders', prd: 'prd.plan',
     inventory: 'inventory.stock', requirements: 'requirements',
@@ -42,20 +53,40 @@ export function canOpen(user: (UserContextData & Record<string, any>) | null | u
   if (user.is_super_admin || path === '/status') return true;
   if (path === '/admin') return Boolean(user.is_super_admin);
 
-  // Check 40-point CRUD flags
-  if ((path === '/' || path === '/dashboard') && (user.inventory_read || user.purchase_read || user.requirements_read)) return true;
-  if (path === '/masters' && user.masters_read) return true;
-  if (path === '/mappings' && user.production_mappings_read) return true;
-  if (path === '/rules' && user.consumption_norms_read) return true;
-  if (path === '/prd' && user.prd_planning_read) return true;
-  if (path === '/requirements' && user.requirements_read) return true;
-  if (path === '/plant-workflow' && (user.plant_workflow_read || user.can_access_plant_1 || user.can_access_plant_2 || user.can_access_plant_3 || user.can_access_plant_4 || user.can_access_plant_5)) return true;
-  if (path === '/inventory' && user.inventory_read) return true;
-  if (path === '/purchase' && user.purchase_read) return true;
-  if (path === '/purchase-orders' && user.purchase_orders_read) return true;
-  if (path === '/grns' && user.goods_receipts_read) return true;
-  if ((path === '/alerts' || path === '/reports') && (user.inventory_read || user.purchase_read || user.requirements_read)) return true;
+  // If modern 40-point CRUD / global flags are defined on the user object, strictly evaluate them
+  const hasModernFlags =
+    'masters_read' in user ||
+    'prd_planning_read' in user ||
+    'inventory_read' in user ||
+    'can_access_dashboard' in user;
 
+  if (hasModernFlags) {
+    if (path === '/' || path === '/dashboard') return Boolean(user.can_access_dashboard);
+    if (path === '/reports') return Boolean(user.can_access_reports);
+    if (path === '/alerts') return Boolean(user.alert_production || user.alert_inventory || user.alert_purchasing || user.alert_system);
+
+    if (path === '/masters') return Boolean(user.masters_read);
+    if (path === '/mappings') return Boolean(user.production_mappings_read);
+    if (path === '/rules') return Boolean(user.consumption_norms_read);
+    if (path === '/prd') return Boolean(user.prd_planning_read);
+    if (path === '/requirements') return Boolean(user.requirements_read);
+    if (path === '/plant-workflow') return Boolean(
+      user.plant_workflow_read ||
+      user.can_access_plant_1 ||
+      user.can_access_plant_2 ||
+      user.can_access_plant_3 ||
+      user.can_access_plant_4 ||
+      user.can_access_plant_5
+    );
+    if (path === '/inventory') return Boolean(user.inventory_read);
+    if (path === '/purchase') return Boolean(user.purchase_read);
+    if (path === '/purchase-orders') return Boolean(user.purchase_orders_read);
+    if (path === '/grns') return Boolean(user.goods_receipts_read);
+
+    return false;
+  }
+
+  // Legacy fallback ONLY for mock test objects that omit modern CRUD flags
   const codes: Record<string, string[]> = {
     '/': ['reports.inventory.read'], '/dashboard': ['reports.inventory.read'],
     '/masters': ['masters.read', 'masters.units.read', 'masters.consumables.read', 'masters.suppliers.read'],

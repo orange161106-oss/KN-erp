@@ -63,6 +63,16 @@ class UserPermissionFlags(BaseModel):
     can_access_plant_4: bool = False
     can_access_plant_5: bool = False
 
+    # Global Module Access Flags
+    can_access_dashboard: bool = False
+    can_access_reports: bool = False
+
+    # Categorized Alert Subscriptions
+    alert_production: bool = False
+    alert_inventory: bool = False
+    alert_purchasing: bool = False
+    alert_system: bool = False
+
 
 class UserCreate(UserPermissionFlags):
     model_config = ConfigDict(extra="forbid")
@@ -159,6 +169,14 @@ class UserUpdate(BaseModel):
     can_access_plant_3: Optional[bool] = None
     can_access_plant_4: Optional[bool] = None
     can_access_plant_5: Optional[bool] = None
+
+    # Optional Global Module & Alert Flags
+    can_access_dashboard: Optional[bool] = None
+    can_access_reports: Optional[bool] = None
+    alert_production: Optional[bool] = None
+    alert_inventory: Optional[bool] = None
+    alert_purchasing: Optional[bool] = None
+    alert_system: Optional[bool] = None
 
 
 class UserResponse(UserPermissionFlags):

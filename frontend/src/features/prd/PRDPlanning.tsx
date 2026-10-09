@@ -27,11 +27,11 @@ export default function PRDPlanning() {
   const { user } = useAuth();
 
   // RBAC checks
-  const isAdmin = Boolean(user?.is_super_admin || user?.roles.includes('ADMIN'));
-  const canRead = Boolean(isAdmin || user?.prd_planning_read || canPerform(user, 'prd', 'read'));
-  const canCreate = Boolean(isAdmin || user?.prd_planning_create || canPerform(user, 'prd', 'create') || user?.permissions?.includes('prd.plan.create'));
-  const canUpdate = Boolean(isAdmin || user?.prd_planning_update || canPerform(user, 'prd', 'update') || user?.permissions?.includes('prd.plan.update'));
-  const canDelete = Boolean(isAdmin || user?.prd_planning_delete || canPerform(user, 'prd', 'delete') || user?.permissions?.includes('prd.plan.delete'));
+  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const canRead = Boolean(isSuperAdmin || user?.prd_planning_read || canPerform(user, 'prd', 'read'));
+  const canCreate = Boolean(isSuperAdmin || user?.prd_planning_create || canPerform(user, 'prd', 'create') || user?.permissions?.includes('prd.plan.create'));
+  const canUpdate = Boolean(isSuperAdmin || user?.prd_planning_update || canPerform(user, 'prd', 'update') || user?.permissions?.includes('prd.plan.update'));
+  const canDelete = Boolean(isSuperAdmin || user?.prd_planning_delete || canPerform(user, 'prd', 'delete') || user?.permissions?.includes('prd.plan.delete'));
   const canImport = Boolean(canCreate || canPerform(user, 'prd', 'import') || user?.permissions?.includes('prd.plan.import'));
   const canExport = Boolean(canRead || canPerform(user, 'prd', 'export'));
 

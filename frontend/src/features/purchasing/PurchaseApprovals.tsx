@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiClient, ApiError } from '../../api/client';
+import { useAuth } from '../auth/context';
+import { TableSkeleton } from '../../components/ui/Skeleton';
 import type {
   ApprovalStatus,
   PurchaseApprovalResponse,
@@ -36,6 +38,18 @@ interface PurchaseApprovalsProps {
 type TabKey = 'queue' | 'handoff';
 
 export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsProps) {
+  const { user } = useAuth();
+  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const hasModernFlags = user && (
+    'purchase_read' in user ||
+    'purchase_create' in user ||
+    'purchase_update' in user ||
+    'purchase_delete' in user
+  );
+  const canRead = Boolean(isSuperAdmin || (hasModernFlags ? user?.purchase_read : true));
+  const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.purchase_update : true));
+  const hasActions = canUpdate;
+
   const [activeTab, setActiveTab] = useState<TabKey>('queue');
   const [items, setItems] = useState<PurchaseApprovalResponse[]>([]);
   const [loading, setLoading] = useState(false);
@@ -114,6 +128,10 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
     }
   };
 
+  if (!canRead) {
+    return <p role="alert" className="text-red-700">You do not have permission to view purchase approvals.</p>;
+  }
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
       {/* Header */}
@@ -172,7 +190,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
 
       {/* Approvals Table */}
       {loading ? (
-        <p className="text-gray-500 text-sm p-4">Loading queue items…</p>
+        <TableSkeleton columns={8 + (hasActions ? 1 : 0)} rows={5} />
       ) : items.length === 0 ? (
         <div className="bg-white border rounded-lg p-8 text-center text-gray-500 text-sm">
           No purchase recommendations found in this view.
@@ -191,7 +209,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
                   <th className="px-4 py-3 text-left font-medium">UOM</th>
                   <th className="px-4 py-3 text-left font-medium">Status</th>
                   <th className="px-4 py-3 text-left font-medium">Reason / Comment</th>
-                  <th className="px-4 py-3 text-left font-medium">Action</th>
+                  {hasActions && <th className="px-4 py-3 text-left font-medium">Action</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -224,36 +242,38 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3">
-                        {item.status === 'PENDING' && !isSelfRequest && (
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              onClick={() => handleReview(item.id, 'APPROVE')}
-                              className="text-xs bg-green-600 text-white px-2.5 py-1 rounded hover:bg-green-700 transition-colors shadow-sm"
-                            >
-                              Approve
-                            </button>
-                            <button
-                              onClick={() => handleReview(item.id, 'MODIFY')}
-                              className="text-xs bg-blue-600 text-white px-2.5 py-1 rounded hover:bg-blue-700 transition-colors shadow-sm"
-                            >
-                              Modify
-                            </button>
-                            <button
-                              onClick={() => handleReview(item.id, 'REJECT')}
-                              className="text-xs bg-red-600 text-white px-2.5 py-1 rounded hover:bg-red-700 transition-colors shadow-sm"
-                            >
-                              Reject
-                            </button>
-                          </div>
-                        )}
-                        {item.status === 'PENDING' && isSelfRequest && (
-                          <span className="text-xs text-gray-400 italic">Self-request (Approval blocked)</span>
-                        )}
-                        {item.status !== 'PENDING' && (
-                          <span className="text-xs text-gray-400 font-medium">✓ Reviewed</span>
-                        )}
-                      </td>
+                      {hasActions && (
+                        <td className="px-4 py-3">
+                          {item.status === 'PENDING' && !isSelfRequest && (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => handleReview(item.id, 'APPROVE')}
+                                className="text-xs bg-green-600 text-white px-2.5 py-1 rounded hover:bg-green-700 transition-colors shadow-sm"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                onClick={() => handleReview(item.id, 'MODIFY')}
+                                className="text-xs bg-blue-600 text-white px-2.5 py-1 rounded hover:bg-blue-700 transition-colors shadow-sm"
+                              >
+                                Modify
+                              </button>
+                              <button
+                                onClick={() => handleReview(item.id, 'REJECT')}
+                                className="text-xs bg-red-600 text-white px-2.5 py-1 rounded hover:bg-red-700 transition-colors shadow-sm"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          )}
+                          {item.status === 'PENDING' && isSelfRequest && (
+                            <span className="text-xs text-gray-400 italic">Self-request (Approval blocked)</span>
+                          )}
+                          {item.status !== 'PENDING' && (
+                            <span className="text-xs text-gray-400 font-medium">✓ Reviewed</span>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
