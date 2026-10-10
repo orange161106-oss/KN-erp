@@ -94,4 +94,55 @@ describe('Purchase Plan Workspace', () => {
     expect(screen.getByText('Supplier ID')).toBeInTheDocument();
     expect(screen.getByText('Supplier name')).toBeInTheDocument();
   });
+
+  it('renders Excel formula bar and status bar', async () => {
+    renderWithAuth(<PurchasePlanWorkspace currentUserId="usr-admin-01" />);
+
+    expect(screen.getByText('fx')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Formula bar/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sheet 1:/i)).toBeInTheDocument();
+  });
+
+  it('allows managing column visibility to hide and unhide columns', async () => {
+    renderWithAuth(<PurchasePlanWorkspace currentUserId="usr-admin-01" />);
+
+    // Open Columns menu
+    const colBtn = screen.getByText(/Columns \(Hide\/Show\)/i);
+    fireEvent.click(colBtn);
+
+    expect(screen.getByText('Manage Column Visibility')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Filter columns…/i)).toBeInTheDocument();
+
+    // Find checkbox for MOQ. and click it to hide
+    const moqCheckbox = screen.getAllByRole('checkbox').find(cb => {
+      const parent = cb.closest('label');
+      return parent && parent.textContent?.includes('MOQ.');
+    });
+
+    if (moqCheckbox) {
+      fireEvent.click(moqCheckbox);
+      // Banner appears indicating hidden column
+      expect(screen.getByText(/columns are currently hidden/i)).toBeInTheDocument();
+
+      // Click Unhide All Columns
+      const unhideBtn = screen.getByText(/Unhide All Columns/i);
+      fireEvent.click(unhideBtn);
+      expect(screen.queryByText(/columns are currently hidden/i)).not.toBeInTheDocument();
+    }
+  });
+
+  it('allows toggling Freeze ID panes and edit mode', async () => {
+    renderWithAuth(<PurchasePlanWorkspace currentUserId="usr-admin-01" />);
+
+    const freezeBtn = screen.getByText(/Freeze ID: ON/i);
+    expect(freezeBtn).toBeInTheDocument();
+    fireEvent.click(freezeBtn);
+    expect(screen.getByText(/Freeze ID: OFF/i)).toBeInTheDocument();
+
+    const modeBtn = screen.getByText(/Mode: Excel Cell Mode/i);
+    expect(modeBtn).toBeInTheDocument();
+    fireEvent.click(modeBtn);
+    expect(screen.getByText(/Mode: Direct Inputs/i)).toBeInTheDocument();
+  });
 });
+
