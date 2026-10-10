@@ -39,7 +39,7 @@ type TabKey = 'queue' | 'handoff';
 
 export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsProps) {
   const { user } = useAuth();
-  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const hasModernFlags = user && (
     'purchase_read' in user ||
     'purchase_create' in user ||
@@ -48,7 +48,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
   );
   const canRead = Boolean(isSuperAdmin || (hasModernFlags ? user?.purchase_read : true));
   const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.purchase_update : true));
-  const hasActions = canUpdate;
+  const hasActions = Boolean(isSuperAdmin || canUpdate);
 
   const [activeTab, setActiveTab] = useState<TabKey>('queue');
   const [items, setItems] = useState<PurchaseApprovalResponse[]>([]);
@@ -196,23 +196,23 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
           No purchase recommendations found in this view.
         </div>
       ) : (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+        <div className="bg-white border border-ink-text/10 rounded-lg overflow-hidden shadow-2xs">
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm border-collapse">
               <thead>
-                <tr className="bg-gray-50 border-b text-gray-600">
-                  <th className="px-4 py-3 text-left font-medium">Consumable</th>
-                  <th className="px-4 py-3 text-left font-medium">Supplier</th>
-                  <th className="px-4 py-3 text-right font-medium">Raw Need</th>
-                  <th className="px-4 py-3 text-right font-medium">System Recommended Qty</th>
-                  <th className="px-4 py-3 text-right font-semibold text-blue-900 bg-blue-50">Approved Qty</th>
-                  <th className="px-4 py-3 text-left font-medium">UOM</th>
-                  <th className="px-4 py-3 text-left font-medium">Status</th>
-                  <th className="px-4 py-3 text-left font-medium">Reason / Comment</th>
-                  {hasActions && <th className="px-4 py-3 text-left font-medium">Action</th>}
+                <tr className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
+                  <th className="px-4 py-3 text-left font-semibold">Consumable</th>
+                  <th className="px-4 py-3 text-left font-semibold">Supplier</th>
+                  <th className="px-4 py-3 text-right font-semibold">Raw Need</th>
+                  <th className="px-4 py-3 text-right font-semibold">System Recommended Qty</th>
+                  <th className="px-4 py-3 text-right font-semibold text-burnt-orange bg-burnt-orange/10">Approved Qty</th>
+                  <th className="px-4 py-3 text-left font-semibold">UOM</th>
+                  <th className="px-4 py-3 text-left font-semibold">Status</th>
+                  <th className="px-4 py-3 text-left font-semibold">Reason / Comment</th>
+                  {hasActions && <th className="px-4 py-3 text-left font-semibold">Action</th>}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-ink-text/10">
                 {items.map((item) => {
                   const isSelfRequest = item.requested_by === currentUserId;
                   return (

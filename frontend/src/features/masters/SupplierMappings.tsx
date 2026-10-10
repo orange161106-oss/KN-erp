@@ -28,7 +28,7 @@ function MappingForm({ supplier, record, onSaved, onCancel }: {
     {error && <p role="alert" className="text-red-700">{error}</p>}
     <ReferenceSelect resource="consumables" label="Consumable" value={consumableId} onChange={setConsumableId} />
     <label className="block text-sm font-medium">Reason for change<textarea required maxLength={1000} value={reason} onChange={e => setReason(e.target.value)} className="mt-1 w-full border rounded p-2" /></label>
-    <div className="flex gap-3"><button disabled={pending} className="rounded bg-brand-navy text-white px-4 py-2 disabled:opacity-50">{pending ? 'Saving…' : 'Save mapping'}</button><button type="button" disabled={pending} onClick={onCancel} className="border rounded px-4 py-2">Cancel</button></div>
+    <div className="flex gap-3"><button disabled={pending} className="rounded bg-burnt-orange hover:bg-burnt-orange-dark text-white px-4 py-2 font-medium shadow-xs disabled:opacity-50 transition-colors">{pending ? 'Saving…' : 'Save mapping'}</button><button type="button" disabled={pending} onClick={onCancel} className="border rounded px-4 py-2 hover:bg-vanilla-surface">Cancel</button></div>
   </form>;
 }
 export default function SupplierMappings({ supplier, onClose }: { supplier: Master; onClose: () => void }) {
@@ -37,7 +37,7 @@ export default function SupplierMappings({ supplier, onClose }: { supplier: Mast
   const [offset, setOffset] = useState(0);
   const [status, setStatus] = useState('');
   const [form, setForm] = useState<{ kind: 'edit' | 'status'; record: Mapping } | 'create' | null>(null);
-  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const hasModernFlags = user && ('masters_read' in user || 'masters_create' in user || 'masters_update' in user || 'masters_delete' in user);
   const canWrite = Boolean(isSuperAdmin || (hasModernFlags ? user?.masters_update : user?.permissions?.includes('masters.supplier_consumables.write')));
   const canReadConsumables = Boolean(isSuperAdmin || (hasModernFlags ? user?.masters_read : user?.permissions?.includes('masters.consumables.read')));
@@ -46,7 +46,7 @@ export default function SupplierMappings({ supplier, onClose }: { supplier: Mast
   return <section className="border rounded-lg bg-white p-5 space-y-4" aria-label="Supplier mappings">
     <div className="flex justify-between gap-4"><h3 className="font-semibold">Consumable mappings — {supplier.code}</h3><button onClick={onClose} className="underline">Close mappings</button></div>
     {!supplier.is_active && <p className="text-sm text-gray-600">This supplier is inactive. Existing mappings are retained; reactivate the supplier before adding or reactivating mappings.</p>}
-    {canWrite && supplier.is_active && canReadConsumables && <button onClick={() => setForm('create')} className="rounded bg-brand-navy text-white px-4 py-2">Add mapping</button>}
+    {canWrite && supplier.is_active && canReadConsumables && <button onClick={() => setForm('create')} className="rounded bg-burnt-orange hover:bg-burnt-orange-dark text-white px-4 py-2 font-medium shadow-xs transition-colors">Add mapping</button>}
     {form === 'create' && <MappingForm supplier={supplier} onSaved={saved} onCancel={() => setForm(null)} />}
     {typeof form === 'object' && form?.kind === 'edit' && <MappingForm key={form.record.id} supplier={supplier} record={form.record} onSaved={saved} onCancel={() => setForm(null)} />}
     {typeof form === 'object' && form?.kind === 'status' && <StatusForm key={form.record.id} resource="supplier-consumables" record={form.record} label="supplier mapping" onSaved={saved} onCancel={() => setForm(null)} />}

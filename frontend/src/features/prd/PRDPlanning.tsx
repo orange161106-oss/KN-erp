@@ -27,7 +27,7 @@ export default function PRDPlanning() {
   const { user } = useAuth();
 
   // RBAC checks
-  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const canRead = Boolean(isSuperAdmin || user?.prd_planning_read || canPerform(user, 'prd', 'read'));
   const canCreate = Boolean(isSuperAdmin || user?.prd_planning_create || canPerform(user, 'prd', 'create') || user?.permissions?.includes('prd.plan.create'));
   const canUpdate = Boolean(isSuperAdmin || user?.prd_planning_update || canPerform(user, 'prd', 'update') || user?.permissions?.includes('prd.plan.update'));
@@ -427,9 +427,9 @@ export default function PRDPlanning() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-gray-900 tracking-tight">PRD / Planning Workspace</h1>
+          <h1 className="text-xl font-bold text-gray-900 tracking-tight">Production for sale</h1>
           <p className="text-xs text-gray-500 mt-0.5">
-            Excel-style production plan editor with multi-row selection, bulk operations, and real-time syncing.
+            <span className="font-semibold text-gray-700">PRD / Planning Workspace</span> · Excel-style production plan editor with multi-row selection, bulk operations, and real-time syncing.
           </p>
         </div>
         {statusMessage && (

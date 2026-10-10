@@ -33,6 +33,7 @@ class CurrentUser(BaseModel):
     id: UUID
     username: str
     is_super_admin: bool = False
+    is_superuser: bool = False
     roles: list[str]
     permissions: list[str]
     plant_ids: list[UUID] = Field(default_factory=list)
@@ -97,7 +98,6 @@ class CurrentUser(BaseModel):
 
     # Global Module Access & Categorized Alerts
     can_access_dashboard: bool = False
-    can_access_reports: bool = False
     alert_production: bool = False
     alert_inventory: bool = False
     alert_purchasing: bool = False

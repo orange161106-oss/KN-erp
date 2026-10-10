@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import SystemStatus from './pages/SystemStatus';
 import Login from './pages/Login';
 import Sidebar from './components/Sidebar';
@@ -14,7 +14,6 @@ import PurchaseApprovals from './features/purchasing/PurchaseApprovals';
 import PurchaseOrders from './features/purchasing/PurchaseOrders';
 import GRNs from './features/purchasing/GRNs';
 import ExecutiveDashboard from './features/dashboard/ExecutiveDashboard';
-import InventoryPurchaseReports from './features/reports/InventoryPurchaseReports';
 import PRDPlanning from './features/prd/PRDPlanning';
 import Requirements from './features/requirements/Requirements';
 import UserManagement from './features/admin/UserManagement';
@@ -34,17 +33,39 @@ function ProtectedRoute({ isAllowed, children }: ProtectedRouteProps) {
   return children;
 }
 
+function getPageTitle(pathname: string): string {
+  if (pathname === '/' || pathname === '/dashboard') return 'Dashboard';
+  if (pathname.startsWith('/prd')) return 'Production for sale';
+  if (pathname.startsWith('/masters')) return 'Product master';
+  if (pathname.startsWith('/rules')) return 'Consumption norms';
+  if (pathname.startsWith('/mappings')) return 'Production mapping';
+  if (pathname.startsWith('/requirements')) return 'Requirement';
+  if (pathname.startsWith('/plant-workflow')) return 'Plant review';
+  if (pathname.startsWith('/inventory')) return 'Inventory';
+  if (pathname.startsWith('/purchase-orders')) return 'Purchase order';
+  if (pathname.startsWith('/purchase')) return 'Purchase';
+  if (pathname.startsWith('/grns')) return 'Goods receipts';
+  if (pathname.startsWith('/alerts')) return 'Alerts';
+  if (pathname.startsWith('/admin')) return 'Administration';
+  if (pathname.startsWith('/status')) return 'System Status';
+  return 'KNL ERP Platform';
+}
+
 function AppShell({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
+  const pageTitle = getPageTitle(location.pathname);
+
   return (
-    <div className="flex h-screen w-screen overflow-hidden">
+    <div className="flex h-screen w-screen overflow-hidden bg-vanilla-bg text-ink-text">
       <Sidebar />
       
-      <div className="min-w-0 flex-1 flex flex-col">
-        <header className="h-16 bg-white border-b border-gray-200 flex items-center px-6 shadow-sm">
-          <h1 className="text-xl font-semibold text-brand-charcoal">KNL ERP Platform</h1>
+      <div className="min-w-0 flex-1 flex flex-col bg-vanilla-bg">
+        <header className="h-16 bg-vanilla-surface border-b border-ink-text/10 flex items-center justify-between px-6 shadow-2xs">
+          <h1 className="text-xl font-semibold text-ink-text">{pageTitle}</h1>
+          <span className="text-xs text-ink-text/60 font-medium tracking-wide">KNL ERP Platform</span>
         </header>
 
-        <main className="flex-1 p-6 overflow-auto bg-brand-offwhite">
+        <main className="flex-1 p-6 overflow-auto bg-vanilla-bg text-ink-text">
           {children}
         </main>
       </div>
@@ -69,7 +90,6 @@ function Application() {
   const canPurchase = canOpen(user, '/purchase');
   const canPurchaseOrders = canOpen(user, '/purchase-orders');
   const canGRNs = canOpen(user, '/grns');
-  const canReports = canOpen(user, '/reports');
   const canAlerts = canOpen(user, '/alerts');
   const isAdmin = canOpen(user, '/admin');
 
@@ -126,10 +146,6 @@ function Application() {
           
           <Route path="/alerts/*" element={
             <ProtectedRoute isAllowed={canAlerts}><AlertsCenter /></ProtectedRoute>
-          } />
-          
-          <Route path="/reports" element={
-            <ProtectedRoute isAllowed={canReports}><InventoryPurchaseReports /></ProtectedRoute>
           } />
           
           <Route path="/admin" element={

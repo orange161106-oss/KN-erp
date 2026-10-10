@@ -77,7 +77,7 @@ function PlanningVersionSelector({
 
 function ConfirmationsTab({ planningVersionId }: { planningVersionId: string }) {
   const { user } = useAuth();
-  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const hasModernFlags = user && (
     'plant_workflow_read' in user ||
     'plant_workflow_create' in user ||
@@ -85,7 +85,7 @@ function ConfirmationsTab({ planningVersionId }: { planningVersionId: string }) 
     'plant_workflow_delete' in user
   );
   const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.plant_workflow_update : true));
-  const hasActions = canUpdate;
+  const hasActions = Boolean(isSuperAdmin || canUpdate);
 
   const [calcReqs, setCalcReqs] = useState<CalculatedRequirementItem[]>([]);
   const [confirmations, setConfirmations] = useState<PlantConfirmationResponse[]>([]);
@@ -166,20 +166,20 @@ function ConfirmationsTab({ planningVersionId }: { planningVersionId: string }) 
       {calcReqs.length === 0 ? (
         <p className="text-gray-500 text-sm">No calculated requirements found for this version.</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto border border-ink-text/10 rounded-lg shadow-2xs bg-white">
           <table className="min-w-full text-sm border-collapse">
             <thead>
-              <tr className="bg-gray-50 border-b">
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Consumable</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Process</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-600">Calc Qty</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">UOM</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Rule</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Status</th>
+              <tr className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
+                <th className="px-3 py-2 text-left font-semibold">Consumable</th>
+                <th className="px-3 py-2 text-left font-semibold">Process</th>
+                <th className="px-3 py-2 text-right font-semibold">Calc Qty</th>
+                <th className="px-3 py-2 text-left font-semibold">UOM</th>
+                <th className="px-3 py-2 text-left font-semibold">Rule</th>
+                <th className="px-3 py-2 text-left font-semibold">Status</th>
                 {hasActions && (
                   <>
-                    <th className="px-3 py-2 text-left font-medium text-gray-600">Notes</th>
-                    <th className="px-3 py-2 text-left font-medium text-gray-600">Action</th>
+                    <th className="px-3 py-2 text-left font-semibold">Notes</th>
+                    <th className="px-3 py-2 text-left font-semibold">Action</th>
                   </>
                 )}
               </tr>
@@ -233,7 +233,7 @@ function ConfirmationsTab({ planningVersionId }: { planningVersionId: string }) 
                           ) : (
                             <button
                               onClick={() => handleConfirm(r.id)}
-                              className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                              className="text-xs bg-burnt-orange hover:bg-burnt-orange-dark text-white px-3 py-1 rounded shadow-xs transition-colors font-medium"
                             >
                               Confirm
                             </button>
@@ -271,7 +271,7 @@ function AdjustmentsTab({
   currentUserId: string;
 }) {
   const { user } = useAuth();
-  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const hasModernFlags = user && (
     'plant_workflow_read' in user ||
     'plant_workflow_create' in user ||
@@ -281,7 +281,7 @@ function AdjustmentsTab({
   const canCreate = Boolean(isSuperAdmin || (hasModernFlags ? user?.plant_workflow_create : true));
   const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.plant_workflow_update : true));
   const canDelete = Boolean(isSuperAdmin || (hasModernFlags ? user?.plant_workflow_delete : true));
-  const hasActions = canUpdate || canDelete;
+  const hasActions = Boolean(isSuperAdmin || canUpdate || canDelete);
 
   const [adjustments, setAdjustments] = useState<RequirementAdjustmentResponse[]>([]);
   const [loading, setLoading] = useState(false);
@@ -390,7 +390,7 @@ function AdjustmentsTab({
         {canCreate && (
           <button
             onClick={() => setShowForm((v) => !v)}
-            className="text-sm bg-blue-600 text-white px-4 py-1.5 rounded hover:bg-blue-700"
+            className="text-sm bg-burnt-orange hover:bg-burnt-orange-dark text-white px-4 py-1.5 rounded shadow-xs transition-colors font-medium"
           >
             {showForm ? 'Cancel' : '+ Submit Additional Requirement'}
           </button>
@@ -401,9 +401,9 @@ function AdjustmentsTab({
       {canCreate && showForm && (
         <form
           onSubmit={handleSubmit}
-          className="bg-gray-50 border rounded p-4 mb-6 space-y-3"
+          className="bg-vanilla-surface border border-ink-text/10 rounded-lg p-4 mb-6 space-y-3 shadow-2xs"
         >
-          <h3 className="font-semibold text-gray-700 mb-2">New Additional Requirement</h3>
+          <h3 className="font-semibold text-ink-text mb-2">New Additional Requirement</h3>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -475,7 +475,7 @@ function AdjustmentsTab({
           <button
             type="submit"
             disabled={submitting}
-            className="bg-green-600 text-white px-4 py-1.5 rounded text-sm hover:bg-green-700 disabled:opacity-50"
+            className="bg-burnt-orange hover:bg-burnt-orange-dark text-white px-4 py-1.5 rounded text-sm disabled:opacity-50 shadow-xs transition-colors font-medium"
           >
             {submitting ? 'Submitting…' : 'Submit'}
           </button>
@@ -488,18 +488,18 @@ function AdjustmentsTab({
       ) : adjustments.length === 0 ? (
         <p className="text-gray-500 text-sm">No adjustments found.</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto border border-ink-text/10 rounded-lg shadow-2xs bg-white">
           <table className="min-w-full text-sm border-collapse">
             <thead>
-              <tr className="bg-gray-50 border-b">
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Consumable</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Category</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-600">Qty</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">UOM</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Reason</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Requested By</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Status</th>
-                {hasActions && <th className="px-3 py-2 text-left font-medium text-gray-600">Action</th>}
+              <tr className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
+                <th className="px-3 py-2 text-left font-semibold">Consumable</th>
+                <th className="px-3 py-2 text-left font-semibold">Category</th>
+                <th className="px-3 py-2 text-right font-semibold">Qty</th>
+                <th className="px-3 py-2 text-left font-semibold">UOM</th>
+                <th className="px-3 py-2 text-left font-semibold">Reason</th>
+                <th className="px-3 py-2 text-left font-semibold">Requested By</th>
+                <th className="px-3 py-2 text-left font-semibold">Status</th>
+                {hasActions && <th className="px-3 py-2 text-left font-semibold">Action</th>}
               </tr>
             </thead>
             <tbody>
@@ -609,17 +609,17 @@ function FinalRequirementsTab({ planningVersionId }: { planningVersionId: string
       {items.length === 0 ? (
         <p className="text-gray-500 text-sm">No requirement data available for this planning version.</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto border border-ink-text/10 rounded-lg shadow-2xs bg-white">
           <table className="min-w-full text-sm border-collapse">
             <thead>
-              <tr className="bg-gray-50 border-b">
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Plant</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Consumable</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-600">Calculated Qty</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-600">Approved Adjustments</th>
-                <th className="px-3 py-2 text-right font-semibold text-blue-900 bg-blue-50">Final Requirement Qty</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">UOM</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Confirmation Status</th>
+              <tr className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
+                <th className="px-3 py-2 text-left font-semibold">Plant</th>
+                <th className="px-3 py-2 text-left font-semibold">Consumable</th>
+                <th className="px-3 py-2 text-right font-semibold">Calculated Qty</th>
+                <th className="px-3 py-2 text-right font-semibold">Approved Adjustments</th>
+                <th className="px-3 py-2 text-right font-semibold text-burnt-orange bg-burnt-orange/10">Final Requirement Qty</th>
+                <th className="px-3 py-2 text-left font-semibold">UOM</th>
+                <th className="px-3 py-2 text-left font-semibold">Confirmation Status</th>
               </tr>
             </thead>
             <tbody>
@@ -669,7 +669,7 @@ interface PlantWorkflowProps {
 
 export default function PlantWorkflow({ currentUserId }: PlantWorkflowProps) {
   const { user } = useAuth();
-  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const hasModernFlags = user && (
     'plant_workflow_read' in user ||
     'plant_workflow_create' in user ||
@@ -693,7 +693,7 @@ export default function PlantWorkflow({ currentUserId }: PlantWorkflowProps) {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <h1 className="text-xl font-bold text-gray-800 mb-1">Plant Workflow</h1>
+      <h1 className="text-xl font-bold text-gray-800 mb-1">Plant review</h1>
       <p className="text-sm text-gray-500 mb-5">
         Review calculated requirements, manage additional demand, and inspect Final Requirements handoff.
       </p>

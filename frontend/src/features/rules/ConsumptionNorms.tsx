@@ -35,7 +35,7 @@ interface MasterItem {
 export default function ConsumptionNorms() {
   const auth = useContext(AuthContext);
   const user = auth?.user ?? null;
-  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const hasModernFlags = user && (
     'consumption_norms_read' in user ||
     'consumption_norms_create' in user ||
@@ -46,8 +46,8 @@ export default function ConsumptionNorms() {
   const canCreate = Boolean(isSuperAdmin || (hasModernFlags ? user?.consumption_norms_create : user?.permissions?.includes('masters.write')));
   const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.consumption_norms_update : user?.permissions?.includes('masters.write')));
   const canDelete = Boolean(isSuperAdmin || (hasModernFlags ? user?.consumption_norms_delete : user?.permissions?.includes('masters.write')));
-  const canEdit = canUpdate || canDelete;
-  const hasActions = canUpdate || canDelete;
+  const canEdit = Boolean(isSuperAdmin || canUpdate || canDelete);
+  const hasActions = Boolean(isSuperAdmin || canUpdate || canDelete);
   const canCalculate = Boolean(isSuperAdmin || user?.permissions?.includes('requirements.calculate'));
   const [norms, setNorms] = useState<ConsumptionNorm[]>([]);
   const [loading, setLoading] = useState(false);
@@ -291,7 +291,7 @@ export default function ConsumptionNorms() {
               setShowCreateModal(true);
               setCreateError('');
             }}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-sm font-semibold shadow-xs flex items-center gap-1.5"
+            className="px-4 py-2 bg-burnt-orange hover:bg-burnt-orange-dark text-white rounded text-sm font-semibold shadow-xs flex items-center gap-1.5 transition-colors"
           >
             <span>＋</span> New Consumption Norm
           </button>
@@ -302,7 +302,7 @@ export default function ConsumptionNorms() {
       {!canCreate && <p className="text-sm text-gray-600">You have read-only access. A Super Admin or an employee with Create permission can configure norms.</p>}
 
       {/* Evaluation Simulator Card */}
-      <div className="bg-white p-6 rounded-lg border border-indigo-200 shadow-sm space-y-4">
+      <div className="bg-white p-6 rounded-lg border border-ink-text/15 shadow-2xs space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-base font-bold text-indigo-950 uppercase tracking-wide">
@@ -362,7 +362,7 @@ export default function ConsumptionNorms() {
             <button
               type="submit"
               disabled={evalLoading || !evalNormId || !canCalculate}
-              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded text-sm disabled:opacity-50"
+              className="w-full bg-burnt-orange hover:bg-burnt-orange-dark text-white font-medium py-2 px-4 rounded text-sm disabled:opacity-50 transition-colors shadow-xs"
             >
               {evalLoading ? 'Calculating…' : 'Run Calculation'}
             </button>
@@ -464,21 +464,21 @@ export default function ConsumptionNorms() {
         {loading && <div className="mb-4"><TableSkeleton columns={7 + (hasActions ? 1 : 0)} rows={5} /></div>}
         {error && <div className="text-red-700 p-3 bg-red-50 rounded border border-red-200">{error}</div>}
 
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm">
-          <table className="min-w-full divide-y divide-gray-200 text-sm">
-            <thead className="bg-gray-50">
+        <div className="bg-white rounded-lg border border-ink-text/10 overflow-hidden shadow-2xs">
+          <table className="min-w-full divide-y divide-ink-text/10 text-sm">
+            <thead className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
               <tr>
-                <th className="px-4 py-3 text-left font-semibold text-gray-700">Consumable</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-700">Rule Type</th>
-                <th className="px-4 py-3 text-center font-semibold text-gray-700">Version</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-700">Scope</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-700">Parameters</th>
-                <th className="px-4 py-3 text-center font-semibold text-gray-700">Rounding</th>
-                <th className="px-4 py-3 text-center font-semibold text-gray-700">Status</th>
-                {hasActions && <th className="px-4 py-3 text-right font-semibold text-gray-700">Actions</th>}
+                <th className="px-4 py-3 text-left font-semibold text-ink-text">Consumable</th>
+                <th className="px-4 py-3 text-left font-semibold text-ink-text">Rule Type</th>
+                <th className="px-4 py-3 text-center font-semibold text-ink-text">Version</th>
+                <th className="px-4 py-3 text-left font-semibold text-ink-text">Scope</th>
+                <th className="px-4 py-3 text-left font-semibold text-ink-text">Parameters</th>
+                <th className="px-4 py-3 text-center font-semibold text-ink-text">Rounding</th>
+                <th className="px-4 py-3 text-center font-semibold text-ink-text">Status</th>
+                {hasActions && <th className="px-4 py-3 text-right font-semibold text-ink-text">Actions</th>}
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-ink-text/10">
               {filteredNorms.length === 0 ? (
                 <tr>
                   <td colSpan={7 + (hasActions ? 1 : 0)} className="px-4 py-6 text-center text-gray-500">
@@ -915,7 +915,7 @@ export default function ConsumptionNorms() {
                 <button
                   type="submit"
                   disabled={createLoading}
-                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded font-medium text-xs disabled:opacity-50"
+                  className="px-4 py-1.5 bg-burnt-orange hover:bg-burnt-orange-dark text-white rounded font-medium text-xs disabled:opacity-50 transition-colors shadow-xs"
                 >
                   {createLoading ? 'Creating…' : 'Save & Publish Norm'}
                 </button>

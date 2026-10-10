@@ -61,7 +61,6 @@ export interface UserPermissionFlags {
 
   // Global Module Access Flags
   can_access_dashboard: boolean;
-  can_access_reports: boolean;
 
   // Categorized Alert Subscriptions
   alert_production: boolean;
@@ -77,6 +76,7 @@ export interface UserResponse extends UserPermissionFlags {
   employee_id?: string | null;
   is_active: boolean;
   is_super_admin: boolean;
+  is_superuser?: boolean;
   roles: string[];
 }
 

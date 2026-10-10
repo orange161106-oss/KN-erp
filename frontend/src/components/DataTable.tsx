@@ -192,14 +192,14 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   return (
     <div className="flex flex-col flex-1 h-full min-h-0 bg-white">
       {/* Formula Bar & Column Options */}
-      <div className="flex items-center gap-2 py-1 px-2 bg-gray-100 border-b border-gray-300 text-xs select-none">
+      <div className="flex items-center gap-2 py-1 px-2 bg-vanilla-surface border-b border-ink-text/10 text-xs select-none">
         {/* Cell Reference Box */}
-        <div className="w-16 px-2 py-0.5 font-mono text-center font-bold text-gray-700 bg-white border border-gray-300 rounded shadow-2xs">
+        <div className="w-16 px-2 py-0.5 font-mono text-center font-bold text-ink-text/80 bg-white border border-ink-text/15 rounded shadow-2xs">
           {coordLabel}
         </div>
 
         {/* fx symbol */}
-        <div className="font-serif italic font-bold text-gray-500 px-1 select-none">fx</div>
+        <div className="font-serif italic font-bold text-burnt-orange px-1 select-none">fx</div>
 
         {/* Formula Input */}
         <input
@@ -255,7 +255,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
       </div>
 
       {/* Main Table Grid */}
-      <div ref={tableContainerRef} className="flex-1 overflow-auto border border-gray-300 bg-white relative">
+      <div ref={tableContainerRef} className="flex-1 overflow-auto border border-ink-text/15 bg-white relative">
         {isLoading ? (
           <div className="p-8 space-y-3">
             {[1, 2, 3, 4, 5, 6].map(i => (
@@ -275,7 +275,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
               <button
                 type="button"
                 onClick={onAddRow}
-                className="mt-2 px-3 py-1.5 bg-brand-navy text-white rounded hover:bg-opacity-90 font-medium"
+                className="mt-2 px-3 py-1.5 bg-burnt-orange hover:bg-burnt-orange-dark text-white rounded font-medium shadow-xs transition-colors"
               >
                 + Add your first row
               </button>
@@ -284,9 +284,9 @@ export default function DataTable<T extends { id: string; row_index?: number | n
         ) : (
           <table className="w-full border-collapse text-left text-xs table-fixed">
             <thead>
-              <tr className="sticky top-0 z-20 bg-gray-100 border-b border-gray-300 shadow-2xs">
+              <tr className="sticky top-0 z-20 bg-vanilla-surface border-b border-ink-text/15 shadow-2xs">
                 {/* 1. Select All Checkbox Header */}
-                <th className="w-9 p-1 text-center border-r border-gray-300 bg-gray-200/90 sticky left-0 z-30">
+                <th className="w-9 p-1 text-center border-r border-ink-text/10 bg-vanilla-surface sticky left-0 z-30">
                   <input
                     type="checkbox"
                     aria-label="Select all rows"
@@ -295,12 +295,12 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                       if (input) input.indeterminate = someSelected;
                     }}
                     onChange={handleToggleSelectAll}
-                    className="cursor-pointer text-brand-steel rounded"
+                    className="cursor-pointer text-burnt-orange rounded"
                   />
                 </th>
 
                 {/* 2. Row Number Header */}
-                <th className="w-12 p-1 text-center font-bold text-gray-600 border-r border-gray-300 bg-gray-200/90 select-none sticky left-9 z-30">
+                <th className="w-12 p-1 text-center font-bold text-ink-text/70 border-r border-ink-text/10 bg-vanilla-surface select-none sticky left-9 z-30">
                   #
                 </th>
 
@@ -308,9 +308,9 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                 {visibleColumns.map(col => (
                   <th
                     key={col.key}
-                    className={`${col.width || 'w-36'} p-1.5 font-semibold text-gray-700 border-r border-gray-300 select-none text-${
+                    className={`${col.width || 'w-36'} p-1.5 font-semibold text-ink-text border-r border-ink-text/10 select-none text-${
                       col.align || 'left'
-                    } bg-gray-100 truncate`}
+                    } bg-vanilla-surface truncate`}
                   >
                     {col.label}
                   </th>
@@ -332,10 +332,10 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                       else next.add(row.id);
                       onSelectionChange(next);
                     }}
-                    className={`h-7 border-b border-gray-200 transition-colors ${
+                    className={`h-7 border-b border-ink-text/10 transition-colors ${
                       isRowSelected
-                        ? 'bg-blue-100/70 font-medium'
-                        : customRowClass || (isZebra ? 'bg-gray-50/50 hover:bg-gray-100/70' : 'bg-white hover:bg-gray-50')
+                        ? 'bg-burnt-orange/15 font-medium'
+                        : customRowClass || (isZebra ? 'bg-vanilla-bg/25 hover:bg-vanilla-surface/50' : 'bg-white hover:bg-vanilla-bg/40')
                     }`}
                   >
                     {/* Row Checkbox */}

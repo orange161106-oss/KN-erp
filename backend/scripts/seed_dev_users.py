@@ -117,7 +117,6 @@ def seed_users():
                 "can_access_plant_4": True,
                 "can_access_plant_5": True,
                 "can_access_dashboard": True if (is_super or username == "manager") else False,
-                "can_access_reports": True if (is_super or username == "manager") else False,
                 "alert_production": True if (is_super or username in ["planner", "plant_incharge"]) else False,
                 "alert_inventory": True if (is_super or username in ["store", "planner"]) else False,
                 "alert_purchasing": True if (is_super or username in ["purchase", "manager"]) else False,

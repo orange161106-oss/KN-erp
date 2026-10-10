@@ -78,6 +78,7 @@ def current_user(session: Session, token: str, settings: Settings) -> CurrentUse
             id=user.id,
             username=user.username,
             is_super_admin=getattr(user, "is_super_admin", False),
+            is_superuser=getattr(user, "is_super_admin", False),
             roles=sorted(role.code for role in user.roles),
             permissions=sorted({permission.code for role in user.roles for permission in role.permissions}),
             plant_ids=[identity for slot, identity in getattr(settings, "plant_permission_ids", {}).items()
@@ -89,7 +90,6 @@ def current_user(session: Session, token: str, settings: Settings) -> CurrentUse
             can_access_plant_4=getattr(user, "can_access_plant_4", False),
             can_access_plant_5=getattr(user, "can_access_plant_5", False),
             can_access_dashboard=getattr(user, "can_access_dashboard", False),
-            can_access_reports=getattr(user, "can_access_reports", False),
             alert_production=getattr(user, "alert_production", False),
             alert_inventory=getattr(user, "alert_inventory", False),
             alert_purchasing=getattr(user, "alert_purchasing", False),

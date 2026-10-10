@@ -33,6 +33,6 @@ export default function MasterForm({ resource, record, onSaved, onCancel }: {
       <label className="block text-sm">Description<textarea maxLength={10000} value={description} onChange={e => setDescription(e.target.value)} className="mt-1 w-full border rounded p-2" /></label>
     </>}
     <label className="block text-sm font-medium">Reason for change<textarea required maxLength={1000} value={reason} onChange={e => setReason(e.target.value)} className="mt-1 w-full border rounded p-2" /></label>
-    <div className="flex gap-3"><button disabled={pending} className="bg-brand-navy text-white rounded px-4 py-2 disabled:opacity-50">{pending ? 'Saving…' : 'Save'}</button><button type="button" disabled={pending} onClick={onCancel} className="border rounded px-4 py-2">Cancel</button></div>
+    <div className="flex gap-3"><button disabled={pending} className="bg-burnt-orange hover:bg-burnt-orange-dark text-white rounded px-4 py-2 font-medium shadow-xs disabled:opacity-50 transition-colors">{pending ? 'Saving…' : 'Save'}</button><button type="button" disabled={pending} onClick={onCancel} className="border rounded px-4 py-2 hover:bg-vanilla-surface">Cancel</button></div>
   </form>;
 }

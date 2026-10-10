@@ -70,7 +70,7 @@ function InventoryContent() {
   if (since) historyParams.set('since', new Date(since).toISOString());
   if (until) historyParams.set('until', new Date(until).toISOString());
   const history = useApi<Page<StockTransaction>>(`${endpoint}/transactions?${historyParams}`, revision);
-  const canImport = Boolean(user?.is_super_admin || user?.inventory_create || user?.permissions?.includes('inventory.stock.import'));
+  const canImport = Boolean(user?.is_super_admin || user?.is_superuser || user?.inventory_create || user?.permissions?.includes('inventory.stock.import'));
   function viewHistory(row: Balance) { setMaterial({ id: row.consumable_id, code: row.code }); setHistoryOffset(0); setTab('history'); }
 
   return <div className="max-w-7xl space-y-5">
@@ -95,21 +95,21 @@ function InventoryContent() {
       {!balances && <p role="status">Loading reported stock…</p>}
       {balances?.error && <p role="alert" className="text-red-700">{balances.error}</p>}
       {balances?.data && <>
-        <div className="overflow-x-auto border rounded bg-white"><table className="w-full text-left text-sm">
-          <thead className="border-b"><tr>{['Code', 'Material', 'Reported usable stock', 'Unit', 'Reported at', 'History'].map(label => <th key={label} className="p-3">{label}</th>)}</tr></thead>
-          <tbody>{balances.data.items.map(row => <tr key={row.consumable_id} className="border-b last:border-0">
-            <td className="p-3">{row.code}{!row.is_active && <span className="block text-gray-500">Inactive</span>}</td><td className="p-3">{row.name}</td>
+        <div className="overflow-x-auto border border-ink-text/10 rounded-lg bg-white shadow-2xs"><table className="w-full text-left text-sm">
+          <thead className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text"><tr>{['Code', 'Material', 'Reported usable stock', 'Unit', 'Reported at', 'History'].map(label => <th key={label} className="p-3 font-semibold">{label}</th>)}</tr></thead>
+          <tbody className="divide-y divide-ink-text/10">{balances.data.items.map(row => <tr key={row.consumable_id} className="hover:bg-vanilla-bg/40 transition-colors">
+            <td className="p-3 font-medium">{row.code}{!row.is_active && <span className="block text-gray-500 text-xs">Inactive</span>}</td><td className="p-3">{row.name}</td>
             <td className="p-3 font-medium">{row.usable_quantity === null ? 'Not imported' : row.usable_quantity}</td>
             <td className="p-3">{row.unit_code}</td><td className="p-3">{date(row.as_of)}</td>
-            <td className="p-3"><button className="underline" aria-label={`View history for ${row.code}`} onClick={() => viewHistory(row)}>View history</button></td>
+            <td className="p-3"><button className="underline text-burnt-orange font-medium" aria-label={`View history for ${row.code}`} onClick={() => viewHistory(row)}>View history</button></td>
           </tr>)}</tbody></table></div>
         {balances.data.items.length === 0 && <p>No matching consumables.</p>}
         <Pager offset={balanceOffset} total={balances.data.total} setOffset={setBalanceOffset} />
       </>}
     </section>}
     {tab === 'history' && <section className="space-y-4">
-      <div className="flex gap-3 items-center"><h2 className="font-semibold">{material ? `Stock history — ${material.code}` : 'Stock history — all materials'}</h2>
-        {material && <button className="underline text-sm" onClick={() => { setMaterial(null); setHistoryOffset(0); }}>Show all materials</button>}</div>
+      <div className="flex gap-3 items-center"><h2 className="font-semibold text-ink-text">{material ? `Stock history — ${material.code}` : 'Stock history — all materials'}</h2>
+        {material && <button className="underline text-sm text-burnt-orange" onClick={() => { setMaterial(null); setHistoryOffset(0); }}>Show all materials</button>}</div>
       <div className="flex gap-4 flex-wrap">
         <label className="text-sm">Movement<select aria-label="Movement" className={`${control} block mt-1`} value={movement} onChange={event => { setMovement(event.target.value); setHistoryOffset(0); }}>
           <option value="">All movements</option>{['RECEIPT', 'ISSUE', 'RETURN'].map(value => <option key={value} value={value}>{movementName(value)}</option>)}</select></label>
@@ -120,9 +120,9 @@ function InventoryContent() {
       {!history && <p role="status">Loading stock history…</p>}
       {history?.error && <p role="alert" className="text-red-700">{history.error}</p>}
       {history?.data && <>
-        <div className="overflow-x-auto border rounded bg-white"><table className="w-full text-left text-sm">
-          <thead className="border-b"><tr>{['Event time', 'Material', 'Movement', 'Stock change', 'Source quantity', 'Source actor'].map(label => <th className="p-3" key={label}>{label}</th>)}</tr></thead>
-          <tbody>{history.data.items.map(row => <tr key={row.id} className="border-b last:border-0">
+        <div className="overflow-x-auto border border-ink-text/10 rounded-lg bg-white shadow-2xs"><table className="w-full text-left text-sm">
+          <thead className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text"><tr>{['Event time', 'Material', 'Movement', 'Stock change', 'Source quantity', 'Source actor'].map(label => <th className="p-3 font-semibold" key={label}>{label}</th>)}</tr></thead>
+          <tbody className="divide-y divide-ink-text/10">{history.data.items.map(row => <tr key={row.id} className="hover:bg-vanilla-bg/40 transition-colors">
             <td className="p-3">{date(row.event_at)}</td><td className="p-3">{row.code} — {row.name}</td><td className="p-3">{movementName(row.movement)}</td>
             <td className="p-3 font-medium">{row.signed_quantity.startsWith('-') ? '' : '+'}{row.signed_quantity} {row.unit_code}</td>
             <td className="p-3">{row.source_quantity} {row.source_unit_code}{row.conversion_reference && <span className="block text-xs text-gray-600">Conversion: ×{row.conversion_factor}</span>}</td>

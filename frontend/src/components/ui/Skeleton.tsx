@@ -22,16 +22,16 @@ export interface TableSkeletonProps {
 export function TableSkeleton({ rows = 5, columns = 6, className = '' }: TableSkeletonProps) {
   return (
     <div
-      className={`w-full overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm ${className}`}
+      className={`w-full overflow-hidden rounded-lg border border-ink-text/10 bg-white shadow-2xs ${className}`}
       role="status"
       aria-label="Loading table data"
     >
       {/* Table Header Skeleton */}
-      <div className="border-b border-gray-200 bg-gray-50 px-4 py-3.5 flex items-center gap-4">
+      <div className="border-b border-ink-text/10 bg-vanilla-surface px-4 py-3.5 flex items-center gap-4">
         {Array.from({ length: columns }).map((_, i) => (
           <div
             key={`th-${i}`}
-            className={`h-4 bg-slate-200 rounded animate-pulse ${
+            className={`h-4 bg-ink-text/10 rounded animate-pulse ${
               i === 0 ? 'w-36' : i === columns - 1 ? 'w-20 ml-auto' : 'w-24'
             }`}
           />
@@ -39,7 +39,7 @@ export function TableSkeleton({ rows = 5, columns = 6, className = '' }: TableSk
       </div>
 
       {/* Table Rows Skeleton */}
-      <div className="divide-y divide-gray-200">
+      <div className="divide-y divide-ink-text/10">
         {Array.from({ length: rows }).map((_, rIdx) => (
           <div key={`row-${rIdx}`} className="px-4 py-4 flex items-center gap-4">
             {Array.from({ length: columns }).map((_, cIdx) => (

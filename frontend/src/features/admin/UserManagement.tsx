@@ -42,7 +42,6 @@ const PLANT_FLAGS: { key: keyof UserCreate; label: string }[] = [
 
 const GLOBAL_MODULE_FLAGS = [
   { key: 'can_access_dashboard', label: 'Executive Dashboard', desc: 'KPI metrics, stock alerts, and procurement pipeline' },
-  { key: 'can_access_reports', label: 'Analytical Reports', desc: 'Executive analytics, inventory, and purchase reports' },
 ] as const;
 
 const ALERT_CATEGORIES = [
@@ -67,7 +66,6 @@ const DEFAULT_PERMISSIONS: Record<string, boolean> = {
   can_access_plant_4: false,
   can_access_plant_5: false,
   can_access_dashboard: false,
-  can_access_reports: false,
   alert_production: false,
   alert_inventory: false,
   alert_purchasing: false,
@@ -233,7 +231,7 @@ export default function UserManagement() {
         </div>
         <button
           onClick={handleOpenCreateModal}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md font-medium text-sm transition-colors"
+          className="flex items-center gap-2 bg-burnt-orange hover:bg-burnt-orange-dark text-white px-4 py-2 rounded-md font-medium text-sm transition-colors shadow-xs"
         >
           <Plus className="w-4 h-4" /> Add New User
         </button>
@@ -250,9 +248,9 @@ export default function UserManagement() {
       {loading ? (
         <TableSkeleton columns={6} rows={5} />
       ) : (
-        <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
-          <table className="w-full text-left text-sm text-gray-600">
-            <thead className="bg-gray-50 text-gray-700 border-b border-gray-200 uppercase text-xs font-semibold">
+        <div className="bg-white rounded-lg border border-ink-text/10 shadow-2xs overflow-hidden">
+          <table className="w-full text-left text-sm text-ink-text/80">
+            <thead className="bg-vanilla-surface text-ink-text border-b border-ink-text/10 uppercase text-xs font-semibold">
               <tr>
                 <th className="py-3 px-4">Employee / Username</th>
                 <th className="py-3 px-4">Base Role</th>
@@ -262,13 +260,13 @@ export default function UserManagement() {
                 <th className="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200">
-              {users.filter(u => !u.is_super_admin).length === 0 ? (
+            <tbody className="divide-y divide-ink-text/10">
+              {users.filter(u => !(u.is_super_admin || u.is_superuser)).length === 0 ? (
                 <tr>
                   <td colSpan={6} className="text-center py-8 text-gray-400">No users found.</td>
                 </tr>
               ) : (
-              users.filter(u => !u.is_super_admin).map(u => {
+              users.filter(u => !(u.is_super_admin || u.is_superuser)).map(u => {
                 const activeCrudCount = ALL_CRUD_KEYS.filter(k => Boolean((u as any)[k])).length;
                 const activePlants = PLANT_FLAGS.filter(p => Boolean(u[p.key as keyof UserResponse])).map(p => p.label);
 
@@ -280,7 +278,7 @@ export default function UserManagement() {
                         <div>
                           <div className="font-medium text-gray-900 flex items-center gap-1.5">
                             {u.username}
-                            {u.is_super_admin && (
+                            {(u.is_super_admin || u.is_superuser) && (
                               <span className="bg-purple-100 text-purple-800 text-[10px] px-1.5 py-0.5 rounded font-bold">Super Admin</span>
                             )}
                           </div>
@@ -326,9 +324,6 @@ export default function UserManagement() {
                           {u.can_access_dashboard && (
                             <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200 font-medium">Dash</span>
                           )}
-                          {u.can_access_reports && (
-                            <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200 font-medium">Reports</span>
-                          )}
                           {(u.alert_production || u.alert_inventory || u.alert_purchasing || u.alert_system) && (
                             <span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200 font-medium">Alerts</span>
                           )}
@@ -336,7 +331,7 @@ export default function UserManagement() {
                       </div>
                     </td>
                     <td className="py-3 px-4 text-right">
-                      {u.is_super_admin ? (
+                      {(u.is_super_admin || u.is_superuser) ? (
                         <span className="text-xs text-gray-400 italic font-medium px-2 py-1 bg-gray-100 rounded">Protected</span>
                       ) : (
                         <button
@@ -360,9 +355,9 @@ export default function UserManagement() {
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 sm:p-6 z-50">
           <div className="bg-white rounded-xl max-w-5xl w-full shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
-            <div className="flex justify-between items-center px-6 py-4 border-b border-gray-200 shrink-0 bg-white">
-              <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                <Shield className="w-5 h-5 text-indigo-600" />
+            <div className="flex justify-between items-center px-6 py-4 border-b border-ink-text/10 shrink-0 bg-vanilla-surface">
+              <h2 className="text-lg font-bold text-ink-text flex items-center gap-2">
+                <Shield className="w-5 h-5 text-burnt-orange" />
                 {editingUser ? `Edit User & Permissions: ${editingUser.username}` : 'Provision New User'}
               </h2>
               <button
@@ -419,7 +414,7 @@ export default function UserManagement() {
                         type="text"
                         required
                         autoComplete="new-password"
-                        disabled={Boolean(editingUser?.is_super_admin)}
+                        disabled={Boolean(editingUser?.is_super_admin || editingUser?.is_superuser)}
                         value={username}
                         onChange={e => setUsername(e.target.value)}
                         className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500 disabled:bg-gray-100"
@@ -669,18 +664,18 @@ export default function UserManagement() {
               </div>
 
               {/* Fixed Footer */}
-              <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50 shrink-0">
+              <div className="flex justify-end gap-3 px-6 py-4 border-t border-ink-text/10 bg-vanilla-surface shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 border border-gray-300 text-gray-700 bg-white rounded-md text-sm font-medium hover:bg-gray-100 transition-colors"
+                  className="px-4 py-2 border border-ink-text/15 text-ink-text/80 bg-white rounded-md text-sm font-medium hover:bg-vanilla-surface transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="inline-flex items-center gap-2 px-5 py-2 bg-indigo-600 text-white rounded-md text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-xs"
+                  className="inline-flex items-center gap-2 px-5 py-2 bg-burnt-orange text-white rounded-md text-sm font-semibold hover:bg-burnt-orange-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-xs"
                 >
                   {isSaving && (
                     <svg

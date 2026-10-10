@@ -61,7 +61,7 @@ const ALL_COLUMNS: {
 
 export default function GRNs() {
   const { user } = useAuth();
-  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const hasLegacyPerm = (permission: string) => Boolean(user?.permissions?.includes(permission));
   const canRead = Boolean(isSuperAdmin || user?.goods_receipts_read || hasLegacyPerm('purchase.grns.read'));
   const canCreate = Boolean(isSuperAdmin || user?.goods_receipts_create || hasLegacyPerm('purchase.grns.create'));
@@ -767,9 +767,9 @@ export default function GRNs() {
         ) : (
           <table className="w-full border-collapse text-left text-xs table-fixed">
             <thead>
-              <tr className="sticky top-0 z-20 bg-gray-100 shadow-xs border-b border-gray-300">
+              <tr className="sticky top-0 z-20 bg-vanilla-surface shadow-2xs border-b border-ink-text/15">
                 {/* Header Checkbox */}
-                <th className="w-9 p-1 text-center border-r border-gray-300 bg-gray-200/90 sticky left-0 z-30">
+                <th className="w-9 p-1 text-center border-r border-ink-text/10 bg-vanilla-surface sticky left-0 z-30">
                   <input
                     type="checkbox"
                     aria-label="Select all rows"
@@ -778,19 +778,19 @@ export default function GRNs() {
                       if (el) el.indeterminate = someFilteredSelected;
                     }}
                     onChange={handleToggleSelectAll}
-                    className="cursor-pointer text-brand-steel rounded"
+                    className="cursor-pointer text-burnt-orange rounded"
                   />
                 </th>
 
                 {/* Row Number Header */}
-                <th className="w-12 p-1.5 text-center font-bold text-gray-600 border-r border-gray-300 bg-gray-200/90 sticky left-9 z-30">
+                <th className="w-12 p-1.5 text-center font-bold text-ink-text/70 border-r border-ink-text/10 bg-vanilla-surface sticky left-9 z-30">
                   #
                 </th>
 
                 {visibleColumns.map(col => (
                   <th
                     key={col.key}
-                    className={`${col.width} p-1.5 font-semibold text-gray-700 border-r border-gray-300 select-none text-${col.align ?? 'left'}`}
+                    className={`${col.width} p-1.5 font-semibold text-ink-text border-r border-ink-text/10 bg-vanilla-surface select-none text-${col.align ?? 'left'}`}
                   >
                     {col.label}
                   </th>

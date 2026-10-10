@@ -65,7 +65,6 @@ class UserPermissionFlags(BaseModel):
 
     # Global Module Access Flags
     can_access_dashboard: bool = False
-    can_access_reports: bool = False
 
     # Categorized Alert Subscriptions
     alert_production: bool = False
@@ -172,7 +171,6 @@ class UserUpdate(BaseModel):
 
     # Optional Global Module & Alert Flags
     can_access_dashboard: Optional[bool] = None
-    can_access_reports: Optional[bool] = None
     alert_production: Optional[bool] = None
     alert_inventory: Optional[bool] = None
     alert_purchasing: Optional[bool] = None
@@ -188,6 +186,7 @@ class UserResponse(UserPermissionFlags):
     employee_id: Optional[str] = None
     is_active: bool
     is_super_admin: bool
+    is_superuser: bool = False
     roles: list[str]
 
     @field_validator("roles", mode="before")
