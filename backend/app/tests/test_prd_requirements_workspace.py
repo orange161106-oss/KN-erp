@@ -50,7 +50,19 @@ def workspace_client():
     with Session(engine, expire_on_commit=False) as session:
         grants = [Permission(code=p, description='Workspace test grant') for p in ALL_PERMISSIONS]
         role = Role(code="ADMIN", name="Administrator", permissions=grants)
-        user = User(username="admin_operator", password_hash=passwords.hash("password"), roles=[role], can_view_planning=True, can_run_calculations=True)
+        user = User(
+            username="admin_operator",
+            password_hash=passwords.hash("password"),
+            roles=[role],
+            prd_planning_read=True,
+            prd_planning_create=True,
+            prd_planning_update=True,
+            prd_planning_delete=True,
+            requirements_read=True,
+            requirements_create=True,
+            requirements_update=True,
+            requirements_delete=True,
+        )
         session.add(user)
         session.commit()
 
