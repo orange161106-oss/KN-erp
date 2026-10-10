@@ -47,6 +47,8 @@ export default function PurchaseOrders() {
   const [places, setPlaces] = useState('');
   const [rounding, setRounding] = useState('');
   const [priceReference, setPriceReference] = useState('');
+  const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set());
+  const [showColMenu, setShowColMenu] = useState(false);
   const retry = useRef<{ body: string; key: string } | null>(null);
 
   const loadPage = useCallback(() => Promise.all([
@@ -145,10 +147,79 @@ export default function PurchaseOrders() {
       <p className="text-sm text-gray-600">Delivery times use your local timezone. Unpriced lines remain unknown; tax and freight are not calculated.</p>
       <button className={button} disabled={busy || !lines.length}>Save draft</button>
     </form>}
-    <div className="bg-white border border-ink-text/10 rounded-lg overflow-x-auto shadow-2xs"><table className="w-full text-left text-sm"><thead className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text"><tr>{['PO', 'Supplier', 'Date', 'Status', 'Value', ''].map((h, i) => <th className="p-3 font-semibold" key={i}>{h}</th>)}</tr></thead>
-      <tbody className="divide-y divide-ink-text/10">{orders.map(order => <tr key={order.id} className="hover:bg-vanilla-bg/40 transition-colors"><td className="p-3 break-all font-medium">{order.po_number}</td><td>{order.supplier_name}</td><td>{order.po_date}</td><td>{order.status}</td><td>{order.total_value === null ? 'Not fully priced' : `${order.total_value} ${order.currency}`}</td>
-        <td><button disabled={busy} className="underline p-3 text-burnt-orange font-medium" onClick={() => void view(order.id)}>View {order.po_number}</button></td></tr>)}</tbody></table>
-      {!loading && !orders.length && <p className="p-4 text-gray-500">No purchase orders on this page.</p>}</div>
+    <div className="bg-white border border-ink-text/10 rounded-lg overflow-x-auto shadow-2xs">
+      <div className="flex items-center justify-between py-1.5 px-3 bg-vanilla-surface border-b border-ink-text/10 text-xs">
+        <span className="font-semibold text-gray-700">Orders List</span>
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setShowColMenu(prev => !prev)}
+            className="px-2 py-0.5 bg-white border border-gray-300 rounded text-gray-700 hover:bg-gray-50 text-[11px] font-medium flex items-center gap-1"
+          >
+            <span>Columns ({5 - hiddenCols.size}/5) ▾</span>
+          </button>
+          {showColMenu && (
+            <div
+              className="absolute right-0 mt-1 w-44 bg-white border border-gray-200 rounded shadow-lg p-2 z-40 space-y-1 text-xs"
+              onMouseLeave={() => setShowColMenu(false)}
+            >
+              <div className="font-bold text-gray-700 border-b pb-1 mb-1">Show/Hide Columns</div>
+              {[
+                { key: 'po', label: 'PO' },
+                { key: 'supplier', label: 'Supplier' },
+                { key: 'date', label: 'Date' },
+                { key: 'status', label: 'Status' },
+                { key: 'value', label: 'Value' },
+              ].map(col => (
+                <label key={col.key} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-1 rounded">
+                  <input
+                    type="checkbox"
+                    checked={!hiddenCols.has(col.key)}
+                    onChange={() => {
+                      const next = new Set(hiddenCols);
+                      if (next.has(col.key)) next.delete(col.key);
+                      else next.add(col.key);
+                      setHiddenCols(next);
+                    }}
+                    className="rounded text-brand-steel"
+                  />
+                  <span>{col.label}</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <table className="w-full text-left text-sm">
+        <thead className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
+          <tr>
+            {!hiddenCols.has('po') && <th className="p-3 font-semibold">PO</th>}
+            {!hiddenCols.has('supplier') && <th className="p-3 font-semibold">Supplier</th>}
+            {!hiddenCols.has('date') && <th className="p-3 font-semibold">Date</th>}
+            {!hiddenCols.has('status') && <th className="p-3 font-semibold">Status</th>}
+            {!hiddenCols.has('value') && <th className="p-3 font-semibold">Value</th>}
+            <th className="p-3 font-semibold"></th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-ink-text/10">
+          {orders.map(order => (
+            <tr key={order.id} className="hover:bg-vanilla-bg/40 transition-colors">
+              {!hiddenCols.has('po') && <td className="p-3 break-all font-medium">{order.po_number}</td>}
+              {!hiddenCols.has('supplier') && <td className="p-3">{order.supplier_name}</td>}
+              {!hiddenCols.has('date') && <td className="p-3">{order.po_date}</td>}
+              {!hiddenCols.has('status') && <td className="p-3">{order.status}</td>}
+              {!hiddenCols.has('value') && <td className="p-3">{order.total_value === null ? 'Not fully priced' : `${order.total_value} ${order.currency}`}</td>}
+              <td className="p-3">
+                <button disabled={busy} className="underline text-burnt-orange font-medium" onClick={() => void view(order.id)}>
+                  View {order.po_number}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!loading && !orders.length && <p className="p-4 text-gray-500">No purchase orders on this page.</p>}
+    </div>
     <div className="flex gap-4"><button disabled={offset === 0 || loading} onClick={() => { setLoading(true); setOffset(Math.max(0, offset - 25)); }}>Previous orders</button><button disabled={orders.length < 25 || loading} onClick={() => { setLoading(true); setOffset(offset + 25); }}>More orders</button></div>
     {selected && <article className="bg-white border rounded p-5 space-y-4"><h3 className="text-lg font-semibold">{selected.po_number} · {selected.status}</h3>
       <p>{selected.supplier_name} · PO date {selected.po_date}</p>

@@ -349,18 +349,27 @@ export default function Requirements() {
     () => [
       {
         label: 'FOR COMPONENT',
-        colSpan: 2,
-        className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-ink-text/20 bg-brand-navy select-none',
+        columnKeys: ['part_name', 'part_number'],
+        isSticky: true,
+        className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-b border-ink-text/20 bg-brand-navy select-none box-border',
       },
       {
         label: 'FOR CONSUMABLES',
-        colSpan: 7,
-        className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-ink-text/20 bg-brand-steel select-none',
+        columnKeys: [
+          'consumable_code',
+          'consumable_name',
+          'process_name',
+          'part_thickness',
+          'process_count',
+          'production_order_qty',
+          'scheduled_consumable_qty',
+        ],
+        className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-b border-ink-text/20 bg-brand-steel select-none box-border',
       },
       {
         label: 'INVENTORY & OPERATIONAL STATUS',
-        colSpan: 6,
-        className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-ink-text/20 bg-brand-navy select-none',
+        columnKeys: ['unit', 'stock_qty', 'shortage_qty', 'status', 'remarks', 'id'],
+        className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-b border-ink-text/20 bg-brand-navy select-none box-border',
       },
     ],
     []
@@ -373,7 +382,7 @@ export default function Requirements() {
       {
         key: 'part_name',
         label: 'Used For – Part Name',
-        width: 'w-44',
+        width: 200,
         align: 'left',
         isSticky: true,
         render: val => <span className="font-semibold text-gray-900 truncate block">{val}</span>,
@@ -381,7 +390,7 @@ export default function Requirements() {
       {
         key: 'part_number',
         label: 'Used Part No. (Production Order)',
-        width: 'w-44',
+        width: 200,
         align: 'left',
         isSticky: true,
         render: val => <span className="font-mono text-gray-800 font-semibold">{val}</span>,
@@ -391,27 +400,27 @@ export default function Requirements() {
       {
         key: 'consumable_code',
         label: 'Consumable Item ID',
-        width: 'w-40',
+        width: 170,
         align: 'left',
         render: val => <span className="font-mono font-bold text-blue-900">{val}</span>,
       },
       {
         key: 'consumable_name',
         label: 'Consumable Name',
-        width: 'w-56',
+        width: 240,
         align: 'left',
         render: val => <span className="text-gray-900 truncate block">{val}</span>,
       },
       {
         key: 'process_name',
         label: 'Process Name',
-        width: 'w-36',
+        width: 140,
         align: 'left',
       },
       {
         key: 'part_thickness',
         label: 'Part Thickness (mm)',
-        width: 'w-28',
+        width: 130,
         align: 'right',
         isEditable: canUpdate,
         render: val => <span className="font-mono text-gray-800">{val}</span>,
@@ -419,7 +428,7 @@ export default function Requirements() {
       {
         key: 'process_count',
         label: 'Number of Processes',
-        width: 'w-28',
+        width: 130,
         align: 'center',
         isEditable: canUpdate,
         render: val => <span className="font-mono font-semibold text-gray-800">{val}</span>,
@@ -427,7 +436,7 @@ export default function Requirements() {
       {
         key: 'production_order_qty',
         label: 'Production Order for Selected Month',
-        width: 'w-40',
+        width: 180,
         align: 'right',
         isEditable: canUpdate,
         render: val => (
@@ -439,7 +448,7 @@ export default function Requirements() {
       {
         key: 'scheduled_consumable_qty',
         label: 'Scheduled Consumable Quantity for Selected Month',
-        width: 'w-44',
+        width: 190,
         align: 'right',
         isEditable: false,
         render: val => <span className="font-mono font-bold text-indigo-950">{val}</span>,
@@ -449,20 +458,20 @@ export default function Requirements() {
       {
         key: 'unit',
         label: 'Unit',
-        width: 'w-16',
+        width: 80,
         align: 'center',
       },
       {
         key: 'stock_qty',
         label: 'Stock Qty',
-        width: 'w-28',
+        width: 110,
         align: 'right',
         render: val => <span className="font-mono text-gray-700">{val}</span>,
       },
       {
         key: 'shortage_qty',
         label: 'Shortage Qty',
-        width: 'w-28',
+        width: 120,
         align: 'right',
         render: val => {
           const num = parseFloat(val) || 0;
@@ -480,7 +489,7 @@ export default function Requirements() {
       {
         key: 'status',
         label: 'Status',
-        width: 'w-36',
+        width: 150,
         align: 'center',
         render: val => {
           if (val === 'Critical shortage') {
@@ -521,14 +530,14 @@ export default function Requirements() {
       {
         key: 'remarks',
         label: 'Remarks',
-        width: 'w-48',
+        width: 200,
         align: 'left',
         isEditable: canUpdate,
       },
       {
         key: 'id' as any,
         label: 'Audit Trail',
-        width: 'w-28',
+        width: 100,
         align: 'center',
         render: (_val, row) => (
           <button

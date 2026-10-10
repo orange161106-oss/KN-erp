@@ -3,8 +3,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 export interface ColumnDef<T> {
   key: keyof T & string;
   label: string;
-  width?: string;
-  minWidth?: string;
+  width?: string | number;
+  minWidth?: string | number;
   align?: 'left' | 'right' | 'center';
   isEditable?: boolean;
   isSticky?: boolean;
@@ -13,8 +13,10 @@ export interface ColumnDef<T> {
 
 export interface HeaderGroupDef {
   label: string;
-  colSpan: number;
+  colSpan?: number;
+  columnKeys?: string[];
   className?: string;
+  isSticky?: boolean;
 }
 
 interface DataTableProps<T extends { id: string }> {
@@ -39,13 +41,20 @@ interface DataTableProps<T extends { id: string }> {
   headerGroups?: HeaderGroupDef[];
 }
 
-function parseWidthPixels(widthStr?: string): number {
-  if (!widthStr) return 144;
-  if (widthStr.startsWith('w-')) {
-    const val = parseInt(widthStr.replace('w-', ''), 10);
+export function parseWidthPixels(widthVal?: string | number): number {
+  if (typeof widthVal === 'number') return widthVal;
+  if (!widthVal) return 160;
+  if (widthVal.endsWith('px')) {
+    const p = parseInt(widthVal, 10);
+    if (!isNaN(p)) return p;
+  }
+  if (widthVal.startsWith('w-')) {
+    const val = parseInt(widthVal.replace('w-', ''), 10);
     if (!isNaN(val)) return val * 4;
   }
-  return 144;
+  const numeric = parseInt(widthVal, 10);
+  if (!isNaN(numeric)) return numeric;
+  return 160;
 }
 
 export default function DataTable<T extends { id: string; row_index?: number | null }>({
@@ -93,8 +102,9 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   );
 
   // Cumulative horizontal offsets for sticky frozen identifying columns
+  // Checkbox (36px) + Row # (44px) = 80px
   const stickyLeftOffsets = useMemo(() => {
-    let offset = 84; // Checkbox (36px) + Row # (48px) = 84px
+    let offset = 80;
     const map = new Map<string, number>();
     visibleColumns.forEach(col => {
       if (col.isSticky) {
@@ -291,39 +301,55 @@ export default function DataTable<T extends { id: string; row_index?: number | n
 
       {/* Main Table Grid - Section 7A: Column headers ALWAYS visible in EVERY state */}
       <div ref={tableContainerRef} className="flex-1 overflow-auto border border-ink-text/15 bg-white relative">
-        <table className="w-full border-collapse text-left text-xs table-fixed">
+        <table className="min-w-full w-max border-separate border-spacing-0 text-left text-xs select-text">
           <thead>
             {/* Optional Tier 1: Grouped Column Headers (FOR COMPONENT, FOR CONSUMABLES, etc.) */}
             {headerGroups && headerGroups.length > 0 && (
-              <tr className="sticky top-0 z-20 bg-vanilla-surface border-b border-ink-text/15 shadow-2xs h-7">
+              <tr className="sticky top-0 z-20 bg-vanilla-surface shadow-2xs h-[30px]">
                 {/* Checkbox + Row # frozen span */}
                 <th
                   colSpan={2}
-                  className="p-1 border-r border-ink-text/10 bg-vanilla-surface sticky left-0 z-30 select-none"
+                  style={{ left: 0, width: 80, minWidth: 80, maxWidth: 80, top: 0, height: 30 }}
+                  className="p-1 border-r border-b border-ink-text/15 bg-vanilla-surface sticky left-0 z-30 select-none box-border"
                 />
-                {headerGroups.map((grp, gIdx) => (
-                  <th
-                    key={gIdx}
-                    colSpan={grp.colSpan}
-                    className={
-                      grp.className ||
-                      'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-ink-text/20 bg-brand-navy select-none'
-                    }
-                  >
-                    {grp.label}
-                  </th>
-                ))}
+                {headerGroups.map((grp, gIdx) => {
+                  const visibleCount = grp.columnKeys
+                    ? grp.columnKeys.filter(k => visibleColumns.some(c => c.key === k)).length
+                    : grp.colSpan ?? 1;
+                  if (visibleCount === 0) return null;
+
+                  const stickyStyle = grp.isSticky
+                    ? { left: 80, top: 0, height: 30 }
+                    : { top: 0, height: 30 };
+
+                  return (
+                    <th
+                      key={gIdx}
+                      colSpan={visibleCount}
+                      style={stickyStyle}
+                      className={
+                        (grp.className ||
+                        'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-b border-ink-text/20 bg-brand-navy select-none box-border') +
+                        (grp.isSticky ? ' sticky z-30' : '')
+                      }
+                    >
+                      {grp.label}
+                    </th>
+                  );
+                })}
               </tr>
             )}
 
             {/* Tier 2: Column Headers Row */}
             <tr
-              className={`sticky ${
-                headerGroups && headerGroups.length > 0 ? 'top-[28px]' : 'top-0'
-              } z-20 bg-vanilla-surface border-b border-ink-text/15 shadow-2xs h-8`}
+              className="sticky z-20 bg-vanilla-surface shadow-2xs"
+              style={{ top: headerGroups && headerGroups.length > 0 ? 30 : 0, height: 36 }}
             >
               {/* 1. Select All Checkbox Header */}
-              <th className="w-9 p-1 text-center border-r border-ink-text/10 bg-vanilla-surface sticky left-0 z-30">
+              <th
+                style={{ left: 0, width: 36, minWidth: 36, maxWidth: 36, top: headerGroups && headerGroups.length > 0 ? 30 : 0, height: 36 }}
+                className="p-1 text-center border-r border-b border-ink-text/15 bg-vanilla-surface sticky left-0 z-30 select-none box-border"
+              >
                 <input
                   type="checkbox"
                   aria-label="Select all rows"
@@ -337,12 +363,16 @@ export default function DataTable<T extends { id: string; row_index?: number | n
               </th>
 
               {/* 2. Row Number Header */}
-              <th className="w-12 p-1 text-center font-bold text-ink-text/70 border-r border-ink-text/10 bg-vanilla-surface select-none sticky left-9 z-30">
+              <th
+                style={{ left: 36, width: 44, minWidth: 44, maxWidth: 44, top: headerGroups && headerGroups.length > 0 ? 30 : 0, height: 36 }}
+                className="p-1 text-center font-bold text-ink-text/70 border-r border-b border-ink-text/15 bg-vanilla-surface select-none sticky left-[36px] z-30 box-border"
+              >
                 #
               </th>
 
               {/* Data Column Headers */}
               {visibleColumns.map(col => {
+                const colW = parseWidthPixels(col.width);
                 const stickyOffset = stickyLeftOffsets.get(col.key);
                 const isFrozen = col.isSticky && stickyOffset !== undefined;
 
@@ -350,10 +380,17 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                   <th
                     key={col.key}
                     title={col.label}
-                    style={isFrozen ? { left: `${stickyOffset}px` } : undefined}
-                    className={`${col.width || 'w-36'} p-1.5 font-semibold text-ink-text border-r border-ink-text/10 select-none text-${
+                    style={{
+                      top: headerGroups && headerGroups.length > 0 ? 30 : 0,
+                      height: 36,
+                      width: `${colW}px`,
+                      minWidth: `${colW}px`,
+                      maxWidth: `${colW}px`,
+                      ...(isFrozen ? { left: `${stickyOffset}px` } : {}),
+                    }}
+                    className={`p-1.5 font-semibold text-ink-text border-r border-b border-ink-text/15 select-none text-${
                       col.align || 'left'
-                    } bg-vanilla-surface ${
+                    } bg-vanilla-surface box-border ${
                       isFrozen ? 'sticky z-30 shadow-2xs font-bold' : ''
                     }`}
                   >
@@ -414,7 +451,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                       else next.add(row.id);
                       onSelectionChange(next);
                     }}
-                    className={`h-7 border-b border-ink-text/10 transition-colors ${
+                    className={`h-7 transition-colors ${
                       isRowSelected
                         ? 'bg-burnt-orange/15 font-medium'
                         : customRowClass ||
@@ -424,7 +461,8 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                     {/* Row Checkbox */}
                     <td
                       onClick={e => handleRowCheckbox(row.id, rIdx, e)}
-                      className={`text-center border-r border-gray-300 select-none cursor-pointer sticky left-0 z-10 ${
+                      style={{ left: 0, width: 36, minWidth: 36, maxWidth: 36 }}
+                      className={`text-center border-r border-b border-gray-200 select-none cursor-pointer sticky left-0 z-10 box-border ${
                         isRowSelected ? 'bg-blue-200/70' : isZebra ? 'bg-gray-100/90' : 'bg-white'
                       }`}
                     >
@@ -440,7 +478,8 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                     {/* Row Index # */}
                     <td
                       onClick={e => handleRowCheckbox(row.id, rIdx, e)}
-                      className={`text-center font-mono text-gray-500 border-r border-gray-300 select-none cursor-pointer sticky left-9 z-10 ${
+                      style={{ left: 36, width: 44, minWidth: 44, maxWidth: 44 }}
+                      className={`text-center font-mono text-gray-500 border-r border-b border-gray-200 select-none cursor-pointer sticky left-[36px] z-10 box-border ${
                         isRowSelected ? 'bg-blue-200/70 font-bold text-blue-900' : isZebra ? 'bg-gray-100/90' : 'bg-white'
                       }`}
                     >
@@ -455,11 +494,17 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                       const cellValue = (row as any)[col.key];
                       const stickyOffset = stickyLeftOffsets.get(col.key);
                       const isFrozen = col.isSticky && stickyOffset !== undefined;
+                      const colW = parseWidthPixels(col.width);
 
                       return (
                         <td
                           key={col.key}
-                          style={isFrozen ? { left: `${stickyOffset}px` } : undefined}
+                          style={{
+                            width: `${colW}px`,
+                            minWidth: `${colW}px`,
+                            maxWidth: `${colW}px`,
+                            ...(isFrozen ? { left: `${stickyOffset}px` } : {}),
+                          }}
                           onClick={e => {
                             e.stopPropagation();
                             setSelectedCell({ rowId: row.id, colKey: col.key });
@@ -470,7 +515,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                             e.stopPropagation();
                             handleStartEdit(row.id, col.key);
                           }}
-                          className={`relative border-r border-gray-200 px-2 py-0.5 truncate cursor-cell ${
+                          className={`relative border-r border-b border-gray-200 px-2 py-0.5 truncate cursor-cell box-border ${
                             col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'
                           } ${isFrozen ? `sticky z-10 ${isRowSelected ? 'bg-blue-100' : isZebra ? 'bg-gray-100' : 'bg-white'}` : ''} ${
                             isCellSelected ? 'ring-2 ring-blue-600 ring-inset bg-blue-50/50' : ''
