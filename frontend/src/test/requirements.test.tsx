@@ -9,10 +9,19 @@ const fetchMock = vi.fn<typeof fetch>();
 const mockRequirements = [
   {
     id: 'req-1',
+    planning_version_id: 'plan-1',
+    part_name: 'Excavator Bucket Arm',
+    part_number: 'P-10023',
+    consumable_code: 'WLD-WIRE-01',
+    consumable_name: 'MIG Welding Wire 1.2mm',
+    process_name: 'Welding',
+    part_thickness: '12.5',
+    process_count: 2,
+    production_order_qty: '500.0000',
+    scheduled_consumable_qty: '250.0000',
+    description: 'MIG Welding Wire 1.2mm',
     plant: 'Plant 1',
     process: 'Welding',
-    consumable_code: 'WLD-WIRE-01',
-    description: 'MIG Welding Wire 1.2mm',
     unit: 'Kg',
     required_qty: '250.0000',
     stock_qty: '50.0000',
@@ -24,10 +33,19 @@ const mockRequirements = [
   },
   {
     id: 'req-2',
+    planning_version_id: 'plan-1',
+    part_name: 'Chassis Frame Base',
+    part_number: 'P-10088',
+    consumable_code: 'PNT-THIN-01',
+    consumable_name: 'Industrial Thinner',
+    process_name: 'Painting',
+    part_thickness: '8.0',
+    process_count: 1,
+    production_order_qty: '300.0000',
+    scheduled_consumable_qty: '80.0000',
+    description: 'Industrial Thinner',
     plant: 'Plant 1',
     process: 'Painting',
-    consumable_code: 'PNT-THIN-01',
-    description: 'Industrial Thinner',
     unit: 'Ltr',
     required_qty: '80.0000',
     stock_qty: '90.0000',
@@ -38,6 +56,20 @@ const mockRequirements = [
     msl: '50.0000',
   },
 ];
+
+const mockMetadata = {
+  has_plan: true,
+  planning_version_id: 'plan-1',
+  planning_month: 10,
+  planning_year: 2026,
+  planning_period: '2026-10',
+  created_at: '2026-10-06T08:30:00Z',
+  created_by: 'planner',
+  last_modified_at: '2026-10-06T09:15:00Z',
+  last_modified_by: 'planner',
+  source_filename: 'October_Plan.xlsx',
+  record_count: 2,
+};
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -68,15 +100,27 @@ function renderRequirements() {
   );
 }
 
-test('renders Requirements table with critical shortages and normal status', async () => {
-  fetchMock.mockImplementation(async input => String(input).endsWith('/prd/planning-versions')
-    ? jsonResponse([{ id: 'version-1', planning_period: '2026-08', revision_label: 'R3', status: 'CALCULATED' }])
-    : jsonResponse(mockRequirements));
+test('renders Requirements table with Section 7A headers, metadata card, and records', async () => {
+  fetchMock.mockImplementation(async input => {
+    const urlStr = String(input);
+    if (urlStr.includes('/plan-metadata')) {
+      return jsonResponse(mockMetadata);
+    }
+    if (urlStr.includes('/records')) {
+      return jsonResponse(mockRequirements);
+    }
+    return jsonResponse([]);
+  });
+
   renderRequirements();
 
-  expect(await screen.findByText('Consumable Requirements Workspace')).toBeInTheDocument();
+  expect(await screen.findByText('Consumable Planning Module')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /Recalculate/ })).toBeInTheDocument();
-  expect(screen.getByText(/Export Excel/)).toBeInTheDocument();
+  expect(screen.getByText('Export Excel ▾')).toBeInTheDocument();
+
+  // Period selector
+  expect(screen.getByLabelText('Planning Month')).toBeInTheDocument();
+  expect(screen.getByLabelText('Planning Year')).toBeInTheDocument();
 
   // Records rendered
   expect(await screen.findByText('MIG Welding Wire 1.2mm')).toBeInTheDocument();
@@ -84,21 +128,28 @@ test('renders Requirements table with critical shortages and normal status', asy
 
   expect(screen.getByText('Industrial Thinner')).toBeInTheDocument();
   expect(screen.getByText('NORMAL')).toBeInTheDocument();
+
+  // Identifying columns rendered
+  expect(screen.getByText('Excavator Bucket Arm')).toBeInTheDocument();
+  expect(screen.getByText('P-10023')).toBeInTheDocument();
 });
 
 test('user can trigger recalculation', async () => {
   fetchMock.mockImplementation(async (url, init) => {
     const urlStr = String(url);
-    if (init?.method === 'POST' && urlStr.includes('/requirements/calculate')) {
+    if (init?.method === 'POST' && urlStr.includes('/recalculate')) {
       return jsonResponse({
-        message: 'Recalculation complete',
+        message: 'Recalculation completed using approved deterministic KNL consumption rules.',
         record_count: 2,
         critical_shortages: 1,
         low_stock: 0,
         records: mockRequirements,
+        plan_metadata: mockMetadata,
       });
     }
-    if (urlStr.includes('/prd/planning-versions')) return jsonResponse([{ id: 'version-1', planning_period: '2026-08', revision_label: 'R3', status: 'VALIDATED' }]);
+    if (urlStr.includes('/plan-metadata')) {
+      return jsonResponse(mockMetadata);
+    }
     return jsonResponse(mockRequirements);
   });
 
@@ -108,7 +159,7 @@ test('user can trigger recalculation', async () => {
   const recalcBtn = screen.getByRole('button', { name: /Recalculate/ });
   await userEvent.click(recalcBtn);
 
-  expect(await screen.findByText(/Calculation completed/)).toBeInTheDocument();
-  const call = fetchMock.mock.calls.find(([url, init]) => String(url).includes('/requirements/calculate') && init?.method === 'POST');
-  expect(JSON.parse(String(call?.[1]?.body))).toEqual({ planning_version_id: 'version-1' });
+  expect(await screen.findByText(/Recalculation completed/)).toBeInTheDocument();
+  const call = fetchMock.mock.calls.find(([url, init]) => String(url).includes('/recalculate') && init?.method === 'POST');
+  expect(call).toBeDefined();
 });

@@ -11,6 +11,12 @@ export interface ColumnDef<T> {
   render?: (value: any, row: T, isSelected: boolean) => React.ReactNode;
 }
 
+export interface HeaderGroupDef {
+  label: string;
+  colSpan: number;
+  className?: string;
+}
+
 interface DataTableProps<T extends { id: string }> {
   columns: ColumnDef<T>[];
   data: T[];
@@ -29,6 +35,17 @@ interface DataTableProps<T extends { id: string }> {
   onFormulaChange?: (val: string) => void;
   // Row highlighting (e.g. shortages red, low stock amber)
   getRowClassName?: (row: T) => string;
+  // Section 7A: Grouped column headers
+  headerGroups?: HeaderGroupDef[];
+}
+
+function parseWidthPixels(widthStr?: string): number {
+  if (!widthStr) return 144;
+  if (widthStr.startsWith('w-')) {
+    const val = parseInt(widthStr.replace('w-', ''), 10);
+    if (!isNaN(val)) return val * 4;
+  }
+  return 144;
 }
 
 export default function DataTable<T extends { id: string; row_index?: number | null }>({
@@ -47,6 +64,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   formulaValue: externalFormulaValue,
   onFormulaChange: externalOnFormulaChange,
   getRowClassName,
+  headerGroups,
 }: DataTableProps<T>) {
   // Column visibility
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
@@ -73,6 +91,19 @@ export default function DataTable<T extends { id: string; row_index?: number | n
     () => columns.filter(col => !hiddenColumns.has(col.key)),
     [columns, hiddenColumns]
   );
+
+  // Cumulative horizontal offsets for sticky frozen identifying columns
+  const stickyLeftOffsets = useMemo(() => {
+    let offset = 84; // Checkbox (36px) + Row # (48px) = 84px
+    const map = new Map<string, number>();
+    visibleColumns.forEach(col => {
+      if (col.isSticky) {
+        map.set(col.key, offset);
+        offset += parseWidthPixels(col.width);
+      }
+    });
+    return map;
+  }, [visibleColumns]);
 
   // Track modified cells
   const modifiedCells = useMemo(() => {
@@ -229,7 +260,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
           </button>
           {showColMenu && (
             <div
-              className="absolute right-0 mt-1 w-48 bg-white border border-gray-200 rounded shadow-lg p-2 z-40 max-h-60 overflow-y-auto space-y-1 text-xs"
+              className="absolute right-0 mt-1 w-52 bg-white border border-gray-200 rounded shadow-lg p-2 z-40 max-h-60 overflow-y-auto space-y-1 text-xs"
               onMouseLeave={() => setShowColMenu(false)}
             >
               <div className="font-bold text-gray-700 border-b pb-1 mb-1">Show/Hide Columns</div>
@@ -237,8 +268,10 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                 <label key={col.key} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-1 rounded">
                   <input
                     type="checkbox"
+                    disabled={col.isSticky}
                     checked={!hiddenColumns.has(col.key)}
                     onChange={() => {
+                      if (col.isSticky) return; // Keep frozen columns visible per Section 7A
                       const next = new Set(hiddenColumns);
                       if (next.has(col.key)) next.delete(col.key);
                       else next.add(col.key);
@@ -246,7 +279,9 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                     }}
                     className="text-brand-steel rounded"
                   />
-                  <span>{col.label}</span>
+                  <span className={col.isSticky ? 'font-semibold text-gray-900' : ''}>
+                    {col.label} {col.isSticky ? '(Frozen)' : ''}
+                  </span>
                 </label>
               ))}
             </div>
@@ -254,71 +289,118 @@ export default function DataTable<T extends { id: string; row_index?: number | n
         </div>
       </div>
 
-      {/* Main Table Grid */}
+      {/* Main Table Grid - Section 7A: Column headers ALWAYS visible in EVERY state */}
       <div ref={tableContainerRef} className="flex-1 overflow-auto border border-ink-text/15 bg-white relative">
-        {isLoading ? (
-          <div className="p-8 space-y-3">
-            {[1, 2, 3, 4, 5, 6].map(i => (
-              <div key={i} className="flex gap-2 animate-pulse">
-                <div className="w-8 h-6 bg-gray-200 rounded" />
-                <div className="w-12 h-6 bg-gray-200 rounded" />
-                <div className="flex-1 h-6 bg-gray-100 rounded" />
-                <div className="w-32 h-6 bg-gray-100 rounded" />
-              </div>
-            ))}
-          </div>
-        ) : data.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-xs text-gray-400 gap-2 p-8">
-            <span className="text-3xl">📋</span>
-            <p className="font-medium text-gray-500">{emptyMessage}</p>
-            {canCreate && onAddRow && (
-              <button
-                type="button"
-                onClick={onAddRow}
-                className="mt-2 px-3 py-1.5 bg-burnt-orange hover:bg-burnt-orange-dark text-white rounded font-medium shadow-xs transition-colors"
-              >
-                + Add your first row
-              </button>
-            )}
-          </div>
-        ) : (
-          <table className="w-full border-collapse text-left text-xs table-fixed">
-            <thead>
-              <tr className="sticky top-0 z-20 bg-vanilla-surface border-b border-ink-text/15 shadow-2xs">
-                {/* 1. Select All Checkbox Header */}
-                <th className="w-9 p-1 text-center border-r border-ink-text/10 bg-vanilla-surface sticky left-0 z-30">
-                  <input
-                    type="checkbox"
-                    aria-label="Select all rows"
-                    checked={allSelected}
-                    ref={input => {
-                      if (input) input.indeterminate = someSelected;
-                    }}
-                    onChange={handleToggleSelectAll}
-                    className="cursor-pointer text-burnt-orange rounded"
-                  />
-                </th>
-
-                {/* 2. Row Number Header */}
-                <th className="w-12 p-1 text-center font-bold text-ink-text/70 border-r border-ink-text/10 bg-vanilla-surface select-none sticky left-9 z-30">
-                  #
-                </th>
-
-                {/* Data Column Headers */}
-                {visibleColumns.map(col => (
+        <table className="w-full border-collapse text-left text-xs table-fixed">
+          <thead>
+            {/* Optional Tier 1: Grouped Column Headers (FOR COMPONENT, FOR CONSUMABLES, etc.) */}
+            {headerGroups && headerGroups.length > 0 && (
+              <tr className="sticky top-0 z-20 bg-vanilla-surface border-b border-ink-text/15 shadow-2xs h-7">
+                {/* Checkbox + Row # frozen span */}
+                <th
+                  colSpan={2}
+                  className="p-1 border-r border-ink-text/10 bg-vanilla-surface sticky left-0 z-30 select-none"
+                />
+                {headerGroups.map((grp, gIdx) => (
                   <th
-                    key={col.key}
-                    className={`${col.width || 'w-36'} p-1.5 font-semibold text-ink-text border-r border-ink-text/10 select-none text-${
-                      col.align || 'left'
-                    } bg-vanilla-surface truncate`}
+                    key={gIdx}
+                    colSpan={grp.colSpan}
+                    className={
+                      grp.className ||
+                      'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-ink-text/20 bg-brand-navy select-none'
+                    }
                   >
-                    {col.label}
+                    {grp.label}
                   </th>
                 ))}
               </tr>
-            </thead>
-            <tbody>
-              {data.map((row, rIdx) => {
+            )}
+
+            {/* Tier 2: Column Headers Row */}
+            <tr
+              className={`sticky ${
+                headerGroups && headerGroups.length > 0 ? 'top-[28px]' : 'top-0'
+              } z-20 bg-vanilla-surface border-b border-ink-text/15 shadow-2xs h-8`}
+            >
+              {/* 1. Select All Checkbox Header */}
+              <th className="w-9 p-1 text-center border-r border-ink-text/10 bg-vanilla-surface sticky left-0 z-30">
+                <input
+                  type="checkbox"
+                  aria-label="Select all rows"
+                  checked={allSelected}
+                  ref={input => {
+                    if (input) input.indeterminate = someSelected;
+                  }}
+                  onChange={handleToggleSelectAll}
+                  className="cursor-pointer text-burnt-orange rounded"
+                />
+              </th>
+
+              {/* 2. Row Number Header */}
+              <th className="w-12 p-1 text-center font-bold text-ink-text/70 border-r border-ink-text/10 bg-vanilla-surface select-none sticky left-9 z-30">
+                #
+              </th>
+
+              {/* Data Column Headers */}
+              {visibleColumns.map(col => {
+                const stickyOffset = stickyLeftOffsets.get(col.key);
+                const isFrozen = col.isSticky && stickyOffset !== undefined;
+
+                return (
+                  <th
+                    key={col.key}
+                    title={col.label}
+                    style={isFrozen ? { left: `${stickyOffset}px` } : undefined}
+                    className={`${col.width || 'w-36'} p-1.5 font-semibold text-ink-text border-r border-ink-text/10 select-none text-${
+                      col.align || 'left'
+                    } bg-vanilla-surface ${
+                      isFrozen ? 'sticky z-30 shadow-2xs font-bold' : ''
+                    }`}
+                  >
+                    <div className="line-clamp-2 leading-tight">{col.label}</div>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+
+          {/* Section 7A: State rendered inside tbody so thead is NEVER hidden */}
+          <tbody>
+            {isLoading ? (
+              <tr className="h-48">
+                <td
+                  colSpan={visibleColumns.length + 2}
+                  className="text-center p-8 bg-white border-b border-gray-200"
+                >
+                  <div className="flex flex-col items-center justify-center gap-2">
+                    <div className="animate-spin h-6 w-6 border-2 border-brand-navy border-t-transparent rounded-full" />
+                    <span className="text-xs text-gray-500 font-medium">Loading requirement records…</span>
+                  </div>
+                </td>
+              </tr>
+            ) : data.length === 0 ? (
+              <tr className="h-48">
+                <td
+                  colSpan={visibleColumns.length + 2}
+                  className="text-center p-8 bg-white border-b border-gray-200"
+                >
+                  <div className="flex flex-col items-center justify-center gap-2 text-gray-400">
+                    <span className="text-3xl">📋</span>
+                    <p className="font-medium text-gray-600 text-xs">{emptyMessage}</p>
+                    {canCreate && onAddRow && (
+                      <button
+                        type="button"
+                        onClick={onAddRow}
+                        className="mt-2 px-3 py-1.5 bg-burnt-orange hover:bg-burnt-orange-dark text-white rounded font-medium shadow-xs transition-colors"
+                      >
+                        + Add your first row
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              data.map((row, rIdx) => {
                 const isRowSelected = selectedIds.has(row.id);
                 const customRowClass = getRowClassName ? getRowClassName(row) : '';
                 const isZebra = rIdx % 2 === 1;
@@ -335,7 +417,8 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                     className={`h-7 border-b border-ink-text/10 transition-colors ${
                       isRowSelected
                         ? 'bg-burnt-orange/15 font-medium'
-                        : customRowClass || (isZebra ? 'bg-vanilla-bg/25 hover:bg-vanilla-surface/50' : 'bg-white hover:bg-vanilla-bg/40')
+                        : customRowClass ||
+                          (isZebra ? 'bg-vanilla-bg/25 hover:bg-vanilla-surface/50' : 'bg-white hover:bg-vanilla-bg/40')
                     }`}
                   >
                     {/* Row Checkbox */}
@@ -370,10 +453,13 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                       const isCellEditing = editingCell?.rowId === row.id && editingCell?.colKey === col.key;
                       const isModified = modifiedCells.has(`${row.id}:${col.key}`);
                       const cellValue = (row as any)[col.key];
+                      const stickyOffset = stickyLeftOffsets.get(col.key);
+                      const isFrozen = col.isSticky && stickyOffset !== undefined;
 
                       return (
                         <td
                           key={col.key}
+                          style={isFrozen ? { left: `${stickyOffset}px` } : undefined}
                           onClick={e => {
                             e.stopPropagation();
                             setSelectedCell({ rowId: row.id, colKey: col.key });
@@ -386,7 +472,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                           }}
                           className={`relative border-r border-gray-200 px-2 py-0.5 truncate cursor-cell ${
                             col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'
-                          } ${
+                          } ${isFrozen ? `sticky z-10 ${isRowSelected ? 'bg-blue-100' : isZebra ? 'bg-gray-100' : 'bg-white'}` : ''} ${
                             isCellSelected ? 'ring-2 ring-blue-600 ring-inset bg-blue-50/50' : ''
                           } ${isModified && !isCellSelected ? 'bg-amber-50/80' : ''}`}
                         >
@@ -433,16 +519,18 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                     })}
                   </tr>
                 );
-              })}
-            </tbody>
-          </table>
-        )}
+              })
+            )}
+          </tbody>
+        </table>
       </div>
 
       {/* Grid Footer status bar */}
       <div className="flex items-center justify-between px-3 py-1 bg-gray-100 border-t border-gray-300 text-[11px] text-gray-600 select-none">
         <div>
-          <span>Total Records: <strong className="text-gray-800">{data.length}</strong></span>
+          <span>
+            Total Records: <strong className="text-gray-800">{data.length}</strong>
+          </span>
           {selectedIds.size > 0 && (
             <span className="ml-3 text-blue-700 font-semibold bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
               {selectedIds.size} row{selectedIds.size > 1 ? 's' : ''} selected
@@ -450,7 +538,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
           )}
         </div>
         <div className="text-gray-500">
-          Tip: Double-click to edit cell • Shift+click to select range • Ctrl+A to select all
+          Tip: Double-click permitted cell to edit • Shift+click to select range • Ctrl+A to select all
         </div>
       </div>
     </div>
