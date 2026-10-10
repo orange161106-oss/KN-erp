@@ -1,10 +1,15 @@
 /** UI hints use the backend's effective permission list; roles are labels only. */
 export type ActionName = 'create' | 'read' | 'update' | 'delete' | 'import' | 'export';
-export interface UserContextData { roles: string[]; permissions: string[]; is_super_admin?: boolean; [key: string]: any; }
+export interface UserContextData { roles: string[]; permissions: string[]; is_super_admin?: boolean; is_superuser?: boolean; [key: string]: any; }
+
+export function isSuperAdmin(user: (UserContextData & Record<string, any>) | null | undefined): boolean {
+  if (!user) return false;
+  return Boolean(user.is_super_admin || user.is_superuser);
+}
 
 export function canPerform(user: (UserContextData & Record<string, any>) | null | undefined, module: string, action: ActionName): boolean {
   if (!user) return false;
-  if (user.is_super_admin) return true;
+  if (isSuperAdmin(user)) return true;
 
   // Check 40-point CRUD flags
   const crudOp = action === 'import' ? 'create' : action === 'export' ? 'read' : action;
@@ -50,8 +55,8 @@ export function canPerform(user: (UserContextData & Record<string, any>) | null 
 
 export function canOpen(user: (UserContextData & Record<string, any>) | null | undefined, path: string): boolean {
   if (!user) return false;
-  if (user.is_super_admin || path === '/status') return true;
-  if (path === '/admin') return Boolean(user.is_super_admin);
+  if (isSuperAdmin(user) || path === '/status') return true;
+  if (path === '/admin') return isSuperAdmin(user);
 
   // If modern 40-point CRUD / global flags are defined on the user object, strictly evaluate them
   const hasModernFlags =
@@ -62,7 +67,6 @@ export function canOpen(user: (UserContextData & Record<string, any>) | null | u
 
   if (hasModernFlags) {
     if (path === '/' || path === '/dashboard') return Boolean(user.can_access_dashboard);
-    if (path === '/reports') return Boolean(user.can_access_reports);
     if (path === '/alerts') return Boolean(user.alert_production || user.alert_inventory || user.alert_purchasing || user.alert_system);
 
     if (path === '/masters') return Boolean(user.masters_read);
@@ -99,4 +103,37 @@ export function canOpen(user: (UserContextData & Record<string, any>) | null | u
     '/admin': [],
   };
   return (codes[path] || []).some(code => user.permissions?.includes(code));
+}
+
+export function canCreate(user: (UserContextData & Record<string, any>) | null | undefined, module: string): boolean {
+  if (isSuperAdmin(user)) return true;
+  return canPerform(user, module, 'create');
+}
+
+export function canRead(user: (UserContextData & Record<string, any>) | null | undefined, module: string): boolean {
+  if (isSuperAdmin(user)) return true;
+  return canPerform(user, module, 'read');
+}
+
+export function canEdit(user: (UserContextData & Record<string, any>) | null | undefined, module: string): boolean {
+  if (isSuperAdmin(user)) return true;
+  return canPerform(user, module, 'update');
+}
+
+export function canUpdate(user: (UserContextData & Record<string, any>) | null | undefined, module: string): boolean {
+  if (isSuperAdmin(user)) return true;
+  return canPerform(user, module, 'update');
+}
+
+export function canDelete(user: (UserContextData & Record<string, any>) | null | undefined, module: string): boolean {
+  if (isSuperAdmin(user)) return true;
+  return canPerform(user, module, 'delete');
+}
+
+export function hasAccess(user: (UserContextData & Record<string, any>) | null | undefined, pathOrModule: string): boolean {
+  if (isSuperAdmin(user)) return true;
+  if (pathOrModule.startsWith('/')) {
+    return canOpen(user, pathOrModule);
+  }
+  return canPerform(user, pathOrModule, 'read');
 }

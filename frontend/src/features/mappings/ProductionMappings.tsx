@@ -13,7 +13,7 @@ import type {
 export default function ProductionMappings() {
   const auth = useContext(AuthContext);
   const user = auth?.user ?? null;
-  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const hasModernFlags = user && (
     'production_mappings_read' in user ||
     'production_mappings_create' in user ||
@@ -24,7 +24,7 @@ export default function ProductionMappings() {
   const canCreate = Boolean(isSuperAdmin || (hasModernFlags ? user?.production_mappings_create : user?.permissions?.includes('masters.write')));
   const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.production_mappings_update : user?.permissions?.includes('masters.write')));
   const canDelete = Boolean(isSuperAdmin || (hasModernFlags ? user?.production_mappings_delete : user?.permissions?.includes('masters.write')));
-  const hasActions = canUpdate || canDelete;
+  const hasActions = Boolean(isSuperAdmin || canUpdate || canDelete);
 
   const [activeTab, setActiveTab] = useState<'traceability' | 'productPlants' | 'processConsumables' | 'validation'>('traceability');
   const [products, setProducts] = useState<MasterOption[]>([]);
@@ -242,7 +242,7 @@ export default function ProductionMappings() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Production Mappings</h2>
+          <h2 className="text-2xl font-bold text-gray-900">Production mapping</h2>
           <p className="text-sm text-gray-500 mt-1">
             M2.4 Architecture: Product → Plant → Route → Process → Consumable Structural Backbone
           </p>
@@ -511,7 +511,7 @@ export default function ProductionMappings() {
                 <label htmlFor="primaryCheck" className="text-sm text-gray-700">Set as Primary Plant for this product</label>
               </div>
 
-              <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700">
+              <button type="submit" className="px-4 py-2 bg-burnt-orange hover:bg-burnt-orange-dark text-white rounded text-sm font-medium shadow-xs transition-colors">
                 Save Assignment
               </button>
             </form>
@@ -520,19 +520,19 @@ export default function ProductionMappings() {
           {ppLoading && <div className="mb-4"><TableSkeleton columns={5 + (hasActions ? 1 : 0)} rows={5} /></div>}
           {ppError && <div role="alert" className="text-red-700 p-3 bg-red-50 rounded border border-red-200">{ppError} <button className="underline" onClick={() => void loadProductPlants()}>Retry mappings</button></div>}
 
-          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm">
-            <table className="min-w-full divide-y divide-gray-200 text-sm">
-              <thead className="bg-gray-50">
+          <div className="bg-white rounded-lg border border-ink-text/10 overflow-hidden shadow-2xs">
+            <table className="min-w-full divide-y divide-ink-text/10 text-sm">
+              <thead className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
                 <tr>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Product</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Plant</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Route</th>
-                  <th className="px-4 py-3 text-center font-semibold text-gray-700">Primary</th>
-                  <th className="px-4 py-3 text-center font-semibold text-gray-700">Status</th>
-                  {hasActions && <th className="px-4 py-3 text-right font-semibold text-gray-700">Actions</th>}
+                  <th className="px-4 py-3 text-left font-semibold text-ink-text">Product</th>
+                  <th className="px-4 py-3 text-left font-semibold text-ink-text">Plant</th>
+                  <th className="px-4 py-3 text-left font-semibold text-ink-text">Route</th>
+                  <th className="px-4 py-3 text-center font-semibold text-ink-text">Primary</th>
+                  <th className="px-4 py-3 text-center font-semibold text-ink-text">Status</th>
+                  {hasActions && <th className="px-4 py-3 text-right font-semibold text-ink-text">Actions</th>}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-ink-text/10">
                 {productPlants.length === 0 ? (
                   <tr>
                     <td colSpan={5 + (hasActions ? 1 : 0)} className="px-4 py-6 text-center text-gray-500">
@@ -643,7 +643,7 @@ export default function ProductionMappings() {
                 </div>
               </div>
 
-              <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700">
+              <button type="submit" className="px-4 py-2 bg-burnt-orange hover:bg-burnt-orange-dark text-white rounded text-sm font-medium shadow-xs transition-colors">
                 Save Consumable Mapping
               </button>
             </form>
@@ -652,19 +652,19 @@ export default function ProductionMappings() {
           {ppcLoading && <div className="mb-4"><TableSkeleton columns={5 + (hasActions ? 1 : 0)} rows={5} /></div>}
           {ppcError && <div role="alert" className="text-red-700 p-3 bg-red-50 rounded border border-red-200">{ppcError} <button className="underline" onClick={() => { void loadPpcList(); void loadConsumables(); }}>Retry consumables</button></div>}
 
-          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm">
-            <table className="min-w-full divide-y divide-gray-200 text-sm">
-              <thead className="bg-gray-50">
+          <div className="bg-white rounded-lg border border-ink-text/10 overflow-hidden shadow-2xs">
+            <table className="min-w-full divide-y divide-ink-text/10 text-sm">
+              <thead className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
                 <tr>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Product</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Process</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Consumable</th>
-                  <th className="px-4 py-3 text-center font-semibold text-gray-700">UOM</th>
-                  <th className="px-4 py-3 text-center font-semibold text-gray-700">Status</th>
-                  {hasActions && <th className="px-4 py-3 text-right font-semibold text-gray-700">Actions</th>}
+                  <th className="px-4 py-3 text-left font-semibold text-ink-text">Product</th>
+                  <th className="px-4 py-3 text-left font-semibold text-ink-text">Process</th>
+                  <th className="px-4 py-3 text-left font-semibold text-ink-text">Consumable</th>
+                  <th className="px-4 py-3 text-center font-semibold text-ink-text">UOM</th>
+                  <th className="px-4 py-3 text-center font-semibold text-ink-text">Status</th>
+                  {hasActions && <th className="px-4 py-3 text-right font-semibold text-ink-text">Actions</th>}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-ink-text/10">
                 {ppcList.length === 0 ? (
                   <tr>
                     <td colSpan={5 + (hasActions ? 1 : 0)} className="px-4 py-6 text-center text-gray-500">

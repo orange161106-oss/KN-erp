@@ -9,7 +9,7 @@ interface Preview { filename: string; sheet: string; sha256: string; products: C
 
 export default function Products() {
   const { user } = useAuth();
-  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const hasModernFlags = user && (
     'masters_read' in user ||
     'masters_create' in user ||
@@ -19,7 +19,7 @@ export default function Products() {
   const canRead = Boolean(isSuperAdmin || (hasModernFlags ? user?.masters_read : user?.permissions?.includes('masters.read')));
   const canCreate = Boolean(isSuperAdmin || (hasModernFlags ? user?.masters_create : user?.permissions?.includes('masters.write')));
   const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.masters_update : user?.permissions?.includes('masters.write')));
-  const canWrite = canCreate || canUpdate;
+  const canWrite = Boolean(isSuperAdmin || canCreate || canUpdate);
 
   const [products, setProducts] = useState<Product[]>([]);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -140,11 +140,11 @@ export default function Products() {
             Still to review: {missing.codes} product codes, {missing.descriptions} descriptions, {missing.units} production units.
           </p>}
           <div className="sticky top-0 z-10 flex items-center gap-3 border bg-white p-3 shadow-sm">
-            <button className="rounded bg-brand-navy px-5 py-2 font-semibold text-white disabled:opacity-50" disabled={busy || !candidates.length} onClick={() => void approve()}>{saving ? 'Saving products…' : 'Save reviewed products'}</button>
+            <button className="rounded bg-burnt-orange hover:bg-burnt-orange-dark px-5 py-2 font-semibold text-white disabled:opacity-50 shadow-xs transition-colors" disabled={busy || !candidates.length} onClick={() => void approve()}>{saving ? 'Saving products…' : 'Save reviewed products'}</button>
             <span className="text-sm">Save after reviewing product codes, descriptions and production units.</span>
           </div>
-          <div className="max-h-[50vh] overflow-auto rounded border" aria-label="Product preview table">
-          <table className="w-full"><thead className="sticky top-0 bg-gray-100"><tr><th>Item ID</th><th>Part No.</th><th>Product code</th><th>Description</th><th>Unit</th></tr></thead><tbody>
+          <div className="max-h-[50vh] overflow-auto rounded border border-ink-text/10" aria-label="Product preview table">
+          <table className="w-full"><thead className="sticky top-0 bg-vanilla-surface border-b border-ink-text/10 text-ink-text"><tr><th>Item ID</th><th>Part No.</th><th>Product code</th><th>Description</th><th>Unit</th></tr></thead><tbody>
             {candidates.map((p, i) => <tr key={i}><td>{p.item_id}</td><td>{p.part_number}</td>
               {(['code', 'name', 'uom'] as const).map(field => <td key={field} className="border-b p-2"><input className={`rounded border p-1 ${field === 'name' ? 'w-72' : field === 'uom' ? 'w-20' : 'w-44'}`} aria-label={`Product ${i + 1} ${field}`} value={p[field]}
                 onChange={e => setCandidates(candidates.map((row, j) => j === i ? { ...row, [field]: e.target.value } : row))} />
@@ -164,9 +164,9 @@ export default function Products() {
     {loading ? (
       <TableSkeleton columns={5} rows={5} />
     ) : (
-      <div className="overflow-x-auto bg-white border border-gray-200 rounded-lg shadow-sm">
+      <div className="overflow-x-auto bg-white border border-ink-text/10 rounded-lg shadow-2xs">
         <table className="w-full text-sm text-left">
-          <thead className="bg-gray-50 border-b border-gray-200 text-gray-700">
+          <thead className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
             <tr>
               <th className="p-3 font-semibold">Code</th>
               <th className="p-3 font-semibold">Item ID</th>
@@ -175,7 +175,7 @@ export default function Products() {
               <th className="p-3 font-semibold">Unit</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-200">
+          <tbody className="divide-y divide-ink-text/10">
             {products.map(p => (
               <tr key={p.id} className="hover:bg-gray-50/50 transition-colors">
                 <td className="p-3 font-medium text-gray-900">{p.code}</td>

@@ -42,3 +42,16 @@ test('workflow visibility uses effective permissions without granting writes or 
   expect(canOpen(mappingsUser, '/masters')).toBe(false);
   expect(canOpen({ roles: [], permissions: ['masters.read'] }, '/mappings')).toBe(false);
 });
+
+test('Super Admin via is_superuser or is_super_admin has global override across all CRUD checks', () => {
+  const superuser = { roles: [], permissions: [], is_superuser: true };
+  const superadmin = { roles: [], permissions: [], is_super_admin: true };
+
+  for (const user of [superuser, superadmin]) {
+    expect(canOpen(user, '/admin')).toBe(true);
+    expect(canOpen(user, '/masters')).toBe(true);
+    expect(canPerform(user, 'masters', 'delete')).toBe(true);
+    expect(canPerform(user, 'masters', 'update')).toBe(true);
+    expect(canPerform(user, 'prd', 'create')).toBe(true);
+  }
+});

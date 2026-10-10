@@ -106,7 +106,6 @@ class User(Base):
 
     # Global Module Access Flags
     can_access_dashboard: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
-    can_access_reports: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
     # Categorized Alert Subscriptions
     alert_production: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())

@@ -8,6 +8,7 @@ export interface CurrentUser extends Partial<UserPermissionFlags> {
   roles: string[];
   permissions: string[];
   is_super_admin?: boolean;
+  is_superuser?: boolean;
 
   // 40 Granular CRUD Feature Flags
   masters_read?: boolean;
@@ -69,7 +70,6 @@ export interface CurrentUser extends Partial<UserPermissionFlags> {
 
   // Global Module Access Flags
   can_access_dashboard?: boolean;
-  can_access_reports?: boolean;
 
   // Categorized Alert Subscriptions
   alert_production?: boolean;

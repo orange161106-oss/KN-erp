@@ -69,7 +69,7 @@ test('ADMIN without explicit grants cannot navigate directly to masters', async 
   window.history.replaceState({}, '', '/masters/units');
   authenticate({ ...identity, permissions: [] }); render(<App />); await signIn();
   expect(await screen.findByRole('alert')).toHaveTextContent('do not have permission');
-  expect(screen.queryByRole('link', { name: 'Masters' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: /Product master|Masters/i })).not.toBeInTheDocument();
   expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/masters/units'))).toBe(false);
 });
 
@@ -164,7 +164,7 @@ test('supplier details create an association with the selected consumable and re
 test('401 on a protected request clears the session and returns to login', async () => {
   authenticate(identity, () => response({ code: 'NOT_AUTHENTICATED', message: 'Valid authentication is required.' }, 401));
   render(<App />); const user = await signIn();
-  await user.click(await screen.findByRole('link', { name: 'Masters' }));
+  await user.click(await screen.findByRole('link', { name: /Product master|Masters/i }));
   expect(await screen.findByLabelText('Username')).toBeInTheDocument();
 });
 

@@ -19,11 +19,11 @@ type Order = { id: string; po_number: string; supplier_name: string; po_date: st
 type DraftLine = { approval_id: string; quantity: string; delivery: string; rate: string };
 const message = (error: unknown) => error instanceof Error ? error.message : 'The request failed. Please retry.';
 const field = 'border rounded p-2 w-full bg-white';
-const button = 'rounded bg-brand-navy text-white px-4 py-2 disabled:opacity-50';
+const button = 'rounded bg-burnt-orange hover:bg-burnt-orange-dark text-white px-4 py-2 disabled:opacity-50 font-medium shadow-xs transition-colors';
 
 export default function PurchaseOrders() {
   const { user } = useAuth();
-  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const hasLegacyPerm = (p: string) => Boolean(user?.permissions?.includes(p));
   const canRead = Boolean(isSuperAdmin || user?.purchase_orders_read || user?.purchase_read || hasLegacyPerm('purchase.orders.read'));
   const canCreate = Boolean(isSuperAdmin || user?.purchase_orders_create || hasLegacyPerm('purchase.orders.create'));
@@ -109,7 +109,7 @@ export default function PurchaseOrders() {
     catch (failure) { setError(message(failure)); } finally { setBusy(false); }
   };
   return <section className="max-w-7xl mx-auto space-y-5">
-    <div className="flex justify-between gap-4"><div><h2 className="text-2xl font-bold">Purchase orders</h2>
+    <div className="flex justify-between gap-4"><div><h2 className="text-2xl font-bold">Purchase order</h2>
       <p className="text-gray-600">A PO commits to a purchase. It does not receive stock or record consumption.</p></div>
       {canCreate && <button className={button} onClick={() => { setCreating(!creating); setError(''); }} disabled={busy}>New purchase order</button>}</div>
     {error && <p role="alert" className="bg-red-50 border border-red-200 p-3 rounded">{error}</p>}
@@ -145,10 +145,10 @@ export default function PurchaseOrders() {
       <p className="text-sm text-gray-600">Delivery times use your local timezone. Unpriced lines remain unknown; tax and freight are not calculated.</p>
       <button className={button} disabled={busy || !lines.length}>Save draft</button>
     </form>}
-    <div className="bg-white border rounded overflow-x-auto"><table className="w-full text-left"><thead><tr>{['PO', 'Supplier', 'Date', 'Status', 'Value', ''].map((h, i) => <th className="p-3 border-b" key={i}>{h}</th>)}</tr></thead>
-      <tbody>{orders.map(order => <tr key={order.id}><td className="p-3 break-all">{order.po_number}</td><td>{order.supplier_name}</td><td>{order.po_date}</td><td>{order.status}</td><td>{order.total_value === null ? 'Not fully priced' : `${order.total_value} ${order.currency}`}</td>
-        <td><button disabled={busy} className="underline p-3" onClick={() => void view(order.id)}>View {order.po_number}</button></td></tr>)}</tbody></table>
-      {!loading && !orders.length && <p className="p-4">No purchase orders on this page.</p>}</div>
+    <div className="bg-white border border-ink-text/10 rounded-lg overflow-x-auto shadow-2xs"><table className="w-full text-left text-sm"><thead className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text"><tr>{['PO', 'Supplier', 'Date', 'Status', 'Value', ''].map((h, i) => <th className="p-3 font-semibold" key={i}>{h}</th>)}</tr></thead>
+      <tbody className="divide-y divide-ink-text/10">{orders.map(order => <tr key={order.id} className="hover:bg-vanilla-bg/40 transition-colors"><td className="p-3 break-all font-medium">{order.po_number}</td><td>{order.supplier_name}</td><td>{order.po_date}</td><td>{order.status}</td><td>{order.total_value === null ? 'Not fully priced' : `${order.total_value} ${order.currency}`}</td>
+        <td><button disabled={busy} className="underline p-3 text-burnt-orange font-medium" onClick={() => void view(order.id)}>View {order.po_number}</button></td></tr>)}</tbody></table>
+      {!loading && !orders.length && <p className="p-4 text-gray-500">No purchase orders on this page.</p>}</div>
     <div className="flex gap-4"><button disabled={offset === 0 || loading} onClick={() => { setLoading(true); setOffset(Math.max(0, offset - 25)); }}>Previous orders</button><button disabled={orders.length < 25 || loading} onClick={() => { setLoading(true); setOffset(offset + 25); }}>More orders</button></div>
     {selected && <article className="bg-white border rounded p-5 space-y-4"><h3 className="text-lg font-semibold">{selected.po_number} · {selected.status}</h3>
       <p>{selected.supplier_name} · PO date {selected.po_date}</p>

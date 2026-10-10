@@ -102,7 +102,7 @@ export default function NormSetup({ onCreated }: { onCreated: (id: string) => Pr
       <label>Decimal places<select className={inputClass} value={precision} onChange={e => setPrecision(e.target.value)}>{[0, 1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}</select></label>
       <label>Effective from<input required type="date" className={inputClass} value={from} onChange={e => setFrom(e.target.value)} /></label>
       <label>Effective until (optional)<input type="date" min={from} className={inputClass} value={to} onChange={e => setTo(e.target.value)} /></label>
-      <button disabled={!material || !rule} className="rounded bg-brand-navy px-4 py-2 font-semibold text-white disabled:opacity-50" type="submit">{busy ? 'Saving norm…' : 'Save norm'}</button>
+      <button disabled={!material || !rule} className="rounded bg-burnt-orange hover:bg-burnt-orange-dark px-4 py-2 font-semibold text-white disabled:opacity-50 shadow-xs transition-colors" type="submit">{busy ? 'Saving norm…' : 'Save norm'}</button>
     </fieldset></form>
     {product && resolution && !plants.length && <p>No active plant route exists for this product. Complete Production Mappings first.</p>}
     {process && !materials.length && <p>No active consumable is assigned to this process. Complete Product–Process–Consumable mapping first.</p>}

@@ -65,7 +65,7 @@ export default function Toolbar({
   const [showExportMenu, setShowExportMenu] = useState(false);
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 py-2 border-b border-gray-200 bg-gray-50 px-2 rounded-t select-none">
+    <div className="flex flex-wrap items-center justify-between gap-2 py-2 border-b border-ink-text/10 bg-vanilla-surface px-2 rounded-t select-none">
       {/* Left: Action Buttons */}
       <div className="flex items-center gap-1.5 flex-wrap">
         {canImport && onUpload && (
@@ -95,7 +95,7 @@ export default function Toolbar({
             type="button"
             onClick={onSave}
             disabled={isSaving || unsavedCount === 0}
-            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-brand-navy rounded shadow-xs hover:bg-opacity-90 active:bg-opacity-100 disabled:opacity-40 transition-colors"
+            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-burnt-orange hover:bg-burnt-orange-dark active:bg-burnt-orange-dark rounded shadow-xs disabled:opacity-40 transition-colors"
           >
             {isSaving ? (
               <>

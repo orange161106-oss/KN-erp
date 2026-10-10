@@ -27,7 +27,7 @@ export default function Requirements() {
   const { user } = useAuth();
 
   // RBAC checks
-  const isSuperAdmin = Boolean(user?.is_super_admin);
+  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const canRead = Boolean(isSuperAdmin || user?.requirements_read || canPerform(user, 'requirements', 'read'));
   const canExport = Boolean(canRead || canPerform(user, 'requirements', 'export'));
   const canRecalculate = Boolean(isSuperAdmin || user?.requirements_update || canPerform(user, 'requirements', 'update'));
@@ -307,9 +307,9 @@ export default function Requirements() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-gray-900 tracking-tight">Consumable Requirements Workspace</h1>
+          <h1 className="text-xl font-bold text-gray-900 tracking-tight">Requirement</h1>
           <p className="text-xs text-gray-500 mt-0.5">
-            Stored results from validated planning revisions and configured consumption rules. Review dated inventory projections separately.
+            <span className="font-semibold text-gray-700">Consumable Requirements Workspace</span> · Stored results from validated planning revisions and configured consumption rules. Review dated inventory projections separately.
           </p>
         </div>
 

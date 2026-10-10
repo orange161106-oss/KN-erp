@@ -22,6 +22,7 @@ def require_super_admin(actor: CurrentUser) -> None:
 def response(user: User) -> UserResponse:
     return UserResponse(id=user.id, username=user.username, full_name=user.full_name,
         employee_id=user.employee_id, is_active=user.is_active, is_super_admin=user.is_super_admin,
+        is_superuser=user.is_super_admin,
         roles=sorted(r.code for r in user.roles), **{f: getattr(user, f) for f in FLAG_FIELDS})
 
 
