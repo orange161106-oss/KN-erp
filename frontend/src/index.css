@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+@theme {
+  --color-vanilla-bg: #FBF6EB;
+  --color-vanilla-surface: #F4ECD9;
+  --color-ink-text: #1C140F;
+  --color-burnt-orange: #D95D39;
+  --color-burnt-orange-dark: #C44D29;
+  --color-burnt-orange-hover: #C44D29;
+
+  --color-brand-navy: #1B3A5C;
+  --color-brand-steel: #3E7CB1;
+  --color-brand-offwhite: #FBF6EB;
+  --color-brand-charcoal: #1C140F;
+}
+
+body {
+  background-color: var(--color-vanilla-bg);
+  color: var(--color-ink-text);
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
