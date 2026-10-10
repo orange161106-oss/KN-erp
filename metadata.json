@@ -1,0 +1,7 @@
+{
+  "name": "KNL Consumable ERP",
+  "description": "Enterprise consumable resource planning, inventory tracking, demand calculation, and purchase workflow management.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

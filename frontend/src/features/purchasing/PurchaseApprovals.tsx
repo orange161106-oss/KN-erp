@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { apiClient, ApiError } from '../../api/client';
 import { useAuth } from '../auth/context';
 import { TableSkeleton } from '../../components/ui/Skeleton';
+import PurchasePlanWorkspace from './PurchasePlanWorkspace';
 import type {
   ApprovalStatus,
   PurchaseApprovalResponse,
@@ -35,7 +36,7 @@ interface PurchaseApprovalsProps {
   currentUserId: string;
 }
 
-type TabKey = 'queue' | 'handoff';
+type TabKey = 'plan' | 'queue' | 'handoff';
 
 export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsProps) {
   const { user } = useAuth();
@@ -50,7 +51,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
   const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.purchase_update : true));
   const hasActions = Boolean(isSuperAdmin || canUpdate);
 
-  const [activeTab, setActiveTab] = useState<TabKey>('queue');
+  const [activeTab, setActiveTab] = useState<TabKey>('plan');
   const [items, setItems] = useState<PurchaseApprovalResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -149,6 +150,16 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
       <div className="flex flex-wrap items-center justify-between border-b pb-3 gap-4">
         <nav className="flex gap-2">
           <button
+            onClick={() => setActiveTab('plan')}
+            className={`px-4 py-2 text-sm font-medium rounded-t-md transition-colors ${
+              activeTab === 'plan'
+                ? 'bg-burnt-orange/10 text-burnt-orange border-b-2 border-burnt-orange font-semibold'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Purchase Planning (MD &amp; Normal View)
+          </button>
+          <button
             onClick={() => setActiveTab('queue')}
             className={`px-4 py-2 text-sm font-medium rounded-t-md transition-colors ${
               activeTab === 'queue'
@@ -188,8 +199,10 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
         )}
       </div>
 
-      {/* Approvals Table */}
-      {loading ? (
+      {/* Tab Content */}
+      {activeTab === 'plan' ? (
+        <PurchasePlanWorkspace currentUserId={currentUserId} />
+      ) : loading ? (
         <TableSkeleton columns={8 + (hasActions ? 1 : 0)} rows={5} />
       ) : items.length === 0 ? (
         <div className="bg-white border rounded-lg p-8 text-center text-gray-500 text-sm">

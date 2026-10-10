@@ -23,6 +23,25 @@ export default function Login() {
       <label className="block text-sm font-medium text-ink-text">Username<input autoComplete="username" required value={username} maxLength={128} onChange={e => setUsername(e.target.value)} className="mt-1 w-full border border-ink-text/15 rounded p-2 focus:ring-1 focus:ring-burnt-orange focus:outline-none" /></label>
       <label className="block text-sm font-medium text-ink-text">Password<input type="password" autoComplete="current-password" required value={password} maxLength={1024} onChange={e => setPassword(e.target.value)} className="mt-1 w-full border border-ink-text/15 rounded p-2 focus:ring-1 focus:ring-burnt-orange focus:outline-none" /></label>
       <button disabled={pending} className="w-full bg-burnt-orange hover:bg-burnt-orange-dark text-white rounded p-2.5 font-medium shadow-xs disabled:opacity-50 transition-colors">{pending ? 'Signing in…' : 'Sign in'}</button>
+      <div className="pt-2 border-t border-ink-text/10 text-xs text-ink-text/70">
+        <p className="font-semibold mb-1">Demo quick sign-in:</p>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => { setUsername('admin'); setPassword('admin123'); }}
+            className="px-2 py-1 bg-ink-text/5 hover:bg-ink-text/10 rounded border border-ink-text/10 font-mono text-[11px]"
+          >
+            admin / admin123 (Full Access)
+          </button>
+          <button
+            type="button"
+            onClick={() => { setUsername('purchase'); setPassword('purchase123'); }}
+            className="px-2 py-1 bg-ink-text/5 hover:bg-ink-text/10 rounded border border-ink-text/10 font-mono text-[11px]"
+          >
+            purchase / purchase123
+          </button>
+        </div>
+      </div>
     </form>
   </div>;
 }
