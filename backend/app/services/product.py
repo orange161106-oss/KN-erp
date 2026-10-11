@@ -27,19 +27,23 @@ def require_product_schema(db: Session) -> None:
         )
 
 
+from sqlalchemy.exc import NoSuchTableError, ProgrammingError, OperationalError
+
+
 def list_products(db: Session) -> Sequence[Product]:
     # Read the data directly rather than reflecting PostgreSQL metadata on
     # every page load. Preserve the actionable error for an unmigrated schema.
     try:
         return db.scalars(select(Product).order_by(Product.code)).all()
-    except ProgrammingError as error:
-        if getattr(error.orig, 'sqlstate', None) not in {'42703', '42P01'}:
-            raise
-        raise ApplicationError(
-            'PRODUCT_DATABASE_SETUP_REQUIRED',
-            'Product database setup is incomplete. Ask the administrator to apply the pending database updates, then retry loading products.',
-            503,
-        ) from None
+    except (ProgrammingError, OperationalError) as error:
+        orig = getattr(error, 'orig', None)
+        if "no such column" in str(error) or getattr(orig, 'sqlstate', None) in {'42703', '42P01'}:
+            raise ApplicationError(
+                'PRODUCT_DATABASE_SETUP_REQUIRED',
+                'Product database setup is incomplete. Ask the administrator to apply the pending database updates, then retry loading products.',
+                503,
+            ) from None
+        raise
 
 
 def get_product_by_code(db: Session, code: str) -> Product | None:

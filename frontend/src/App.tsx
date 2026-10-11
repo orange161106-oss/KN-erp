@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import SystemStatus from './pages/SystemStatus';
 import Login from './pages/Login';
@@ -17,8 +18,9 @@ import ExecutiveDashboard from './features/dashboard/ExecutiveDashboard';
 import PRDPlanning from './features/prd/PRDPlanning';
 import Requirements from './features/requirements/Requirements';
 import UserManagement from './features/admin/UserManagement';
+import Reports from './features/reports/Reports';
 
-import { canOpen } from './core/rbac';
+import { canOpen, isSuperAdmin } from './core/rbac';
 
 interface ProtectedRouteProps {
   isAllowed: boolean;
@@ -46,26 +48,28 @@ function getPageTitle(pathname: string): string {
   if (pathname.startsWith('/purchase')) return 'Purchase';
   if (pathname.startsWith('/grns')) return 'Goods receipts';
   if (pathname.startsWith('/alerts')) return 'Alerts';
+  if (pathname.startsWith('/reports')) return 'Reports';
   if (pathname.startsWith('/admin')) return 'Administration';
   if (pathname.startsWith('/status')) return 'System Status';
   return 'KNL ERP Platform';
 }
 
 function AppShell({ children }: { children: React.ReactNode }) {
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const location = useLocation();
   const pageTitle = getPageTitle(location.pathname);
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-vanilla-bg text-ink-text">
-      <Sidebar />
+    <div className="flex h-screen w-screen overflow-hidden bg-erp-vanilla text-erp-chocolate">
+      <Sidebar isCollapsed={isCollapsed} onToggleCollapse={() => setIsCollapsed(prev => !prev)} />
       
-      <div className="min-w-0 flex-1 flex flex-col bg-vanilla-bg">
+      <div className="min-w-0 flex-1 flex flex-col bg-erp-vanilla">
         <header className="h-16 bg-vanilla-surface border-b border-ink-text/10 flex items-center justify-between px-6 shadow-2xs">
-          <h1 className="text-xl font-semibold text-ink-text">{pageTitle}</h1>
-          <span className="text-xs text-ink-text/60 font-medium tracking-wide">KNL ERP Platform</span>
+          <h1 className="text-xl font-semibold text-erp-chocolate">{pageTitle}</h1>
+          <span className="text-xs text-erp-chocolate/60 font-medium tracking-wide">KNL ERP Platform</span>
         </header>
 
-        <main className="flex-1 p-6 overflow-auto bg-vanilla-bg text-ink-text">
+        <main className="flex-1 p-6 overflow-auto bg-erp-vanilla text-erp-chocolate">
           {children}
         </main>
       </div>
@@ -91,6 +95,7 @@ function Application() {
   const canPurchaseOrders = canOpen(user, '/purchase-orders');
   const canGRNs = canOpen(user, '/grns');
   const canAlerts = canOpen(user, '/alerts');
+  const canReports = canOpen(user, '/reports') || isSuperAdmin(user);
   const isAdmin = canOpen(user, '/admin');
 
   return (
@@ -146,6 +151,10 @@ function Application() {
           
           <Route path="/alerts/*" element={
             <ProtectedRoute isAllowed={canAlerts}><AlertsCenter /></ProtectedRoute>
+          } />
+          
+          <Route path="/reports" element={
+            <ProtectedRoute isAllowed={canReports}><Reports /></ProtectedRoute>
           } />
           
           <Route path="/admin" element={

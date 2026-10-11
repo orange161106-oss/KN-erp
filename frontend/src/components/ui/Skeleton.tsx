@@ -65,4 +65,31 @@ export function TableSkeleton({ rows = 5, columns = 6, className = '' }: TableSk
   );
 }
 
+export interface TableSkeletonRowsProps {
+  rows?: number;
+  columns?: number;
+  colWidths?: string[];
+}
+
+export function TableSkeletonRows({ rows = 6, columns = 8, colWidths }: TableSkeletonRowsProps) {
+  return (
+    <>
+      {Array.from({ length: rows }).map((_, rIdx) => (
+        <tr key={`skel-row-${rIdx}`} className="animate-pulse border-b border-ink-text/10">
+          {Array.from({ length: columns }).map((_, cIdx) => (
+            <td key={`skel-col-${rIdx}-${cIdx}`} className="p-3 border-r border-ink-text/10 last:border-r-0">
+              <div
+                className={`h-4 bg-gray-200 rounded ${
+                  colWidths && colWidths[cIdx] ? colWidths[cIdx] : 'w-full'
+                }`}
+                style={{ animationDelay: `${rIdx * 50 + cIdx * 20}ms` }}
+              />
+            </td>
+          ))}
+        </tr>
+      ))}
+    </>
+  );
+}
+
 export default Skeleton;

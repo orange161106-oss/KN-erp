@@ -5,6 +5,8 @@ let unauthorizedHandler: (() => void) | null = null;
 // Completed responses are not cached, so new reads see current permissions/data.
 const pendingReads = new Map<string, Promise<unknown>>();
 export function setAccessToken(value: string | null) { pendingReads.clear(); accessToken = value; }
+export function getAccessToken(): string | null { return accessToken; }
+export function getApiBaseUrl(): string { return BASE_URL; }
 export function setUnauthorizedHandler(handler: (() => void) | null) { unauthorizedHandler = handler; }
 
 export class ApiError extends Error {
@@ -64,7 +66,7 @@ export const apiClient = {
   get: read,
   post: <T>(endpoint: string, data: unknown) => write<T>(endpoint, 'POST', data),
   put: <T>(endpoint: string, data: unknown) => write<T>(endpoint, 'PUT', data),
-  patch: <T>(endpoint: string, data: unknown) => write<T>(endpoint, 'PATCH', data),
+  patch: <T>(endpoint: string, data?: unknown) => write<T>(endpoint, 'PATCH', data),
   delete: <T>(endpoint: string, data?: unknown) => write<T>(endpoint, 'DELETE', data),
   postFormData: <T>(endpoint: string, data: FormData, timeoutMs?: number) => write<T>(endpoint, 'POST', data, timeoutMs),
 };

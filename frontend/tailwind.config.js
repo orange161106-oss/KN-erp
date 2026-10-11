@@ -4,6 +4,13 @@ export default {
   theme: {
     extend: {
       colors: {
+        'erp-orange': '#ff5e2c',
+        'erp-vanilla': '#fff6c0',
+        'erp-tangerine': '#F28B0C',
+        'erp-tenne': '#D95204',
+        'erp-dark-vanilla': '#D9BBA9',
+        'erp-topaz': '#8C2703',
+        'erp-chocolate': '#400101',
         'vanilla-bg': '#FBF6EB',
         'vanilla-surface': '#F4ECD9',
         'ink-text': '#1C140F',

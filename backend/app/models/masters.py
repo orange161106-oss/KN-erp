@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, DateTime, Index, String, Text, Uuid, func, true
+from sqlalchemy import Boolean, DateTime, Index, String, Text, UniqueConstraint, Uuid, func, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -13,7 +13,7 @@ class Product(Base):
     __table_args__ = (Index("ix_products_code", "code"),)
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(128), nullable=False)
     item_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     part_number: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
