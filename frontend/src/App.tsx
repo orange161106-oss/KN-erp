@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import SystemStatus from './pages/SystemStatus';
+import SystemStatus from './features/system/SystemStatus';
 import Login from './pages/Login';
 import Sidebar from './components/Sidebar';
 import AuthProvider from './features/auth/AuthProvider';
@@ -161,7 +161,12 @@ function Application() {
             <ProtectedRoute isAllowed={isAdmin}><UserManagement /></ProtectedRoute>
           } />
           
-          <Route path="/status" element={<SystemStatus />} />
+          <Route path="/status" element={
+            <ProtectedRoute isAllowed={isAdmin}><SystemStatus /></ProtectedRoute>
+          } />
+          <Route path="/system-status" element={
+            <ProtectedRoute isAllowed={isAdmin}><SystemStatus /></ProtectedRoute>
+          } />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AppShell>

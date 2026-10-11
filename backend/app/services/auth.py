@@ -6,10 +6,11 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.errors import ApplicationError
 from app.repositories.auth import find_user_by_username, find_user_with_permissions
-from app.schemas.auth import CurrentUser, LoginRequest, TokenResponse
+from app.schemas.auth import CurrentUser, LoginRequest, LogoutResponse, TokenResponse
 from app.security.passwords import PasswordService
 from app.security.tokens import InvalidAccessToken, create_access_token, decode_access_token
 from app.security.policy import effective_permissions
+from app.services.audit import close_user_session, create_user_session, log_activity
 
 logger = logging.getLogger("kn.backend.auth")
 BEARER_HEADERS = {"WWW-Authenticate": "Bearer"}
@@ -30,6 +31,7 @@ def database_unavailable() -> ApplicationError:
 def login(
     session: Session, credentials: LoginRequest,
     settings: Settings, passwords: PasswordService,
+    client_ip: str | None = None,
 ) -> TokenResponse:
     try:
         user = find_user_by_username(session, credentials.username)
@@ -48,10 +50,46 @@ def login(
         )
     token = create_access_token(user.id, settings)
     user_identity = current_user(session, token, settings)
+
+    # Session tracking & audit logging
+    user_session = create_user_session(session, user_id=user.id, ip_address=client_ip)
+    session.flush()
+    log_activity(
+        session,
+        user=user,
+        action="LOGIN",
+        module="Authentication",
+        record_id=str(user_session.id),
+        details={"ip_address": client_ip, "status": "ACTIVE"},
+    )
+    session.commit()
+
     return TokenResponse(
         access_token=token,
         expires_in=settings.auth_access_token_expire_minutes * 60,
         user=user_identity,
+        session_id=user_session.id,
+    )
+
+
+def logout(
+    session: Session,
+    user: CurrentUser,
+    session_id: UUID | None = None,
+) -> LogoutResponse:
+    closed_session = close_user_session(session, user_id=user.id, session_id=session_id)
+    log_activity(
+        session,
+        user=user,
+        action="LOGOUT",
+        module="Authentication",
+        record_id=str(closed_session.id) if closed_session else None,
+        details={"status": "LOGGED_OUT"},
+    )
+    session.commit()
+    return LogoutResponse(
+        message="Logged out successfully",
+        status="LOGGED_OUT",
     )
 
 

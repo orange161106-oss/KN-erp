@@ -26,7 +26,7 @@ body {
   background-color: var(--color-erp-vanilla, #fff6c0);
   color: var(--color-erp-chocolate, #400101);
   margin: 0;
-  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
 }
 
 @media print {

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../features/auth/context';
-import { canOpen } from '../core/rbac';
+import { canOpen, isSuperAdmin } from '../core/rbac';
 import {
   Menu,
   ChevronDown,
@@ -84,7 +84,8 @@ export default function Sidebar({
   const showGoodsReceipts = canOpen(user, '/grns');
   const showAlerts = canOpen(user, '/alerts');
   const showReports = canOpen(user, '/reports');
-  const showAdmin = canOpen(user, '/admin');
+  const isAdmin = canOpen(user, '/admin') || isSuperAdmin(user);
+  const showAdmin = isAdmin;
 
   // Master data parent menu renders if user has _read access to EITHER Product master OR Consumption norms (or Production mapping)
   const showMasterData = showMasters || showNorms || showMappings;
@@ -360,15 +361,17 @@ export default function Sidebar({
               <span className={isCollapsed ? 'sr-only' : 'truncate'}>Administration</span>
             </Link>
           )}
-          <Link
-            to="/status"
-            className={navItemClass('/status')}
-            title="System Status"
-            aria-label="System Status"
-          >
-            <Activity className={iconClass(isActive('/status'))} />
-            <span className={isCollapsed ? 'sr-only' : 'truncate'}>System Status</span>
-          </Link>
+          {isAdmin && (
+            <Link
+              to="/status"
+              className={navItemClass('/status')}
+              title="System Status"
+              aria-label="System Status"
+            >
+              <Activity className={iconClass(isActive('/status'))} />
+              <span className={isCollapsed ? 'sr-only' : 'truncate'}>System Status</span>
+            </Link>
+          )}
           <button
             onClick={logout}
             title="Logout"

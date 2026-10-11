@@ -25,6 +25,16 @@ class TokenResponse(BaseModel):
     token_type: Literal["bearer"] = "bearer"
     expires_in: int
     user: CurrentUser | None = None
+    session_id: UUID | None = None
+
+
+class LogoutRequest(BaseModel):
+    session_id: UUID | None = None
+
+
+class LogoutResponse(BaseModel):
+    message: str = "Logged out successfully"
+    status: str = "LOGGED_OUT"
 
 
 class CurrentUser(BaseModel):

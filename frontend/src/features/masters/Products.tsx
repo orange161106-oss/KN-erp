@@ -51,25 +51,17 @@ interface SalesPartRow {
 export default function Products() {
   const { user } = useAuth();
   const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
+  const userRole = (user?.role || user?.roles?.[0] || (isSuperAdmin ? 'SUPER ADMIN' : 'USER')).toUpperCase();
+  const isAdmin = ['SUPER ADMIN', 'ADMIN'].includes(userRole) || isSuperAdmin || (user?.roles || []).some(r => ['SUPER ADMIN', 'ADMIN'].includes(r.toUpperCase()));
+
   const canRead = Boolean(
-    isSuperAdmin ||
+    isAdmin ||
     user?.masters_read ||
     user?.permissions?.includes('masters.read') ||
     user?.permissions?.some((p: string) => p.startsWith('masters.'))
   );
-  const canCreate = Boolean(
-    isSuperAdmin ||
-    user?.masters_create ||
-    user?.permissions?.includes('masters.write') ||
-    user?.permissions?.some((p: string) => p.endsWith('.write'))
-  );
-  const canEdit = Boolean(
-    isSuperAdmin ||
-    user?.masters_create ||
-    user?.permissions?.includes('masters.write') ||
-    user?.permissions?.some((p: string) => p.endsWith('.write'))
-  );
-  const canDelete = canEdit;
+  const canCreate = isAdmin;
+  const canEdit = isAdmin;
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('consumables');
 
@@ -653,19 +645,20 @@ export default function Products() {
             Authoritative master catalog for raw consumables, sales parts, and assembly BOM mappings.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setUploadError(null);
-            setUploadProgress(0);
-            setUploadPhase('idle');
-            setIsUploadModalOpen(true);
-          }}
-          disabled={!canCreate}
-          className="inline-flex items-center gap-2 bg-erp-orange hover:bg-erp-tenne text-white text-xs sm:text-sm font-semibold px-4 py-2.5 rounded-lg shadow-sm hover:shadow transition-all disabled:opacity-50"
-        >
-          Bulk Import ☁️
-        </button>
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={() => {
+              setUploadError(null);
+              setUploadProgress(0);
+              setUploadPhase('idle');
+              setIsUploadModalOpen(true);
+            }}
+            className="inline-flex items-center gap-2 bg-erp-orange hover:bg-erp-tenne text-white text-xs sm:text-sm font-semibold px-4 py-2.5 rounded-lg shadow-sm hover:shadow transition-all"
+          >
+            Bulk Import ☁️
+          </button>
+        )}
       </div>
 
       {/* Task 2: Dashboard KPI Cards (Top Row) */}
@@ -800,7 +793,8 @@ export default function Products() {
       {activeTab === 'consumables' && (
         <div className="space-y-6">
           {/* Horizontal Single Consumable Intake Panel */}
-          <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
+          {isAdmin && (
+            <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 mb-5 border-b border-erp-dark-vanilla/20 gap-3">
               <div>
                 <h2 className="text-base font-bold text-erp-chocolate flex items-center gap-2">
@@ -995,6 +989,7 @@ export default function Products() {
               </div>
             </form>
           </div>
+          )}
 
           {/* Consumables Data Table with Localized Inline Search */}
           <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
@@ -1135,16 +1130,18 @@ export default function Products() {
                     </th>
 
                     {/* 9. Actions Header */}
-                    <th className="p-3 w-24 text-center">
-                      <div>Actions</div>
-                      <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
-                    </th>
+                    {isAdmin && (
+                      <th className="p-3 w-24 text-center">
+                        <div>Actions</div>
+                        <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
+                      </th>
+                    )}
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-gray-100 font-mono">
                   {loading ? (
-                    <TableSkeletonRows rows={7} columns={9} />
+                    <TableSkeletonRows rows={7} columns={isAdmin ? 9 : 8} />
                   ) : filteredConsumables.length > 0 ? (
                     filteredConsumables.map((row) => (
                       <tr
@@ -1198,33 +1195,34 @@ export default function Products() {
                         <td className="p-3 text-right font-semibold text-erp-tenne">
                           {row.rate !== null && row.rate !== undefined ? row.rate : '—'}
                         </td>
-                        <td className="p-3 text-center whitespace-nowrap">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => startEditConsumable(row)}
-                              disabled={!canEdit}
-                              title="Edit consumable"
-                              className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors disabled:opacity-40 text-xs"
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeactivate('consumables', row.id, row.item_id)}
-                              disabled={!canDelete || actionLoadingId === row.id}
-                              title="Delete consumable"
-                              className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
-                            >
-                              {actionLoadingId === row.id ? '…' : '🗑️'}
-                            </button>
-                          </div>
-                        </td>
+                        {isAdmin && (
+                          <td className="p-3 text-center whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => startEditConsumable(row)}
+                                title="Edit consumable"
+                                className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors text-xs"
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeactivate('consumables', row.id, row.item_id)}
+                                disabled={actionLoadingId === row.id}
+                                title="Delete consumable"
+                                className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
+                              >
+                                {actionLoadingId === row.id ? '…' : '🗑️'}
+                              </button>
+                            </div>
+                          </td>
+                        )}
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={9} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
+                      <td colSpan={isAdmin ? 9 : 8} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
                         No consumables match your search filters or the master table is empty.
                       </td>
                     </tr>
@@ -1242,7 +1240,8 @@ export default function Products() {
       {activeTab === 'assemble' && (
         <div className="space-y-6">
           {/* Horizontal Single Assembly Intake Panel */}
-          <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
+          {isAdmin && (
+            <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 mb-5 border-b border-erp-dark-vanilla/20 gap-3">
               <div>
                 <h2 className="text-base font-bold text-erp-chocolate flex items-center gap-2">
@@ -1453,6 +1452,7 @@ export default function Products() {
               </div>
             </form>
           </div>
+          )}
 
           {/* Assembly Data Table with Localized Inline Search */}
           <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
@@ -1597,16 +1597,18 @@ export default function Products() {
                     </th>
 
                     {/* 10. Actions Header */}
-                    <th className="p-3 w-24 text-center">
-                      <div>Actions</div>
-                      <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
-                    </th>
+                    {isAdmin && (
+                      <th className="p-3 w-24 text-center">
+                        <div>Actions</div>
+                        <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
+                      </th>
+                    )}
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-gray-100 font-mono">
                   {loading ? (
-                    <TableSkeletonRows rows={7} columns={10} />
+                    <TableSkeletonRows rows={7} columns={isAdmin ? 10 : 9} />
                   ) : filteredAssembleRows.length > 0 ? (
                     filteredAssembleRows.map((row) => (
                       <tr
@@ -1653,33 +1655,34 @@ export default function Products() {
                         <td className="p-3 text-right font-semibold text-erp-tenne">
                           {row.rate !== null ? `₹${row.rate.toFixed(2)}` : '—'}
                         </td>
-                        <td className="p-3 text-center whitespace-nowrap">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => startEditAssemble(row)}
-                              disabled={!canEdit}
-                              title="Edit assembly mapping"
-                              className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors disabled:opacity-40 text-xs"
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeactivate('assemble', row.id, `${row.consumable_item} -> ${row.part_no_saleable_item}`)}
-                              disabled={!canDelete || actionLoadingId === row.id}
-                              title="Delete assembly mapping"
-                              className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
-                            >
-                              {actionLoadingId === row.id ? '…' : '🗑️'}
-                            </button>
-                          </div>
-                        </td>
+                        {isAdmin && (
+                          <td className="p-3 text-center whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => startEditAssemble(row)}
+                                title="Edit assembly mapping"
+                                className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors text-xs"
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeactivate('assemble', row.id, `${row.consumable_item} -> ${row.part_no_saleable_item}`)}
+                                disabled={actionLoadingId === row.id}
+                                title="Delete assembly mapping"
+                                className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
+                              >
+                                {actionLoadingId === row.id ? '…' : '🗑️'}
+                              </button>
+                            </div>
+                          </td>
+                        )}
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={10} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
+                      <td colSpan={isAdmin ? 10 : 9} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
                         No assembly mappings match your search filters or the table is empty.
                       </td>
                     </tr>
@@ -1697,7 +1700,8 @@ export default function Products() {
       {activeTab === 'sales_parts' && (
         <div className="space-y-6">
           {/* Horizontal Single Sales Part Intake Panel */}
-          <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
+          {isAdmin && (
+            <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 mb-5 border-b border-erp-dark-vanilla/20 gap-3">
               <div>
                 <h2 className="text-base font-bold text-erp-chocolate flex items-center gap-2">
@@ -1827,6 +1831,7 @@ export default function Products() {
               </div>
             </form>
           </div>
+          )}
 
           {/* Sales Parts Data Table with Localized Inline Search */}
           <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
@@ -1923,16 +1928,18 @@ export default function Products() {
                     </th>
 
                     {/* 6. Actions Header */}
-                    <th className="p-3 w-24 text-center">
-                      <div>Actions</div>
-                      <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
-                    </th>
+                    {isAdmin && (
+                      <th className="p-3 w-24 text-center">
+                        <div>Actions</div>
+                        <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
+                      </th>
+                    )}
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-gray-100 font-mono">
                   {loading ? (
-                    <TableSkeletonRows rows={7} columns={6} />
+                    <TableSkeletonRows rows={7} columns={isAdmin ? 6 : 5} />
                   ) : filteredSalesParts.length > 0 ? (
                     filteredSalesParts.map((row) => (
                       <tr
@@ -1965,33 +1972,34 @@ export default function Products() {
                             {row.uom}
                           </span>
                         </td>
-                        <td className="p-3 text-center whitespace-nowrap">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => startEditSalesPart(row)}
-                              disabled={!canEdit}
-                              title="Edit sales part"
-                              className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors disabled:opacity-40 text-xs"
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeactivate('sales_parts', row.id, row.part_no)}
-                              disabled={!canDelete || actionLoadingId === row.id}
-                              title="Delete sales part"
-                              className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
-                            >
-                              {actionLoadingId === row.id ? '…' : '🗑️'}
-                            </button>
-                          </div>
-                        </td>
+                        {isAdmin && (
+                          <td className="p-3 text-center whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => startEditSalesPart(row)}
+                                title="Edit sales part"
+                                className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors text-xs"
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeactivate('sales_parts', row.id, row.part_no)}
+                                disabled={actionLoadingId === row.id}
+                                title="Delete sales part"
+                                className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
+                              >
+                                {actionLoadingId === row.id ? '…' : '🗑️'}
+                              </button>
+                            </div>
+                          </td>
+                        )}
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={6} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
+                      <td colSpan={isAdmin ? 6 : 5} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
                         No sales parts match your search filters or the table is empty.
                       </td>
                     </tr>

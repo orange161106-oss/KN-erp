@@ -10,6 +10,7 @@ from app.schemas.auth import CurrentUser
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
 from app.security.dependencies import get_current_user
 from app.security.passwords import PasswordService
+from app.services.audit import log_activity
 
 router = APIRouter(prefix="/users", tags=["user-management"])
 passwords = PasswordService()
@@ -81,6 +82,15 @@ def create_user(
 
     user = User(**user_kwargs)
     session.add(user)
+    session.flush()
+    log_activity(
+        session,
+        user=current_user,
+        action="CREATE",
+        module="User Permissions",
+        record_id=str(user.id),
+        details={"username": user.username, "roles": data.roles, "is_active": user.is_active},
+    )
     session.commit()
     session.refresh(user)
 
@@ -120,6 +130,19 @@ def update_user(
         val = getattr(data, field, None)
         if val is not None:
             setattr(user, field, val)
+
+    log_activity(
+        session,
+        user=current_user,
+        action="UPDATE",
+        module="User Permissions",
+        record_id=str(user.id),
+        details={
+            "username": user.username,
+            "roles": data.roles if data.roles is not None else [r.code for r in user.roles],
+            "is_active": user.is_active,
+        },
+    )
 
     session.commit()
     session.refresh(user)

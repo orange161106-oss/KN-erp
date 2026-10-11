@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_admin_role
 from app.db.session import get_db
 from app.schemas.auth import CurrentUser
 from app.security.dependencies import get_current_user
@@ -20,19 +21,19 @@ router = APIRouter(prefix="/masters/product-master", tags=["product-master"])
 def create_single_consumable(
     data: service.ConsumableSingleCreate,
     session: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    current_user: Annotated[CurrentUser, Depends(require_admin_role)],
 ):
-    return service.upsert_single_consumable(session, data, current_user.id)
+    return service.upsert_single_consumable(session, data, current_user.id, username=current_user.username)
 
 
 @router.post("/consumables/bulk")
 async def bulk_upload_consumables(
     file: UploadFile = File(...),
     session: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[CurrentUser, Depends(get_current_user)] = None,
+    current_user: Annotated[CurrentUser, Depends(require_admin_role)] = None,
 ):
     contents = await file.read(15 * 1024 * 1024 + 1)
-    return service.bulk_upsert_consumables(session, contents, current_user.id)
+    return service.bulk_upsert_consumables(session, contents, current_user.id, username=current_user.username)
 
 
 @router.get("/consumables")
@@ -54,19 +55,19 @@ def get_consumables(
 def create_single_sales_part(
     data: service.SalesPartSingleCreate,
     session: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    current_user: Annotated[CurrentUser, Depends(require_admin_role)],
 ):
-    return service.upsert_single_sales_part(session, data, current_user.id)
+    return service.upsert_single_sales_part(session, data, current_user.id, username=current_user.username)
 
 
 @router.post("/sales-parts/bulk")
 async def bulk_upload_sales_parts(
     file: UploadFile = File(...),
     session: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[CurrentUser, Depends(get_current_user)] = None,
+    current_user: Annotated[CurrentUser, Depends(require_admin_role)] = None,
 ):
     contents = await file.read(15 * 1024 * 1024 + 1)
-    return service.bulk_upsert_sales_parts(session, contents, current_user.id)
+    return service.bulk_upsert_sales_parts(session, contents, current_user.id, username=current_user.username)
 
 
 @router.get("/sales-parts")
@@ -88,19 +89,19 @@ def get_sales_parts(
 def create_single_assemble(
     data: service.AssembleSingleCreate,
     session: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    current_user: Annotated[CurrentUser, Depends(require_admin_role)],
 ):
-    return service.upsert_single_assemble(session, data, current_user.id)
+    return service.upsert_single_assemble(session, data, current_user.id, username=current_user.username)
 
 
 @router.post("/assemble/bulk")
 async def bulk_upload_assemble(
     file: UploadFile = File(...),
     session: Annotated[Session, Depends(get_db)] = None,
-    current_user: Annotated[CurrentUser, Depends(get_current_user)] = None,
+    current_user: Annotated[CurrentUser, Depends(require_admin_role)] = None,
 ):
     contents = await file.read(15 * 1024 * 1024 + 1)
-    return service.bulk_upsert_assemble(session, contents, current_user.id)
+    return service.bulk_upsert_assemble(session, contents, current_user.id, username=current_user.username)
 
 
 @router.get("/assemble")
@@ -115,7 +116,7 @@ def get_assemble_mappings(
 
 
 # ---------------------------------------------------------------------------
-# Item Update & Soft-Delete (Deactivate) Endpoints
+# Item Update & Soft-Delete (Deactivate) Endpoints (Destructive - Admin Only)
 # ---------------------------------------------------------------------------
 
 @router.put("/{category}/{item_id}")
@@ -124,9 +125,9 @@ def update_master_item(
     item_id: UUID,
     payload: dict,
     session: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    current_user: Annotated[CurrentUser, Depends(require_admin_role)],
 ):
-    return service.update_product_master_item(session, category, item_id, payload, current_user.id)
+    return service.update_product_master_item(session, category, item_id, payload, current_user.id, username=current_user.username)
 
 
 @router.patch("/{category}/{item_id}/deactivate")
@@ -134,9 +135,9 @@ def deactivate_master_item(
     category: str,
     item_id: UUID,
     session: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    current_user: Annotated[CurrentUser, Depends(require_admin_role)],
 ):
-    return service.deactivate_product_master_item(session, category, item_id, current_user.id)
+    return service.deactivate_product_master_item(session, category, item_id, current_user.id, username=current_user.username)
 
 
 @router.delete("/{category}/{item_id}")
@@ -144,7 +145,6 @@ def delete_master_item(
     category: str,
     item_id: UUID,
     session: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    current_user: Annotated[CurrentUser, Depends(require_admin_role)],
 ):
-    return service.deactivate_product_master_item(session, category, item_id, current_user.id)
-
+    return service.deactivate_product_master_item(session, category, item_id, current_user.id, username=current_user.username)

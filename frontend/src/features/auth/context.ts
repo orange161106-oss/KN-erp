@@ -6,6 +6,7 @@ export interface CurrentUser extends Partial<UserPermissionFlags> {
   id: string;
   username: string;
   roles: string[];
+  role?: string;
   permissions: string[];
   is_super_admin?: boolean;
   is_superuser?: boolean;
