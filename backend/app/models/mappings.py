@@ -1,7 +1,9 @@
 from datetime import datetime
+from decimal import Decimal
+from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, UniqueConstraint, Uuid, func, true
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, UniqueConstraint, Uuid, func, true
 from sqlalchemy.schema import conv
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -39,6 +41,15 @@ class ProductProcessConsumable(Base):
     process_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("processes.id", ondelete="RESTRICT"), index=True, nullable=False)
     consumable_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("consumables.id", ondelete="RESTRICT"), index=True, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    consumable_item: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    part_no_saleable_item: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    used_for_name_of_saleable_part: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    used_part_no_prd_order: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    process_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    material_thickness_in_mm_gsm: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    no_of_process_per_part: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4), server_default="1.0000", default=Decimal("1.0000"), nullable=True)
+    output_unit: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

@@ -86,6 +86,7 @@ export function canOpen(user: (UserContextData & Record<string, any>) | null | u
     if (path === '/purchase') return Boolean(user.purchase_read);
     if (path === '/purchase-orders') return Boolean(user.purchase_orders_read);
     if (path === '/grns') return Boolean(user.goods_receipts_read);
+    if (path === '/reports') return Boolean(user.reports_read || user.can_access_dashboard || user.inventory_read || user.masters_read);
 
     return false;
   }
