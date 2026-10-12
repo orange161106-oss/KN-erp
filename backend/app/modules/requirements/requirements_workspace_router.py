@@ -10,17 +10,30 @@ from app.schemas.requirements_workspace import (
     MonthlyPlanMetadata,
     RequirementBatchUpdateRequest,
     RequirementBatchUpdateResponse,
+    RequirementBulkDeleteRequest,
+    RequirementBulkDeleteResponse,
     RequirementExcelInspectResponse,
     RequirementImportRequest,
     RequirementRecalculateResponse,
     RequirementWorkspaceRecord,
 )
+from app.security.dependencies import get_current_user
 from app.security.permissions import require_feature_flag
+from app.core.errors import ApplicationError
 from app.services import requirements_workspace as service
 
 router = APIRouter(prefix="/requirements/workspace", tags=["requirements-workspace"])
 CanReadRequirements = Annotated[CurrentUser, Depends(require_feature_flag("requirements_read"))]
 CanUpdateRequirements = Annotated[CurrentUser, Depends(require_feature_flag("requirements_update"))]
+
+
+def require_requirements_delete(user: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
+    if user.is_super_admin or "ADMIN" in user.roles or getattr(user, "requirements_delete", False) or getattr(user, "requirements_update", False):
+        return user
+    raise ApplicationError("PERMISSION_DENIED", "Permission to delete requirements is required.", 403)
+
+
+CanDeleteRequirements = Annotated[CurrentUser, Depends(require_requirements_delete)]
 
 
 @router.get("/plan-metadata", response_model=MonthlyPlanMetadata)
@@ -187,4 +200,42 @@ def export_requirements_workspace_post(
         content=excel_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="consumable_requirements_{period_label}.xlsx"'},
+    )
+
+
+@router.delete("/records/{identity}", status_code=204)
+def delete_workspace_record(
+    identity: UUID,
+    user: CanDeleteRequirements,
+    session: Annotated[Session, Depends(get_db)],
+    reason: Optional[str] = Query(None),
+):
+    """Soft-deletes a single requirement record and writes to audit log."""
+    service.delete_requirement_record(session, identity, user.id, reason=reason)
+
+
+@router.post("/bulk-delete", response_model=RequirementBulkDeleteResponse)
+def bulk_delete_workspace(
+    data: RequirementBulkDeleteRequest,
+    user: CanDeleteRequirements,
+    session: Annotated[Session, Depends(get_db)],
+):
+    """Soft-deletes multiple requirement records in one atomic transaction."""
+    record_uuids = []
+    for r_id in data.record_ids:
+        try:
+            record_uuids.append(UUID(r_id))
+        except (ValueError, TypeError):
+            continue
+
+    count, meta = service.bulk_delete_requirement_records(
+        session,
+        record_ids=record_uuids,
+        current_user_id=user.id,
+        reason=data.reason,
+    )
+    return RequirementBulkDeleteResponse(
+        message=f"Successfully deleted {count} requirement record(s).",
+        deleted_count=count,
+        plan_metadata=meta,
     )

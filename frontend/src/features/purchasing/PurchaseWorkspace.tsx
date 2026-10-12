@@ -172,8 +172,8 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
       className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-ink-text/20 bg-brand-steel select-none',
     },
     {
-      label: 'APPROVAL STATUS',
-      colSpan: 4,
+      label: 'APPROVAL STATUS & REFERENCES',
+      colSpan: 6,
       className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-ink-text/20 bg-brand-navy select-none',
     },
   ];
@@ -182,41 +182,46 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
     {
       key: 'consumable_code',
       label: 'Consumable Item ID',
-      width: 'w-40',
+      width: 170,
+      minWidth: 130,
       isSticky: true,
       render: value => <span className="font-mono font-bold text-blue-900">{value}</span>,
     },
     {
       key: 'consumable_name',
       label: 'Consumable Name',
-      width: 'w-56',
+      width: 240,
+      minWidth: 160,
       isSticky: true,
       render: value => <span className="font-semibold text-gray-900 truncate block">{value}</span>,
     },
-    { key: 'unit', label: 'Unit', width: 'w-16', align: 'center' },
-    { key: 'required_qty', label: 'Requirement Qty', width: 'w-32', align: 'right' },
-    { key: 'stock_qty', label: 'Stock Qty', width: 'w-28', align: 'right' },
-    { key: 'po_pending_qty', label: 'PO Pending Qty', width: 'w-32', align: 'right' },
+    { key: 'unit', label: 'Unit', width: 80, minWidth: 60, align: 'center' },
+    { key: 'required_qty', label: 'Requirement Qty', width: 140, minWidth: 100, align: 'right' },
+    { key: 'stock_qty', label: 'Stock Qty', width: 120, minWidth: 80, align: 'right' },
+    { key: 'po_pending_qty', label: 'PO Pending Qty', width: 130, minWidth: 90, align: 'right' },
     {
       key: 'shortage_qty',
       label: 'Net Shortage',
-      width: 'w-32',
+      width: 130,
+      minWidth: 90,
       align: 'right',
       render: value => <span className="font-mono font-bold text-red-700">{value}</span>,
     },
     {
       key: 'system_recommended_qty',
       label: 'System Recommended Qty',
-      width: 'w-40',
+      width: 180,
+      minWidth: 120,
       align: 'right',
       render: value => <span className="font-mono font-bold text-indigo-950">{value}</span>,
     },
-    { key: 'supplier_code', label: 'Supplier Code', width: 'w-32' },
-    { key: 'supplier_name', label: 'Supplier Name', width: 'w-44' },
+    { key: 'supplier_code', label: 'Supplier Code', width: 130, minWidth: 90 },
+    { key: 'supplier_name', label: 'Supplier Name', width: 180, minWidth: 120 },
     {
       key: 'status',
       label: 'Workspace Status',
-      width: 'w-44',
+      width: 160,
+      minWidth: 110,
       align: 'center',
       render: value => (
         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${statusClass(String(value))}`}>
@@ -227,19 +232,25 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
     {
       key: 'approval_status',
       label: 'Approval Queue',
-      width: 'w-32',
+      width: 130,
+      minWidth: 90,
       align: 'center',
       render: value => <span className="font-mono text-xs text-gray-700">{value || '-'}</span>,
     },
-    { key: 'source_row_count', label: 'Requirement Rows', width: 'w-28', align: 'center' },
-    { key: 'remarks', label: 'Remarks', width: 'w-64' },
+    { key: 'source_row_count', label: 'Requirement Rows', width: 130, minWidth: 90, align: 'center' },
+    { key: 'remarks', label: 'Remarks', width: 220, minWidth: 140 },
   ];
 
   return (
     <div className="flex flex-col h-full space-y-3">
-      <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 bg-white p-3 rounded border border-gray-200 shadow-2xs">
+      <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 bg-white p-3 rounded border border-gray-200 shadow-2xs flex-shrink-0">
         <div>
-          <h1 className="text-lg font-bold text-gray-900 tracking-tight">Purchase</h1>
+          <h2 className="text-base font-bold text-gray-900 tracking-tight flex items-center gap-2">
+            <span>Purchase Plan Workspace</span>
+            <span className="text-xs font-normal text-gray-500 bg-gray-100 px-2 py-0.5 rounded border border-gray-300">
+              Deterministic Planning
+            </span>
+          </h2>
           <p className="text-xs text-gray-500 mt-0.5">
             Monthly purchase recommendations from approved requirement shortages.
           </p>
@@ -372,6 +383,10 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
             onSelectCell={setSelectedCell}
             isLoading={isLoading}
             canCreate={false}
+            canUpdate={false}
+            canDelete={false}
+            storageKey="knl_purchase_workspace_grid"
+            onExport={exportRows}
             emptyMessage={`No purchase recommendations found for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Recalculate or import requirements first.`}
             getRowClassName={row => {
               if (row.status === 'READY_FOR_APPROVAL') return 'bg-emerald-50/60 hover:bg-emerald-100/60';

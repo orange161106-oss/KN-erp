@@ -244,6 +244,96 @@ export default function Requirements() {
     }
   };
 
+  // Discard unsaved changes
+  const handleDiscardChanges = () => {
+    if (modifiedRecords.size === 0) return;
+    setRecords(prev =>
+      prev.map(r => {
+        const orig = originalMap.get(r.id);
+        return orig ? { ...orig } : r;
+      })
+    );
+    setModifiedRecords(new Map());
+    setStatusMessage({
+      type: 'info',
+      text: 'Unsaved changes discarded.',
+    });
+  };
+
+  // Bulk / single delete rows
+  const handleDeleteRows = async (ids: string[]) => {
+    if (!ids || ids.length === 0) return;
+    try {
+      const res = await apiClient.post<{
+        message: string;
+        deleted_count: number;
+        plan_metadata?: MonthlyPlanMetadata;
+      }>('/api/v1/requirements/workspace/bulk-delete', { record_ids: ids });
+
+      setRecords(prev => prev.filter(r => !ids.includes(r.id)));
+      setOriginalMap(prev => {
+        const next = new Map(prev);
+        ids.forEach(id => next.delete(id));
+        return next;
+      });
+      setModifiedRecords(prev => {
+        const next = new Map(prev);
+        ids.forEach(id => next.delete(id));
+        return next;
+      });
+      setSelectedRowIds(prev => {
+        const next = new Set(prev);
+        ids.forEach(id => next.delete(id));
+        return next;
+      });
+      if (res.plan_metadata) {
+        setPlanMetadata(res.plan_metadata);
+      }
+      setStatusMessage({
+        type: 'success',
+        text: res.message || `Deleted ${ids.length} record(s) successfully.`,
+      });
+    } catch (err) {
+      setStatusMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Failed to delete records.',
+      });
+      throw err;
+    }
+  };
+
+  // Warn before leaving if unsaved changes exist
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (modifiedRecords.size > 0) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [modifiedRecords.size]);
+
+  const handleMonthChange = (newMonth: number) => {
+    if (modifiedRecords.size > 0) {
+      if (!window.confirm('You have unsaved changes. Discard changes and change month?')) {
+        return;
+      }
+      setModifiedRecords(new Map());
+    }
+    setSelectedMonth(newMonth);
+  };
+
+  const handleYearChange = (newYear: number) => {
+    if (modifiedRecords.size > 0) {
+      if (!window.confirm('You have unsaved changes. Discard changes and change year?')) {
+        return;
+      }
+      setModifiedRecords(new Map());
+    }
+    setSelectedYear(newYear);
+  };
+
   // Recalculate deterministic consumable requirements
   const handleRecalculate = async () => {
     setIsRecalculating(true);
@@ -366,14 +456,15 @@ export default function Requirements() {
     []
   );
 
-  // Section 7A: Fixed Column Definitions (Always rendered in EVERY state)
+  // Section 7A: Fixed Column Definitions with explicit numeric pixel widths
   const columns: ColumnDef<RequirementRecord>[] = useMemo(
     () => [
       // --- Group 1: For Component (Frozen Left Columns) ---
       {
         key: 'part_name',
         label: 'Used For – Part Name',
-        width: 'w-44',
+        width: 200,
+        minWidth: 150,
         align: 'left',
         isSticky: true,
         render: val => <span className="font-semibold text-gray-900 truncate block">{val}</span>,
@@ -381,7 +472,8 @@ export default function Requirements() {
       {
         key: 'part_number',
         label: 'Used Part No. (Production Order)',
-        width: 'w-44',
+        width: 220,
+        minWidth: 160,
         align: 'left',
         isSticky: true,
         render: val => <span className="font-mono text-gray-800 font-semibold">{val}</span>,
@@ -391,44 +483,53 @@ export default function Requirements() {
       {
         key: 'consumable_code',
         label: 'Consumable Item ID',
-        width: 'w-40',
+        width: 170,
+        minWidth: 130,
         align: 'left',
         render: val => <span className="font-mono font-bold text-blue-900">{val}</span>,
       },
       {
         key: 'consumable_name',
         label: 'Consumable Name',
-        width: 'w-56',
+        width: 240,
+        minWidth: 160,
         align: 'left',
         render: val => <span className="text-gray-900 truncate block">{val}</span>,
       },
       {
         key: 'process_name',
         label: 'Process Name',
-        width: 'w-36',
+        width: 160,
+        minWidth: 110,
         align: 'left',
       },
       {
         key: 'part_thickness',
         label: 'Part Thickness (mm)',
-        width: 'w-28',
+        width: 140,
+        minWidth: 100,
         align: 'right',
+        type: 'number',
         isEditable: canUpdate,
         render: val => <span className="font-mono text-gray-800">{val}</span>,
       },
       {
         key: 'process_count',
         label: 'Number of Processes',
-        width: 'w-28',
+        width: 140,
+        minWidth: 90,
         align: 'center',
+        type: 'number',
         isEditable: canUpdate,
         render: val => <span className="font-mono font-semibold text-gray-800">{val}</span>,
       },
       {
         key: 'production_order_qty',
         label: 'Production Order for Selected Month',
-        width: 'w-40',
+        width: 200,
+        minWidth: 140,
         align: 'right',
+        type: 'number',
         isEditable: canUpdate,
         render: val => (
           <span className="font-mono font-bold text-gray-950 bg-gray-50/50 px-1 py-0.5 rounded">
@@ -439,8 +540,10 @@ export default function Requirements() {
       {
         key: 'scheduled_consumable_qty',
         label: 'Scheduled Consumable Quantity for Selected Month',
-        width: 'w-44',
+        width: 220,
+        minWidth: 150,
         align: 'right',
+        type: 'number',
         isEditable: false,
         render: val => <span className="font-mono font-bold text-indigo-950">{val}</span>,
       },
@@ -449,20 +552,23 @@ export default function Requirements() {
       {
         key: 'unit',
         label: 'Unit',
-        width: 'w-16',
+        width: 80,
+        minWidth: 60,
         align: 'center',
       },
       {
         key: 'stock_qty',
         label: 'Stock Qty',
-        width: 'w-28',
+        width: 120,
+        minWidth: 80,
         align: 'right',
         render: val => <span className="font-mono text-gray-700">{val}</span>,
       },
       {
         key: 'shortage_qty',
         label: 'Shortage Qty',
-        width: 'w-28',
+        width: 120,
+        minWidth: 80,
         align: 'right',
         render: val => {
           const num = parseFloat(val) || 0;
@@ -480,7 +586,8 @@ export default function Requirements() {
       {
         key: 'status',
         label: 'Status',
-        width: 'w-36',
+        width: 150,
+        minWidth: 110,
         align: 'center',
         render: val => {
           if (val === 'Critical shortage') {
@@ -521,14 +628,16 @@ export default function Requirements() {
       {
         key: 'remarks',
         label: 'Remarks',
-        width: 'w-48',
+        width: 220,
+        minWidth: 140,
         align: 'left',
         isEditable: canUpdate,
       },
       {
         key: 'id' as any,
         label: 'Audit Trail',
-        width: 'w-28',
+        width: 100,
+        minWidth: 80,
         align: 'center',
         render: (_val, row) => (
           <button
@@ -657,7 +766,7 @@ export default function Requirements() {
               id="req-planning-month-select"
               aria-label="Planning Month"
               value={selectedMonth}
-              onChange={e => setSelectedMonth(parseInt(e.target.value, 10))}
+              onChange={e => handleMonthChange(parseInt(e.target.value, 10))}
               className="px-2.5 py-1 text-xs border border-gray-300 rounded bg-white text-gray-800 font-medium focus:ring-1 focus:ring-brand-steel"
             >
               {MONTH_NAMES.map((m, idx) => (
@@ -675,7 +784,7 @@ export default function Requirements() {
               id="req-planning-year-select"
               aria-label="Planning Year"
               value={selectedYear}
-              onChange={e => setSelectedYear(parseInt(e.target.value, 10))}
+              onChange={e => handleYearChange(parseInt(e.target.value, 10))}
               className="px-2.5 py-1 text-xs border border-gray-300 rounded bg-white text-gray-800 font-medium focus:ring-1 focus:ring-brand-steel"
             >
               {[2024, 2025, 2026, 2027, 2028, 2029, 2030].map(y => (
@@ -861,11 +970,24 @@ export default function Requirements() {
             selectedIds={selectedRowIds}
             onSelectionChange={setSelectedRowIds}
             onCellChange={handleCellChange}
+            onSave={handleSaveChanges}
+            onDeleteRows={handleDeleteRows}
+            onDiscardChanges={handleDiscardChanges}
             isLoading={isLoading}
             emptyMessage={`No consumable requirements found for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Click 'Upload Excel' to import a plan.`}
             canCreate={false}
+            canUpdate={canUpdate}
+            canDelete={canUpdate}
             selectedCell={selectedCell}
             onSelectCell={setSelectedCell}
+            storageKey="knl_requirements_grid"
+            saveStatus={isSaving ? 'saving' : modifiedRecords.size > 0 ? 'idle' : 'saved'}
+            lastModifiedText={
+              planMetadata?.updated_at
+                ? `Modified ${formatDisplayDate(planMetadata.updated_at)}${planMetadata.updated_by_name ? ` by ${planMetadata.updated_by_name}` : ''}`
+                : undefined
+            }
+            onExport={handleExport}
             getRowClassName={row => {
               if (row.status === 'Critical shortage') return 'bg-red-50/70 hover:bg-red-100/70 font-medium';
               if (row.status === 'Low') return 'bg-amber-50/60 hover:bg-amber-100/60';

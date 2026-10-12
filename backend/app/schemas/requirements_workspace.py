@@ -115,3 +115,14 @@ class RequirementRecalculateResponse(BaseModel):
     low_stock: int
     records: list[RequirementWorkspaceRecord]
     plan_metadata: Optional[MonthlyPlanMetadata] = None
+
+
+class RequirementBulkDeleteRequest(BaseModel):
+    record_ids: list[str]
+    reason: Optional[str] = None
+
+
+class RequirementBulkDeleteResponse(BaseModel):
+    message: str
+    deleted_count: int
+    plan_metadata: Optional[MonthlyPlanMetadata] = None
