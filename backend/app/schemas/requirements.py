@@ -134,3 +134,27 @@ class BulkUploadResponse(BaseModel):
     errors: list[str] = []
     items: list[RequirementLineItemResponse] = []
 
+
+class AggregatedRequirementResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    month: int
+    year: int
+    consumable_id: UUID
+    total_gross_qty: float
+    net_purchase_qty: float
+    consumable_name: Optional[str] = None
+    item_id: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class AggregationRunResponse(BaseModel):
+    month: int
+    year: int
+    total_approved_plans: int
+    total_aggregated_consumables: int
+    records: list[AggregatedRequirementResponse]
+
+

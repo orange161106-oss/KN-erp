@@ -2,12 +2,14 @@ from app.security.permissions import require_permissions
 from typing import Annotated, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.models.requirements import MonthlyRequirementPlan, RequirementStatus
 from app.schemas.auth import CurrentUser
 from app.schemas.requirements import (
+    AggregationRunResponse,
     BulkUploadResponse,
     CalculatedRevisionApprovalResponse,
     CalculatedRequirementResponse,
@@ -20,7 +22,9 @@ from app.schemas.requirements import (
     RequirementLineItemResponse,
 )
 from app.security.dependencies import get_current_user
+from app.services.mrp_calculator import run_monthly_aggregation
 from app.services.requirements import (
+    _to_plan_response,
     bulk_upsert_line_items,
     calculate_planning_version_requirements,
     create_monthly_plan,
@@ -32,6 +36,7 @@ from app.services.requirements import (
 
 router = APIRouter(prefix="/requirements", tags=["requirements"])
 plans_router = APIRouter(prefix="/plans", tags=["monthly-requirements-planner"])
+
 
 
 
@@ -138,15 +143,100 @@ async def handle_bulk_upload_items(
     )
 
 
-# Register endpoints on /requirements/plans
+def require_admin_or_planner_role(user: CurrentUser) -> CurrentUser:
+    if user.is_super_admin or getattr(user, "is_superuser", False):
+        return user
+    roles_normalized = [str(r).upper().strip() for r in (user.roles or [])]
+    if any(r in ("ADMIN", "SUPER ADMIN", "SUPER_ADMIN", "PLANNER") for r in roles_normalized):
+        return user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Admin or Planner role required for this action.",
+    )
+
+
+def handle_submit_plan(
+    plan_id: UUID,
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> MonthlyRequirementPlanResponse:
+    """Transition status from DRAFT to SUBMITTED. Accessible by Plant Incharge."""
+    plan = session.get(MonthlyRequirementPlan, plan_id)
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monthly requirement plan not found.")
+
+    # Authorization: Admin can submit any plan; standard users can submit for their assigned plant
+    if not (current_user.is_super_admin or any(r.upper() in ("ADMIN", "SUPER ADMIN", "SUPER_ADMIN") for r in (current_user.roles or []))):
+        assigned_plant = getattr(current_user, "assigned_plant", None)
+        if assigned_plant and assigned_plant.upper() != plan.plant_id.upper():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You are only authorized to submit plans for assigned plant '{assigned_plant}'.",
+            )
+
+    if plan.status != RequirementStatus.DRAFT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot submit plan in '{plan.status.value}' status. Only DRAFT plans can be submitted.",
+        )
+
+    plan.status = RequirementStatus.SUBMITTED
+    session.commit()
+    session.refresh(plan)
+    return _to_plan_response(plan)
+
+
+def handle_approve_plan(
+    plan_id: UUID,
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> MonthlyRequirementPlanResponse:
+    """Transition status from SUBMITTED to APPROVED. Strictly protected: Admin or Planner."""
+    require_admin_or_planner_role(current_user)
+
+    plan = session.get(MonthlyRequirementPlan, plan_id)
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monthly requirement plan not found.")
+
+    if plan.status != RequirementStatus.SUBMITTED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot approve plan in '{plan.status.value}' status. Only SUBMITTED plans can be approved.",
+        )
+
+    plan.status = RequirementStatus.APPROVED
+    session.commit()
+    session.refresh(plan)
+    return _to_plan_response(plan)
+
+
+def handle_run_aggregation(
+    month: int,
+    year: int,
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> AggregationRunResponse:
+    """Group identical consumables across multiple approved plans for company-wide gross requirement."""
+    require_admin_or_planner_role(current_user)
+    return run_monthly_aggregation(session, month=month, year=year)
+
+
+# Register endpoints on /requirements/plans and /requirements/aggregate
 router.add_api_route("/plans", handle_get_plans, methods=["GET"], response_model=list[MonthlyRequirementPlanResponse])
 router.add_api_route("/plans", handle_create_plan, methods=["POST"], response_model=MonthlyRequirementPlanResponse, status_code=status.HTTP_201_CREATED)
 router.add_api_route("/plans/{plan_id}/items/single", handle_upsert_single_item, methods=["POST"], response_model=RequirementLineItemResponse)
 router.add_api_route("/plans/{plan_id}/items/bulk", handle_bulk_upload_items, methods=["POST"], response_model=BulkUploadResponse)
+router.add_api_route("/plans/{plan_id}/submit", handle_submit_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
+router.add_api_route("/plans/{plan_id}/approve", handle_approve_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
+router.add_api_route("/aggregate/{month}/{year}", handle_run_aggregation, methods=["POST"], response_model=AggregationRunResponse)
 
 # Register endpoints on /plans directly
 plans_router.add_api_route("", handle_get_plans, methods=["GET"], response_model=list[MonthlyRequirementPlanResponse])
 plans_router.add_api_route("", handle_create_plan, methods=["POST"], response_model=MonthlyRequirementPlanResponse, status_code=status.HTTP_201_CREATED)
 plans_router.add_api_route("/{plan_id}/items/single", handle_upsert_single_item, methods=["POST"], response_model=RequirementLineItemResponse)
 plans_router.add_api_route("/{plan_id}/items/bulk", handle_bulk_upload_items, methods=["POST"], response_model=BulkUploadResponse)
+plans_router.add_api_route("/{plan_id}/submit", handle_submit_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
+plans_router.add_api_route("/{plan_id}/approve", handle_approve_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
+plans_router.add_api_route("/aggregate/{month}/{year}", handle_run_aggregation, methods=["POST"], response_model=AggregationRunResponse)
+
 

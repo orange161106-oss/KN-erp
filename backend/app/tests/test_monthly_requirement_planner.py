@@ -253,3 +253,95 @@ def test_requirements_prefix_alias_routes(client, test_data):
     req_res = client.get("/api/v1/requirements/plans", headers=test_data["admin_headers"])
     assert req_res.status_code == 200
     assert isinstance(req_res.json(), list)
+
+
+def test_approval_state_machine_transitions(client, test_data):
+    # 1. Create a DRAFT plan
+    res_plan = client.post("/api/v1/plans", json={"plant_id": "PLANT_I", "month": 3, "year": 2026}, headers=test_data["admin_headers"])
+    assert res_plan.status_code == 201
+    plan_id = res_plan.json()["id"]
+    assert res_plan.json()["status"] == "DRAFT"
+
+    # 2. Plant 2 incharge cannot submit Plant 1 plan (403 Forbidden)
+    res_p2_submit = client.patch(f"/api/v1/plans/{plan_id}/submit", headers=test_data["plant_2_headers"])
+    assert res_p2_submit.status_code == 403
+
+    # 3. Plant 1 incharge can submit their own plant plan
+    res_p1_submit = client.patch(f"/api/v1/plans/{plan_id}/submit", headers=test_data["plant_1_headers"])
+    assert res_p1_submit.status_code == 200
+    assert res_p1_submit.json()["status"] == "SUBMITTED"
+
+    # 4. Trying to submit again from SUBMITTED returns 400 Bad Request
+    res_dup_submit = client.patch(f"/api/v1/plans/{plan_id}/submit", headers=test_data["plant_1_headers"])
+    assert res_dup_submit.status_code == 400
+    assert "only draft plans" in res_dup_submit.text.lower()
+
+    # 5. Plant Incharge cannot approve (Requires Admin/Planner)
+    res_unauth_approve = client.patch(f"/api/v1/plans/{plan_id}/approve", headers=test_data["plant_1_headers"])
+    assert res_unauth_approve.status_code == 403
+
+    # 6. Admin can approve -> status becomes APPROVED
+    res_approve = client.patch(f"/api/v1/plans/{plan_id}/approve", headers=test_data["admin_headers"])
+    assert res_approve.status_code == 200
+    assert res_approve.json()["status"] == "APPROVED"
+
+    # 7. Trying to approve already APPROVED plan returns 400 Bad Request
+    res_dup_approve = client.patch(f"/api/v1/plans/{plan_id}/approve", headers=test_data["admin_headers"])
+    assert res_dup_approve.status_code == 400
+
+
+def test_cross_plant_aggregation_math(client, test_data):
+    c1 = test_data["c1"]
+    c2 = test_data["c2"]
+
+    # 1. Create and approve Plan 1 for Period 8/2026 (Plant I)
+    res_p1 = client.post("/api/v1/plans", json={"plant_id": "PLANT_I", "month": 8, "year": 2026}, headers=test_data["admin_headers"])
+    p1_id = res_p1.json()["id"]
+    client.post(f"/api/v1/plans/{p1_id}/items/single", json={"consumable_id": str(c1.id), "requested_qty": 100.0}, headers=test_data["admin_headers"])
+    client.post(f"/api/v1/plans/{p1_id}/items/single", json={"consumable_id": str(c2.id), "requested_qty": 50.0}, headers=test_data["admin_headers"])
+    client.patch(f"/api/v1/plans/{p1_id}/submit", headers=test_data["plant_1_headers"])
+    client.patch(f"/api/v1/plans/{p1_id}/approve", headers=test_data["admin_headers"])
+
+    # 2. Create and approve Plan 2 for Period 8/2026 (Plant II)
+    res_p2 = client.post("/api/v1/plans", json={"plant_id": "PLANT_II", "month": 8, "year": 2026}, headers=test_data["admin_headers"])
+    p2_id = res_p2.json()["id"]
+    client.post(f"/api/v1/plans/{p2_id}/items/single", json={"consumable_id": str(c1.id), "requested_qty": 200.0}, headers=test_data["admin_headers"])
+    client.post(f"/api/v1/plans/{p2_id}/items/single", json={"consumable_id": str(c2.id), "requested_qty": 75.0}, headers=test_data["admin_headers"])
+    client.patch(f"/api/v1/plans/{p2_id}/submit", headers=test_data["plant_2_headers"])
+    client.patch(f"/api/v1/plans/{p2_id}/approve", headers=test_data["admin_headers"])
+
+    # 3. Standard user cannot trigger aggregation
+    agg_unauth = client.post("/api/v1/aggregate/8/2026", headers=test_data["plant_1_headers"])
+    assert agg_unauth.status_code == 403
+
+    # 4. Admin triggers aggregation
+    agg_res = client.post("/api/v1/aggregate/8/2026", headers=test_data["admin_headers"])
+    assert agg_res.status_code == 200, agg_res.text
+    data = agg_res.json()
+    assert data["month"] == 8
+    assert data["year"] == 2026
+    assert data["total_approved_plans"] == 2
+    assert data["total_aggregated_consumables"] == 2
+
+    # Check the cross-plant math
+    records_by_id = {r["consumable_id"]: r for r in data["records"]}
+    c1_rec = records_by_id[str(c1.id)]
+    c2_rec = records_by_id[str(c2.id)]
+
+    assert c1_rec["total_gross_qty"] == 300.0  # 100 + 200
+    assert c1_rec["net_purchase_qty"] == 300.0
+    assert c2_rec["total_gross_qty"] == 125.0  # 50 + 75
+    assert c2_rec["net_purchase_qty"] == 125.0
+
+    # 5. Re-running aggregation performs idempotent upsert
+    re_agg = client.post("/api/v1/aggregate/8/2026", headers=test_data["admin_headers"])
+    assert re_agg.status_code == 200
+    assert re_agg.json()["total_aggregated_consumables"] == 2
+
+
+def test_aggregation_fails_when_no_approved_plans(client, test_data):
+    # Call aggregation for a period with no approved plans
+    res = client.post("/api/v1/aggregate/9/2028", headers=test_data["admin_headers"])
+    assert res.status_code == 400
+    assert "no approved" in res.text.lower()
+

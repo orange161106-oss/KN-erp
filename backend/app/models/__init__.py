@@ -15,6 +15,7 @@ from app.models.prd import ImportBatch, ImportError, PlanningVersion, PRDOrderHe
 from app.models.plant_workflow import PlantConfirmation, RequirementAdjustment, UserPlant
 from app.models.production import Plant, Process, Route, RouteStep
 from app.models.requirements import (
+    AggregatedRequirement,
     CalculatedRequirement,
     MonthlyRequirementPlan,
     MonthlyRequirementRecord,
@@ -25,10 +26,12 @@ from app.models.requirements import (
 from app.models.rules import ConsumptionNorm
 
 __all__ = [
+    "AggregatedRequirement",
     "MonthlyRequirementPlan",
     "RequirementLineItem",
     "RequirementStatus",
     "MonthlyRequirementRecord",
+
 
     "GRN",
     "GRNItem",
