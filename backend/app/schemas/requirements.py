@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CalculationRunRequest(BaseModel):
@@ -89,4 +89,48 @@ class RequirementCalculationRunResponse(BaseModel):
     error_count: int
     summary_by_consumable: list[ConsumableAggregateItem]
     errors: list[RequirementCalculationErrorResponse]
+
+
+class MonthlyRequirementPlanCreate(BaseModel):
+    plant_id: str
+    month: int = Field(ge=1, le=12)
+    year: int = Field(ge=2000, le=2100)
+
+
+class RequirementLineItemCreate(BaseModel):
+    consumable_id: UUID
+    requested_qty: float = Field(ge=0)
+
+
+class RequirementLineItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    plan_id: UUID
+    consumable_id: UUID
+    requested_qty: float
+    item_id: Optional[str] = None
+    consumable_name: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class MonthlyRequirementPlanResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    plant_id: str
+    month: int
+    year: int
+    status: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    line_items: list[RequirementLineItemResponse] = []
+
+
+class BulkUploadResponse(BaseModel):
+    total_rows: int
+    upserted: int
+    errors: list[str] = []
+    items: list[RequirementLineItemResponse] = []
 

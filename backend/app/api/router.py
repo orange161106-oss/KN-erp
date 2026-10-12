@@ -9,7 +9,7 @@ from app.modules.masters.router import router as product_customer_router
 from app.modules.masters.product_master_router import router as product_master_router
 from app.modules.plant_workflow.router import router as plant_workflow_router
 from app.modules.prd.router import router as prd_router
-from app.modules.requirements.router import router as requirements_router
+from app.modules.requirements.router import plans_router, router as requirements_router
 from app.modules.rules.router import router as rules_router
 from app.modules.inventory.router import router as inventory_router
 from app.modules.inventory.projection_router import router as projection_router
@@ -43,6 +43,7 @@ api_router.include_router(mapping_router)
 api_router.include_router(rules_router)
 api_router.include_router(prd_router)
 api_router.include_router(requirements_router)
+api_router.include_router(plans_router)
 api_router.include_router(plant_workflow_router)
 api_router.include_router(inventory_router)
 api_router.include_router(projection_router)

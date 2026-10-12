@@ -113,9 +113,17 @@ def current_user(session: Session, token: str, settings: Settings) -> CurrentUse
             for module in crud_modules
             for op in ("read", "create", "update", "delete")
         }
+        assigned_plant_val = getattr(user, "assigned_plant", None)
+        if not assigned_plant_val:
+            for slot in (1, 2, 3, 4, 5):
+                if getattr(user, f"can_access_plant_{slot}", False):
+                    assigned_plant_val = f"PLANT_{slot}"
+                    break
+
         return CurrentUser(
             id=user.id,
             username=user.username,
+            assigned_plant=assigned_plant_val,
             is_super_admin=getattr(user, "is_super_admin", False),
             is_superuser=getattr(user, "is_super_admin", False),
             roles=sorted(role.code for role in user.roles),

@@ -47,6 +47,7 @@ class CurrentUser(BaseModel):
     roles: list[str]
     permissions: list[str]
     plant_ids: list[UUID] = Field(default_factory=list)
+    assigned_plant: str | None = None
 
     # 40-Point Granular CRUD Permission Matrix
     masters_read: bool = False
