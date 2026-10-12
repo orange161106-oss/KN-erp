@@ -82,7 +82,7 @@ export function canOpen(user: (UserContextData & Record<string, any>) | null | u
       user.can_access_plant_4 ||
       user.can_access_plant_5
     );
-    if (path === '/inventory') return Boolean(user.inventory_read);
+    if (path.startsWith('/inventory')) return Boolean(user.inventory_read);
     if (path === '/purchase') return Boolean(user.purchase_read);
     if (path === '/purchase-orders') return Boolean(user.purchase_orders_read);
     if (path === '/grns') return Boolean(user.goods_receipts_read);
@@ -98,7 +98,10 @@ export function canOpen(user: (UserContextData & Record<string, any>) | null | u
     '/mappings': ['mappings.read'], '/rules': ['norms.read'],
     '/prd': ['planning.read', 'prd.plan.read'], '/requirements': ['requirements.read'],
     '/plant-workflow': ['plant_workflow:view', 'plant_workflow:confirm', 'plant_workflow:approve'],
-    '/inventory': ['inventory.stock.read'], '/purchase': ['purchasing:view'],
+    '/inventory': ['inventory.stock.read'],
+    '/inventory/statement': ['inventory.stock.read'],
+    '/inventory/management': ['inventory.stock.read'],
+    '/purchase': ['purchasing:view'],
     '/purchase-orders': ['purchase.orders.read'], '/grns': ['purchase.grns.read'],
     '/alerts': ['alerts:view'], '/reports': ['reports.inventory.read', 'reports.purchase.read'],
     '/admin': [],

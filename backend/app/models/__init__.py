@@ -16,6 +16,12 @@ from app.models.plant_workflow import PlantConfirmation, RequirementAdjustment, 
 from app.models.production import Plant, Process, Route, RouteStep
 from app.models.requirements import CalculatedRequirement, RequirementCalculationError
 from app.models.rules import ConsumptionNorm
+from app.models.stock_statements import (
+    StockParameter,
+    StockParameterBatch,
+    StockStatementBatch,
+    StockStatementLine,
+)
 
 __all__ = [
     "GRN",
@@ -61,5 +67,10 @@ __all__ = [
     "RequirementAdjustment",
     "InventoryAlert",
     "PurchaseApproval",
+    "StockStatementBatch",
+    "StockStatementLine",
+    "StockParameterBatch",
+    "StockParameter",
 ]
+
 
