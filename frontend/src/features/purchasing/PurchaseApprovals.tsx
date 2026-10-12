@@ -7,6 +7,7 @@ import type {
   PurchaseApprovalResponse,
   ReviewPurchaseApprovalRequest,
 } from './types';
+import PurchaseWorkspace from './PurchaseWorkspace';
 
 const STATUS_BADGES: Record<ApprovalStatus, string> = {
   PENDING: 'bg-yellow-100 text-yellow-800 border-yellow-200',
@@ -35,7 +36,7 @@ interface PurchaseApprovalsProps {
   currentUserId: string;
 }
 
-type TabKey = 'queue' | 'handoff';
+type TabKey = 'workspace' | 'queue' | 'handoff';
 
 export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsProps) {
   const { user } = useAuth();
@@ -50,7 +51,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
   const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.purchase_update : true));
   const hasActions = Boolean(isSuperAdmin || canUpdate);
 
-  const [activeTab, setActiveTab] = useState<TabKey>('queue');
+  const [activeTab, setActiveTab] = useState<TabKey>('workspace');
   const [items, setItems] = useState<PurchaseApprovalResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +61,10 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
   const fetchItems = useCallback(async () => {
     setLoading(true);
     setError(null);
+    if (activeTab === 'workspace') {
+      setLoading(false);
+      return;
+    }
     try {
       if (activeTab === 'queue') {
         const params = new URLSearchParams();
@@ -138,7 +143,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
       <div>
         <h1 className="text-xl font-bold text-gray-800 mb-1">Purchase Approvals Queue</h1>
         <p className="text-sm text-gray-500">
-          Review, override, or approve purchase recommendations before Purchase Order creation.
+          Build monthly purchase recommendations, then review approved demand before Purchase Order creation.
         </p>
       </div>
 
@@ -148,6 +153,16 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
       {/* Tabs & Filters */}
       <div className="flex flex-wrap items-center justify-between border-b pb-3 gap-4">
         <nav className="flex gap-2">
+          <button
+            onClick={() => setActiveTab('workspace')}
+            className={`px-4 py-2 text-sm font-medium rounded-t-md transition-colors ${
+              activeTab === 'workspace'
+                ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600 font-semibold'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Purchase Plan
+          </button>
           <button
             onClick={() => setActiveTab('queue')}
             className={`px-4 py-2 text-sm font-medium rounded-t-md transition-colors ${
@@ -189,7 +204,9 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
       </div>
 
       {/* Approvals Table */}
-      {loading ? (
+      {activeTab === 'workspace' ? (
+        <PurchaseWorkspace canCreate={canUpdate} />
+      ) : loading ? (
         <TableSkeleton columns={8 + (hasActions ? 1 : 0)} rows={5} />
       ) : items.length === 0 ? (
         <div className="bg-white border rounded-lg p-8 text-center text-gray-500 text-sm">
