@@ -10,7 +10,7 @@ from app.models.inventory_masters import Consumable, Supplier, SupplierConsumabl
 from app.models.inventory import StockImportBatch, StockSnapshot, StockTransaction
 from app.models.projection import ProjectionInputSet
 from app.models.mappings import ProductPlant, ProductProcessConsumable
-from app.models.masters import Customer, Product
+from app.models.masters import Customer, CustomerAlias, Product
 from app.models.prd import ImportBatch, ImportError, PlanningVersion, PRDOrderHeader, PRDOrderItem, PRDRecord
 from app.models.plant_workflow import PlantConfirmation, RequirementAdjustment, UserPlant
 from app.models.production import Plant, Process, Route, RouteStep
@@ -42,6 +42,7 @@ __all__ = [
     "ProductPlant",
     "ProductProcessConsumable",
     "Customer",
+    "CustomerAlias",
     "Product",
     "ImportBatch",
     "ImportError",

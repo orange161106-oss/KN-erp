@@ -60,9 +60,29 @@ class CustomerCreate(CustomerBase):
     pass
 
 
+class CustomerAliasBase(BaseModel):
+    alias_text: str = Field(..., min_length=1, max_length=255)
+    group_label: Optional[str] = Field(default=None, max_length=128)
+
+
+class CustomerAliasCreate(CustomerAliasBase):
+    customer_id: UUID
+
+
+class CustomerAliasResponse(CustomerAliasBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    customer_id: UUID
+    normalized_alias: str
+    is_active: bool
+    created_at: datetime
+
+
 class CustomerResponse(CustomerBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     is_active: bool
     created_at: datetime
+    aliases: list[CustomerAliasResponse] = []

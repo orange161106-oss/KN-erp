@@ -4,20 +4,25 @@ import { useAuth } from '../auth/context';
 import { canPerform } from '../../core/rbac';
 import DataTable, { type ColumnDef } from '../../components/DataTable';
 import Toolbar from '../../components/Toolbar';
-import ExcelUploadModal, { type InspectResult } from '../../components/ExcelUploadModal';
 import ConfirmDialog from '../../components/ConfirmDialog';
+import SalesScheduleImportModal from './SalesScheduleImportModal';
 
 export interface PRDRecord {
   id: string;
   row_index: number | null;
   plant: string;
   customer: string | null;
+  customer_id?: string | null;
+  customer_code?: string | null;
+  customer_group?: string | null;
   product_code: string;
   description: string;
   planned_quantity: string;
   uom: string;
   target_period: string;
   planning_version: string;
+  revision?: string | null;
+  section_type?: string | null;
   status: string;
   remarks: string | null;
   is_new?: boolean;
@@ -50,11 +55,10 @@ export default function PRDPlanning() {
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState('');
   const [plantFilter, setPlantFilter] = useState('');
+  const [customerFilter, setCustomerFilter] = useState('');
   const [periodFilter, setPeriodFilter] = useState('');
   const [versionFilter, setVersionFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [importPeriod, setImportPeriod] = useState('');
-  const [importRevision, setImportRevision] = useState('');
 
   // Modals state
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -67,6 +71,7 @@ export default function PRDPlanning() {
       const params = new URLSearchParams();
       if (searchQuery) params.append('search', searchQuery);
       if (plantFilter) params.append('plant', plantFilter);
+      if (customerFilter) params.append('customer', customerFilter);
       if (periodFilter) params.append('target_period', periodFilter);
       if (versionFilter) params.append('planning_version', versionFilter);
       if (statusFilter) params.append('status', statusFilter);
@@ -88,7 +93,7 @@ export default function PRDPlanning() {
     } finally {
       setIsLoading(false);
     }
-  }, [searchQuery, plantFilter, periodFilter, versionFilter, statusFilter]);
+  }, [searchQuery, plantFilter, customerFilter, periodFilter, versionFilter, statusFilter]);
 
   useEffect(() => {
     void loadRecords();
@@ -101,6 +106,12 @@ export default function PRDPlanning() {
     return Array.from(set).sort();
   }, [records]);
 
+  const uniqueCustomers = useMemo(() => {
+    const set = new Set<string>();
+    records.forEach(r => { if (r.customer) set.add(r.customer); });
+    return Array.from(set).sort();
+  }, [records]);
+
   const uniquePeriods = useMemo(() => {
     const set = new Set<string>();
     records.forEach(r => { if (r.target_period) set.add(r.target_period); });
@@ -109,7 +120,10 @@ export default function PRDPlanning() {
 
   const uniqueVersions = useMemo(() => {
     const set = new Set<string>();
-    records.forEach(r => { if (r.planning_version) set.add(r.planning_version); });
+    records.forEach(r => {
+      const rev = r.revision || r.planning_version;
+      if (rev) set.add(rev);
+    });
     return Array.from(set).sort();
   }, [records]);
 
@@ -117,8 +131,9 @@ export default function PRDPlanning() {
   const filteredRecords = useMemo(() => {
     return records.filter(r => {
       if (plantFilter && r.plant !== plantFilter) return false;
+      if (customerFilter && r.customer !== customerFilter && r.customer_code !== customerFilter) return false;
       if (periodFilter && r.target_period !== periodFilter) return false;
-      if (versionFilter && r.planning_version !== versionFilter) return false;
+      if (versionFilter && r.planning_version !== versionFilter && r.revision !== versionFilter) return false;
       if (statusFilter && r.status !== statusFilter) return false;
       if (!searchQuery) return true;
       const q = searchQuery.toLowerCase();
@@ -126,11 +141,26 @@ export default function PRDPlanning() {
         r.product_code.toLowerCase().includes(q) ||
         r.description.toLowerCase().includes(q) ||
         (r.customer && r.customer.toLowerCase().includes(q)) ||
+        (r.customer_code && r.customer_code.toLowerCase().includes(q)) ||
+        (r.customer_group && r.customer_group.toLowerCase().includes(q)) ||
         r.plant.toLowerCase().includes(q) ||
         (r.remarks && r.remarks.toLowerCase().includes(q))
       );
     });
-  }, [records, plantFilter, periodFilter, versionFilter, statusFilter, searchQuery]);
+  }, [records, plantFilter, customerFilter, periodFilter, versionFilter, statusFilter, searchQuery]);
+
+  // Per-Customer Summaries
+  const customerSummaries = useMemo(() => {
+    const map = new Map<string, { count: number; totalQty: number; code?: string }>();
+    filteredRecords.forEach(r => {
+      const custName = r.customer || 'Unassigned';
+      const existing = map.get(custName) || { count: 0, totalQty: 0, code: r.customer_code || '' };
+      existing.count += 1;
+      existing.totalQty += parseFloat(r.planned_quantity || '0') || 0;
+      map.set(custName, existing);
+    });
+    return Array.from(map.entries()).sort((a, b) => b[1].totalQty - a[1].totalQty);
+  }, [filteredRecords]);
 
   // Unsaved changes count
   const unsavedCount = useMemo(() => {
@@ -141,7 +171,7 @@ export default function PRDPlanning() {
         count++;
       } else {
         const keys: (keyof PRDRecord)[] = [
-          'plant', 'customer', 'product_code', 'description', 'planned_quantity',
+          'plant', 'customer', 'customer_code', 'customer_group', 'product_code', 'description', 'planned_quantity',
           'uom', 'target_period', 'planning_version', 'status', 'remarks'
         ];
         const changed = keys.some(k => String(orig[k] ?? '').trim() !== String(r[k] ?? '').trim());
@@ -169,13 +199,17 @@ export default function PRDPlanning() {
       id: newId,
       row_index: nextIndex,
       plant: plantFilter || (records[0]?.plant ?? 'Plant 1'),
-      customer: 'Default Customer',
+      customer: 'Ashok Leyland',
+      customer_code: 'CUST-AL',
+      customer_group: 'Component',
       product_code: 'NEW-PART-01',
       description: 'New Planned Product',
       planned_quantity: '100.0000',
       uom: 'Nos',
       target_period: periodFilter || new Date().toISOString().slice(0, 7),
-      planning_version: versionFilter || 'V1',
+      planning_version: versionFilter || 'R0',
+      revision: versionFilter || 'R0',
+      section_type: 'STANDARD',
       status: 'DRAFT',
       remarks: '',
       is_new: true,
@@ -195,12 +229,17 @@ export default function PRDPlanning() {
         row_index: idx + 1,
         plant: r.plant,
         customer: r.customer,
+        customer_id: r.customer_id,
+        customer_code: r.customer_code,
+        customer_group: r.customer_group,
         product_code: r.product_code,
         description: r.description,
         planned_quantity: r.planned_quantity,
         uom: r.uom,
         target_period: r.target_period,
-        planning_version: r.planning_version,
+        planning_version: r.planning_version || r.revision || 'R0',
+        revision: r.revision || r.planning_version || 'R0',
+        section_type: r.section_type || 'STANDARD',
         status: r.status,
         remarks: r.remarks,
       }));
@@ -220,10 +259,9 @@ export default function PRDPlanning() {
       res.records.forEach(r => nextMap.set(r.id, { ...r }));
       setOriginalMap(nextMap);
       setDeletedIds([]);
-
       setStatusMessage({
         type: 'success',
-        text: `Saved ${res.saved_count} records successfully${res.deleted_count > 0 ? ` (${res.deleted_count} deleted)` : ''}.`,
+        text: `Saved successfully (${res.saved_count} saved, ${res.deleted_count} deleted).`,
       });
     } catch (err) {
       setStatusMessage({
@@ -235,28 +273,35 @@ export default function PRDPlanning() {
     }
   };
 
-  // Bulk Delete
+  // Delete selected rows
   const handleDeleteSelected = async () => {
-    const toDelete = Array.from(selectedRowIds);
-    if (toDelete.length === 0) return;
-
+    if (selectedRowIds.size === 0) return;
     setIsSaving(true);
+    setStatusMessage(null);
+
     try {
-      const persistedIds = toDelete.filter(id => !id.startsWith('new-'));
-      if (persistedIds.length > 0) {
-        await apiClient.post<{ deleted_count: number }>('/api/v1/prd/workspace/bulk-delete', {
-          ids: persistedIds,
-          reason: 'Deleted from PRD workspace',
+      const realIds: string[] = [];
+      const newIds: string[] = [];
+
+      selectedRowIds.forEach(id => {
+        if (id.startsWith('new-')) newIds.push(id);
+        else realIds.push(id);
+      });
+
+      if (realIds.length > 0) {
+        await apiClient.post('/api/v1/prd/workspace/bulk-delete', {
+          ids: realIds,
+          reason: 'Deleted selected rows via PRD toolbar',
         });
       }
 
       setRecords(prev => prev.filter(r => !selectedRowIds.has(r.id)));
       setSelectedRowIds(new Set());
-      setSelectedCell(null);
       setShowDeleteConfirm(false);
+
       setStatusMessage({
         type: 'success',
-        text: `Successfully deleted ${toDelete.length} record(s).`,
+        text: `Deleted ${realIds.length + newIds.length} row(s) successfully.`,
       });
     } catch (err) {
       setStatusMessage({
@@ -266,41 +311,6 @@ export default function PRDPlanning() {
     } finally {
       setIsSaving(false);
     }
-  };
-
-  // Excel Inspect
-  const handleInspect = async (file: File): Promise<InspectResult> => {
-    const form = new FormData();
-    form.append('file', file);
-    return await apiClient.post<InspectResult>('/api/v1/prd/workspace/inspect', form);
-  };
-
-  // Excel Import
-  const handleImport = async (file: File, sheetName: string) => {
-    const form = new FormData();
-    form.append('file', file);
-    form.append('sheet_name', sheetName);
-    if (importPeriod) form.append('target_period', importPeriod);
-    if (importRevision.trim()) form.append('revision_label', importRevision.trim());
-
-    const res = await apiClient.post<{
-      sheet_name: string;
-      imported_count: number;
-      records: PRDRecord[];
-    }>('/api/v1/prd/workspace/import-sheet', form);
-
-    setRecords(res.records);
-    const nextMap = new Map<string, PRDRecord>();
-    res.records.forEach(r => nextMap.set(r.id, { ...r }));
-    setOriginalMap(nextMap);
-    setDeletedIds([]);
-    setSelectedRowIds(new Set());
-    setShowUploadModal(false);
-
-    setStatusMessage({
-      type: 'success',
-      text: `Successfully imported ${res.imported_count} rows from "${sheetName}".`,
-    });
   };
 
   // Export Excel
@@ -314,6 +324,7 @@ export default function PRDPlanning() {
     } else if (mode === 'FILTERED') {
       if (searchQuery) params.append('search', searchQuery);
       if (plantFilter) params.append('plant', plantFilter);
+      if (customerFilter) params.append('customer', customerFilter);
       if (periodFilter) params.append('target_period', periodFilter);
       if (versionFilter) params.append('planning_version', versionFilter);
       if (statusFilter) params.append('status', statusFilter);
@@ -324,13 +335,13 @@ export default function PRDPlanning() {
     window.open(url, '_blank');
   };
 
-  // Columns definition
+  // Columns definition (Customer, Customer ID, Group first-class visible columns)
   const columns: ColumnDef<PRDRecord>[] = useMemo(
     () => [
       {
         key: 'row_index',
         label: '#',
-        width: 'w-14',
+        width: 48,
         align: 'center',
         isSticky: true,
         render: (_val, _row, _sel) => (
@@ -340,55 +351,73 @@ export default function PRDPlanning() {
         ),
       },
       {
-        key: 'plant',
-        label: 'Plant',
-        width: 'w-28',
-        align: 'left',
-        isSticky: true,
-      },
-      {
         key: 'customer',
         label: 'Customer',
-        width: 'w-36',
+        width: 140,
+        align: 'left',
+        render: val => <span className="font-semibold text-gray-900">{val || '—'}</span>,
+      },
+      {
+        key: 'customer_code',
+        label: 'Customer ID',
+        width: 110,
+        align: 'left',
+        render: val => <span className="font-mono text-xs font-semibold text-gray-700">{val || '—'}</span>,
+      },
+      {
+        key: 'customer_group',
+        label: 'Group',
+        width: 110,
+        align: 'left',
+        render: val => val ? (
+          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-700 border border-gray-200">
+            {val}
+          </span>
+        ) : <span className="text-gray-400">—</span>,
+      },
+      {
+        key: 'plant',
+        label: 'Plant',
+        width: 100,
         align: 'left',
       },
       {
         key: 'product_code',
         label: 'Product / Part No.',
-        width: 'w-36',
+        width: 150,
         align: 'left',
         render: val => <span className="font-mono font-semibold text-blue-900">{val}</span>,
       },
       {
         key: 'description',
         label: 'Description',
-        width: 'w-60',
+        width: 220,
         align: 'left',
       },
       {
         key: 'planned_quantity',
         label: 'Plan Qty',
-        width: 'w-28',
+        width: 110,
         align: 'right',
         render: val => <span className="font-mono font-bold text-gray-900">{val}</span>,
       },
       {
         key: 'uom',
         label: 'Unit',
-        width: 'w-20',
+        width: 80,
         align: 'center',
       },
       {
         key: 'target_period',
         label: 'Month / Date',
-        width: 'w-28',
+        width: 110,
         align: 'center',
         render: val => <span className="font-mono text-gray-700">{val}</span>,
       },
       {
         key: 'planning_version',
-        label: 'Version',
-        width: 'w-24',
+        label: 'Revision',
+        width: 90,
         align: 'center',
         render: val => (
           <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
@@ -397,13 +426,26 @@ export default function PRDPlanning() {
         ),
       },
       {
+        key: 'section_type',
+        label: 'Section',
+        width: 100,
+        align: 'center',
+        render: val => val === 'JOB_WORK' ? (
+          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+            Job Work
+          </span>
+        ) : (
+          <span className="text-[10px] text-gray-500 font-medium">Standard</span>
+        ),
+      },
+      {
         key: 'status',
         label: 'Status',
-        width: 'w-28',
+        width: 100,
         align: 'center',
         render: val => {
           let badge = 'bg-gray-100 text-gray-700 border-gray-300';
-          if (val === 'CONFIRMED' || val === 'ACTIVE') badge = 'bg-emerald-50 text-emerald-800 border-emerald-300';
+          if (val === 'VALIDATED' || val === 'CONFIRMED' || val === 'ACTIVE') badge = 'bg-emerald-50 text-emerald-800 border-emerald-300';
           if (val === 'DRAFT') badge = 'bg-amber-50 text-amber-800 border-amber-300';
           return (
             <span className={`px-2 py-0.5 rounded text-[10px] font-bold tracking-wide border ${badge}`}>
@@ -415,7 +457,7 @@ export default function PRDPlanning() {
       {
         key: 'remarks',
         label: 'Remarks',
-        width: 'w-56',
+        width: 160,
         align: 'left',
       },
     ],
@@ -423,18 +465,24 @@ export default function PRDPlanning() {
   );
 
   return (
-    <div className="flex flex-col h-full space-y-3">
+    <div className="flex flex-col h-full space-y-2.5">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-white px-3.5 py-2.5 rounded-lg border border-gray-200 shadow-2xs flex-shrink-0">
         <div>
-          <h1 className="text-xl font-bold text-gray-900 tracking-tight">Production for sale</h1>
+          <h1 className="text-base font-bold text-gray-900 tracking-tight flex items-center gap-2">
+            <span>Production for sale</span>
+            <span className="text-[11px] font-normal text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded border border-gray-300">
+              Sales Schedule
+            </span>
+          </h1>
           <p className="text-xs text-gray-500 mt-0.5">
-            <span className="font-semibold text-gray-700">PRD / Planning Workspace</span> · Excel-style production plan editor with multi-row selection, bulk operations, and real-time syncing.
+            Production Order sales schedules by customer, part, revision, and planning month.
           </p>
         </div>
+
         {statusMessage && (
           <div
-            className={`px-3 py-1.5 rounded text-xs font-medium border flex items-center gap-1.5 ${
+            className={`px-3 py-1 rounded text-xs font-medium border flex items-center gap-1.5 ${
               statusMessage.type === 'success'
                 ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
                 : statusMessage.type === 'error'
@@ -453,6 +501,41 @@ export default function PRDPlanning() {
           </div>
         )}
       </div>
+
+      {/* Per-Customer Summary Strip */}
+      {customerSummaries.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 px-3 py-1.5 bg-white rounded-lg border border-gray-200 shadow-2xs text-xs flex-shrink-0">
+          <span className="font-bold text-gray-700 text-[11px] uppercase tracking-wider flex items-center gap-1 mr-1">
+            <span>🏢</span> Customers ({customerSummaries.length}):
+          </span>
+          {customerSummaries.map(([custName, stats]) => (
+            <span
+              key={custName}
+              onClick={() => setCustomerFilter(customerFilter === custName ? '' : custName)}
+              title={`Click to filter by ${custName}`}
+              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border cursor-pointer transition-colors ${
+                customerFilter === custName
+                  ? 'bg-blue-100 text-blue-900 border-blue-400 font-bold shadow-xs'
+                  : 'bg-gray-50 hover:bg-gray-100 text-gray-700 border-gray-200'
+              }`}
+            >
+              <span>{custName}</span>
+              <span className="font-mono font-bold text-gray-900">
+                {stats.count} parts ({stats.totalQty.toLocaleString(undefined, { maximumFractionDigits: 1 })} Nos)
+              </span>
+            </span>
+          ))}
+          {customerFilter && (
+            <button
+              type="button"
+              onClick={() => setCustomerFilter('')}
+              className="text-[11px] text-blue-600 hover:underline font-semibold ml-1"
+            >
+              Clear filter
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Workspace Panel */}
       <div className="flex-1 min-h-0 bg-white border border-gray-300 rounded shadow-xs flex flex-col overflow-hidden">
@@ -473,8 +556,18 @@ export default function PRDPlanning() {
           selectedCount={selectedRowIds.size}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
-          searchPlaceholder="🔍 Search plan, part, customer..."
+          searchPlaceholder="🔍 Search part, customer, group..."
           filters={[
+            {
+              key: 'customer',
+              label: 'Customer',
+              value: customerFilter,
+              onChange: setCustomerFilter,
+              options: [
+                { value: '', label: 'All Customers' },
+                ...uniqueCustomers.map(c => ({ value: c, label: c })),
+              ],
+            },
             {
               key: 'plant',
               label: 'Plant',
@@ -497,11 +590,11 @@ export default function PRDPlanning() {
             },
             {
               key: 'version',
-              label: 'Version',
+              label: 'Revision',
               value: versionFilter,
               onChange: setVersionFilter,
               options: [
-                { value: '', label: 'All Versions' },
+                { value: '', label: 'All Revisions' },
                 ...uniqueVersions.map(v => ({ value: v, label: v })),
               ],
             },
@@ -514,13 +607,13 @@ export default function PRDPlanning() {
                 { value: '', label: 'All Statuses' },
                 { value: 'DRAFT', label: 'DRAFT' },
                 { value: 'SAVED', label: 'SAVED' },
-                { value: 'CONFIRMED', label: 'CONFIRMED' },
+                { value: 'VALIDATED', label: 'VALIDATED' },
               ],
             },
           ]}
         />
 
-        {/* Excel Data Grid */}
+        {/* Excel Data Grid with Resizable Height and Section 9A presets */}
         <div className="flex-1 min-h-0">
           <DataTable
             columns={columns}
@@ -530,32 +623,32 @@ export default function PRDPlanning() {
             onSelectionChange={setSelectedRowIds}
             onCellChange={handleCellChange}
             isLoading={isLoading}
-            emptyMessage="No PRD records found. Click 'Add Row' or 'Upload Excel' to start planning."
+            emptyMessage="No production records found. Click 'Upload Excel' to import a Sales Schedule or 'Add Row' to start."
             onAddRow={handleAddRow}
             canCreate={canCreate}
             selectedCell={selectedCell}
             onSelectCell={setSelectedCell}
+            storageKey="knl_prd_planning_grid"
+            onSave={handleSave}
+            onDeleteRows={handleDeleteSelected}
           />
         </div>
       </div>
 
-      {/* Modals */}
-      <ExcelUploadModal
+      {/* Multi-Step Sales Schedule Import Modal */}
+      <SalesScheduleImportModal
         isOpen={showUploadModal}
-        title="Import PRD Planning Excel"
-        subtitle="Select or drag a PRD Excel file (.xlsx) with production plan rows."
         onClose={() => setShowUploadModal(false)}
-        onInspect={handleInspect}
-        onImport={handleImport}
-        isLoading={isSaving}
-      >
-        <div className="flex gap-3 border p-3">
-          <label>Planning month <input type="month" value={importPeriod} onChange={e => setImportPeriod(e.target.value)} /></label>
-          <label>Revision (blank selects latest for this month) <input value={importRevision} placeholder="R3" onChange={e => setImportRevision(e.target.value)} /></label>
-        </div>
-        <p>Review products and plant mappings first. Imports preserve revision history and do not approve requirements.</p>
-      </ExcelUploadModal>
+        onImportSuccess={(count, sheetName) => {
+          setStatusMessage({
+            type: 'success',
+            text: `Successfully imported ${count} sales schedule parts from "${sheetName}".`,
+          });
+          void loadRecords();
+        }}
+      />
 
+      {/* Delete Confirmation Dialog */}
       <ConfirmDialog
         isOpen={showDeleteConfirm}
         title="Confirm Row Deletion"

@@ -4,8 +4,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
 from app.core.errors import ApplicationError
+from app.db.session import get_db
 from app.schemas.auth import CurrentUser
 from app.schemas.prd_workspace import (
     PRDExcelImportResponse,
@@ -15,6 +15,8 @@ from app.schemas.prd_workspace import (
     PRDWorkspaceRecordResponse,
     PRDWorkspaceSaveRequest,
     PRDWorkspaceSaveResponse,
+    SalesScheduleImportConfirmRequest,
+    SalesScheduleImportPreviewResponse,
 )
 from app.security.permissions import require_feature_flag
 from app.services import prd_workspace as service
@@ -36,6 +38,7 @@ def get_prd_workspace_records(
     target_period: Optional[str] = None,
     planning_version: Optional[str] = None,
     status: Optional[str] = None,
+    customer: Optional[str] = None,
     limit: Annotated[int, Query(ge=1, le=1000)] = 500,
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
@@ -46,6 +49,7 @@ def get_prd_workspace_records(
         target_period=target_period,
         planning_version=planning_version,
         status=status,
+        customer=customer,
         limit=limit,
         offset=offset,
     )
@@ -103,6 +107,48 @@ async def inspect_prd_excel(
     return service.inspect_prd_excel(contents, file.filename or "prd.xlsx")
 
 
+@router.post("/import-preview", response_model=SalesScheduleImportPreviewResponse)
+async def preview_sales_schedule(
+    user: CanCreatePRD,
+    session: Annotated[Session, Depends(get_db)],
+    file: UploadFile = File(...),
+    sheet_name: Optional[str] = Form(None),
+    target_period: Optional[str] = Form(None),
+    revision_label: Optional[str] = Form(None),
+):
+    contents = await file.read(10 * 1024 * 1024 + 1)
+    if len(contents) > 10 * 1024 * 1024:
+        raise ApplicationError('SOURCE_TOO_LARGE', 'Use a workbook of at most 10 MB.', 422)
+    return service.preview_sales_schedule_upload(
+        session=session,
+        file_bytes=contents,
+        filename=file.filename or "sales_schedule.xlsx",
+        sheet_name=sheet_name,
+        target_period=target_period,
+        revision_label=revision_label,
+    )
+
+
+@router.post("/import-confirm", response_model=PRDExcelImportResponse)
+def confirm_sales_schedule(
+    data: SalesScheduleImportConfirmRequest,
+    user: CanCreatePRD,
+    session: Annotated[Session, Depends(get_db)],
+):
+    return service.confirm_sales_schedule_import(
+        session=session,
+        file_token=data.file_token,
+        sheet_name=data.sheet_name,
+        target_period=data.target_period,
+        revision_label=data.revision_label,
+        plant_code=data.plant_code,
+        actor=user.id,
+        alias_mappings=data.alias_mappings,
+        mode=data.mode,
+        reason=data.reason,
+    )
+
+
 @router.post("/import-sheet", response_model=PRDExcelImportResponse)
 async def import_prd_sheet(
     user: CanCreatePRD,
@@ -139,6 +185,7 @@ def export_prd_workspace(
     target_period: Optional[str] = None,
     planning_version: Optional[str] = None,
     status: Optional[str] = None,
+    customer: Optional[str] = None,
     record_ids: Annotated[list[UUID] | None, Query()] = None,
 ):
     excel_bytes = service.export_prd_excel(
@@ -148,6 +195,7 @@ def export_prd_workspace(
         target_period=target_period,
         planning_version=planning_version,
         status=status,
+        customer=customer,
         record_ids=record_ids,
     )
     return Response(
@@ -171,4 +219,3 @@ def export_prd_workspace_post(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="prd_planning_workspace.xlsx"'},
     )
-

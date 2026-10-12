@@ -7,13 +7,20 @@ from sqlalchemy.orm import Session
 from app.core.errors import ApplicationError
 from app.db.session import get_db
 from app.schemas.auth import CurrentUser
-from app.schemas.masters import CustomerCreate, CustomerResponse, ProductCreate, ProductResponse
+from app.schemas.masters import (
+    CustomerAliasCreate,
+    CustomerAliasResponse,
+    CustomerCreate,
+    CustomerResponse,
+    ProductBulkCreate,
+    ProductCreate,
+    ProductResponse,
+    ProductSourcePreview,
+)
 from app.security.dependencies import get_current_user
-from app.services.customer import create_customer, list_customers
-from app.services.product import create_product, list_products
-from app.schemas.masters import ProductSourcePreview, ProductBulkCreate
+from app.services.customer import create_customer, create_customer_alias, list_customer_aliases, list_customers
+from app.services.product import create_product, create_products, list_products
 from app.services import product_source
-from app.services.product import create_products
 
 router = APIRouter(prefix="/masters", tags=["masters"])
 
@@ -67,3 +74,23 @@ def post_customer(
         return create_customer(session, data)
     except ValueError as e:
         raise ApplicationError("DUPLICATE_CUSTOMER", str(e), status_code=409)
+
+
+@router.get("/customers/aliases", response_model=list[CustomerAliasResponse], dependencies=[Depends(require_permissions('masters.read'))])
+def get_customer_aliases(
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> Sequence[CustomerAliasResponse]:
+    return list_customer_aliases(session)
+
+
+@router.post("/customers/aliases", response_model=CustomerAliasResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permissions('masters.write'))])
+def post_customer_alias(
+    data: CustomerAliasCreate,
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> CustomerAliasResponse:
+    try:
+        return create_customer_alias(session, data)
+    except ValueError as e:
+        raise ApplicationError("ALIAS_ERROR", str(e), status_code=422)

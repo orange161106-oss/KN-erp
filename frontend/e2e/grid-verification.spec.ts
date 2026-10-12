@@ -86,6 +86,16 @@ test.describe('KNL Consumable ERP - Excel Data Grid Verification', () => {
     await page.locator('a[href="/purchase"]').click();
     await page.waitForTimeout(1000);
 
+    // Verify header bar and collapsible toggle
+    const toggleBtn = page.getByRole('button', { name: /Show details|Hide details/ });
+    await expect(toggleBtn).toBeVisible();
+
+    // If details is collapsed, click to expand and check subtitle
+    if (await page.getByRole('button', { name: 'Show details ▾' }).isVisible()) {
+      await page.getByRole('button', { name: 'Show details ▾' }).click();
+      await page.waitForTimeout(300);
+    }
+
     // Verify subtitle is visible and NOT cut off
     const subtitle = page.locator('text=Build monthly purchase recommendations');
     await expect(subtitle).toBeVisible();
@@ -118,6 +128,11 @@ test.describe('KNL Consumable ERP - Excel Data Grid Verification', () => {
       path: path.join(ARTIFACT_DIR, 'purchase-1920x1080.png'),
       fullPage: true,
     });
+
+    // Test collapse toggle again
+    await page.getByRole('button', { name: 'Hide details ▴' }).click();
+    await page.waitForTimeout(300);
+    await expect(subtitle).not.toBeVisible();
 
     // Viewport 2: 1366x768
     await page.setViewportSize({ width: 1366, height: 768 });
@@ -161,5 +176,91 @@ test.describe('KNL Consumable ERP - Excel Data Grid Verification', () => {
       await page.keyboard.press('Escape');
     }
   });
+
+  test('Production For Sale: Customer columns, summary pills, filter dropdown, and upload modal', async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.locator('a[href="/prd"]').click();
+    await page.waitForTimeout(1000);
+
+    // Verify Title (exact: true to differentiate from breadcrumb/subheadings)
+    await expect(page.getByRole('heading', { name: 'Production for sale', exact: true })).toBeVisible();
+
+    // Verify Customer columns in Table
+    const customerHeader = page.locator('th:has-text("Customer")').first();
+    await expect(customerHeader).toBeVisible();
+    const customerIdHeader = page.locator('th:has-text("Customer ID")').first();
+    await expect(customerIdHeader).toBeVisible();
+    const groupHeader = page.locator('th:has-text("Group")').first();
+    await expect(groupHeader).toBeVisible();
+
+    // Verify Customer Filter dropdown in Toolbar
+    const customerFilter = page.locator('select:has-text("All Customers")');
+    await expect(customerFilter).toBeVisible();
+
+    // Verify "Upload Excel" button in Toolbar
+    const uploadBtn = page.getByRole('button', { name: 'Upload Excel' });
+    await expect(uploadBtn).toBeVisible();
+
+    // Click upload button to open SalesScheduleImportModal
+    await uploadBtn.click();
+    await page.waitForTimeout(400);
+
+    // Verify modal title
+    const modalTitle = page.getByRole('heading', { name: /KNL Sales Schedule Import/ });
+    await expect(modalTitle).toBeVisible();
+
+    // Verify modal has the dropzone and explanation
+    await expect(page.locator('text=Click to select or drag & drop Sales Schedule (.xlsx)')).toBeVisible();
+
+    // Close modal
+    await page.getByRole('button', { name: '✕' }).click();
+    await page.waitForTimeout(300);
+
+    // Save screenshot
+    await page.screenshot({
+      path: path.join(ARTIFACT_DIR, 'prd-planning-1920x1080.png'),
+      fullPage: true,
+    });
+  });
+
+  test('Section 9A: Resizable Table Area, Height Presets, and Fullscreen Expand', async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.locator('a[href="/purchase"]').click();
+    await page.waitForTimeout(1000);
+
+    // Verify Height Preset Buttons exist in the DataTable toolbar
+    const compactBtn = page.locator('button[title*="Compact table height"]');
+    const standardBtn = page.locator('button[title*="Standard table height"]');
+    const largeBtn = page.locator('button[title*="Large table height"]');
+    const fitBtn = page.locator('button[title*="Fit to screen"]');
+
+    await expect(compactBtn).toBeVisible();
+    await expect(standardBtn).toBeVisible();
+    await expect(largeBtn).toBeVisible();
+    await expect(fitBtn).toBeVisible();
+
+    // Verify bottom drag resize handle exists
+    const resizeHandle = page.getByRole('separator', { name: 'Drag to resize table height' });
+    await expect(resizeHandle).toBeVisible();
+
+    // Click Compact preset
+    await compactBtn.click();
+    await page.waitForTimeout(300);
+
+    // Click Fit to screen preset
+    await fitBtn.click();
+    await page.waitForTimeout(300);
+
+    // Verify Fullscreen button
+    const fullscreenBtn = page.locator('button[title*="fullscreen"]');
+    await expect(fullscreenBtn).toBeVisible();
+
+    // Save screenshot of compact header and resizable grid
+    await page.screenshot({
+      path: path.join(ARTIFACT_DIR, 'purchase-compact-header-1920x1080.png'),
+      fullPage: true,
+    });
+  });
 });
+
 

@@ -173,6 +173,119 @@ export default function DataTable<T extends { id: string; row_index?: number | n
     }
   }, [persistentKey, hiddenColumns, customWidths, frozenColKeys]);
 
+  // --- Height Preferences & Resizing State (Section 9A) ---
+  const heightStorageKey = storageKey ? `knl_grid_height_${storageKey}` : null;
+  const loadStoredHeight = useCallback(() => {
+    if (!heightStorageKey) return null;
+    try {
+      const raw = localStorage.getItem(heightStorageKey);
+      if (raw) return JSON.parse(raw);
+    } catch {
+      // ignore
+    }
+    return null;
+  }, [heightStorageKey]);
+
+  const initialHeightPref = useMemo(() => loadStoredHeight(), [loadStoredHeight]);
+
+  const [heightMode, setHeightMode] = useState<'fit' | 'compact' | 'standard' | 'large' | 'custom'>(
+    initialHeightPref?.mode || 'fit'
+  );
+  const [customHeight, setCustomHeight] = useState<number>(
+    initialHeightPref?.customHeight || 540
+  );
+  const [fitHeight, setFitHeight] = useState<number>(540);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isResizingHeight, setIsResizingHeight] = useState(false);
+  const rootContainerRef = useRef<HTMLDivElement>(null);
+
+  // Measure available vertical space for 'fit' mode
+  const updateFitHeight = useCallback(() => {
+    if (!rootContainerRef.current) return;
+    const rect = rootContainerRef.current.getBoundingClientRect();
+    const available = window.innerHeight - rect.top - 24;
+    setFitHeight(Math.max(480, Math.floor(available)));
+  }, []);
+
+  useLayoutEffect(() => {
+    updateFitHeight();
+    const handleResize = () => updateFitHeight();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [updateFitHeight]);
+
+  // Persist height preference
+  useEffect(() => {
+    if (!heightStorageKey) return;
+    try {
+      localStorage.setItem(
+        heightStorageKey,
+        JSON.stringify({ mode: heightMode, customHeight })
+      );
+    } catch {
+      // ignore
+    }
+  }, [heightStorageKey, heightMode, customHeight]);
+
+  // Fullscreen escape listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isFullscreen) {
+        setIsFullscreen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isFullscreen]);
+
+  const currentHeightPx = useMemo(() => {
+    if (isFullscreen) return window.innerHeight;
+    if (heightMode === 'compact') return 380;
+    if (heightMode === 'standard') return 540;
+    if (heightMode === 'large') return 720;
+    if (heightMode === 'custom') return customHeight;
+    return fitHeight;
+  }, [isFullscreen, heightMode, customHeight, fitHeight]);
+
+  const handleStartResizeHeight = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizingHeight(true);
+    const startY = e.clientY;
+    const startH = currentHeightPx;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const diff = moveEvent.clientY - startY;
+      const nextH = Math.max(320, Math.min(window.innerHeight - 50, startH + diff));
+      setCustomHeight(nextH);
+      setHeightMode('custom');
+    };
+
+    const onMouseUp = () => {
+      setIsResizingHeight(false);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  const handleResizeHandleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setCustomHeight(prev => Math.max(320, prev - 20));
+      setHeightMode('custom');
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setCustomHeight(prev => Math.min(window.innerHeight - 50, prev + 20));
+      setHeightMode('custom');
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      setHeightMode('fit');
+      updateFitHeight();
+    }
+  };
+
   const handleResetLayout = () => {
     setHiddenColumns(new Set());
     setCustomWidths({});
@@ -719,7 +832,16 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   }, [selectedCell, columns]);
 
   return (
-    <div className="flex flex-col flex-1 h-full min-h-0 bg-white border border-ink-text/15 rounded-lg shadow-2xs select-none">
+    <div
+      ref={rootContainerRef}
+      style={{
+        height: isFullscreen ? '100vh' : heightMode === 'fit' ? `${fitHeight}px` : `${currentHeightPx}px`,
+        maxHeight: isFullscreen ? '100vh' : undefined,
+      }}
+      className={`flex flex-col min-h-[320px] bg-white border border-ink-text/15 rounded-lg shadow-2xs select-none relative transition-[height] duration-75 ${
+        isFullscreen ? 'fixed inset-0 z-[9990] rounded-none p-3 shadow-2xl' : 'flex-1'
+      }`}
+    >
       {/* 1. Formula Bar & Column Controls Toolbar */}
       <div className="flex items-center gap-2 py-1.5 px-3 bg-vanilla-surface border-b border-ink-text/10 text-xs">
         {/* Cell Reference Box */}
@@ -857,6 +979,72 @@ export default function DataTable<T extends { id: string; row_index?: number | n
               </div>
             </div>
           )}
+        </div>
+
+        {/* Height Presets & Fullscreen Controls (Section 9A) */}
+        <div className="flex items-center gap-1 border-l border-gray-300 pl-2">
+          <div className="flex items-center bg-white border border-gray-300 rounded overflow-hidden text-[11px] shadow-2xs">
+            <button
+              type="button"
+              title="Compact table height (380px)"
+              onClick={() => setHeightMode('compact')}
+              className={`px-2 py-0.5 font-medium transition-colors ${
+                heightMode === 'compact'
+                  ? 'bg-blue-50 text-blue-800 font-bold border-r border-blue-200'
+                  : 'text-gray-600 hover:bg-gray-50 border-r border-gray-200'
+              }`}
+            >
+              Compact
+            </button>
+            <button
+              type="button"
+              title="Standard table height (540px)"
+              onClick={() => setHeightMode('standard')}
+              className={`px-2 py-0.5 font-medium transition-colors ${
+                heightMode === 'standard'
+                  ? 'bg-blue-50 text-blue-800 font-bold border-r border-blue-200'
+                  : 'text-gray-600 hover:bg-gray-50 border-r border-gray-200'
+              }`}
+            >
+              Standard
+            </button>
+            <button
+              type="button"
+              title="Large table height (720px)"
+              onClick={() => setHeightMode('large')}
+              className={`px-2 py-0.5 font-medium transition-colors ${
+                heightMode === 'large'
+                  ? 'bg-blue-50 text-blue-800 font-bold border-r border-blue-200'
+                  : 'text-gray-600 hover:bg-gray-50 border-r border-gray-200'
+              }`}
+            >
+              Large
+            </button>
+            <button
+              type="button"
+              title="Fit to screen height (fills available viewport height)"
+              onClick={() => {
+                setHeightMode('fit');
+                updateFitHeight();
+              }}
+              className={`px-2 py-0.5 font-medium transition-colors ${
+                heightMode === 'fit'
+                  ? 'bg-blue-50 text-blue-800 font-bold'
+                  : 'text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              Fit
+            </button>
+          </div>
+
+          <button
+            type="button"
+            title={isFullscreen ? 'Exit fullscreen (Esc)' : 'Expand table to fullscreen'}
+            onClick={() => setIsFullscreen(prev => !prev)}
+            className="p-1 px-1.5 bg-white hover:bg-gray-50 border border-gray-300 rounded text-gray-700 font-bold text-xs shadow-2xs flex items-center gap-1"
+          >
+            <span>{isFullscreen ? '✕ Exit' : '⛶'}</span>
+          </button>
         </div>
       </div>
 
@@ -1251,7 +1439,33 @@ export default function DataTable<T extends { id: string; row_index?: number | n
         </div>
       </div>
 
-      {/* 5. Custom Right-Click Context Menu (Rendered via Portal) */}
+      {/* 5. Bottom Resize Drag Handle (Section 9A) */}
+      {!isFullscreen && (
+        <div
+          role="separator"
+          tabIndex={0}
+          aria-orientation="horizontal"
+          aria-label="Drag to resize table height"
+          title="Drag up/down to resize height (min 320px) • Double-click for Fit to screen"
+          onMouseDown={handleStartResizeHeight}
+          onDoubleClick={() => {
+            setHeightMode('fit');
+            updateFitHeight();
+          }}
+          onKeyDown={handleResizeHandleKeyDown}
+          className={`h-2.5 w-full bg-gray-100 hover:bg-burnt-orange/20 border-t border-gray-300 flex items-center justify-center cursor-row-resize select-none transition-colors group focus:outline-none focus:ring-1 focus:ring-burnt-orange ${
+            isResizingHeight ? 'bg-burnt-orange/30' : ''
+          }`}
+        >
+          <div className="w-12 h-1 bg-gray-400 group-hover:bg-burnt-orange rounded-full flex items-center justify-center space-x-1">
+            <span className="w-1 h-1 bg-white rounded-full"></span>
+            <span className="w-1 h-1 bg-white rounded-full"></span>
+            <span className="w-1 h-1 bg-white rounded-full"></span>
+          </div>
+        </div>
+      )}
+
+      {/* 6. Custom Right-Click Context Menu (Rendered via Portal) */}
       {contextMenu &&
         createPortal(
           <div

@@ -242,48 +242,28 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
   ];
 
   return (
-    <div className="flex flex-col h-full space-y-3">
-      <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 bg-white p-3 rounded border border-gray-200 shadow-2xs flex-shrink-0">
-        <div>
-          <h2 className="text-base font-bold text-gray-900 tracking-tight flex items-center gap-2">
-            <span>Purchase Plan Workspace</span>
-            <span className="text-xs font-normal text-gray-500 bg-gray-100 px-2 py-0.5 rounded border border-gray-300">
-              Deterministic Planning
-            </span>
-          </h2>
-          <p className="text-xs text-gray-500 mt-0.5">
-            Monthly purchase recommendations from approved requirement shortages.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="px-2 py-1 bg-gray-50 border rounded">Revision: <strong>{planMetadata?.revision_label ?? 'R0'}</strong></span>
-          <span className="px-2 py-1 bg-gray-50 border rounded">Records: <strong>{summary.total}</strong></span>
-          <span className="px-2 py-1 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded">Ready: <strong>{summary.ready}</strong></span>
-          <span className="px-2 py-1 bg-blue-50 border border-blue-200 text-blue-800 rounded">Submitted: <strong>{summary.submitted}</strong></span>
-          <span className="px-2 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded">Blocked: <strong>{summary.blocked}</strong></span>
-        </div>
-      </div>
-
-      <div className="bg-white border border-gray-200 rounded p-2 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="text-xs font-bold text-gray-700">
-            Planning Month:
+    <div className="flex flex-col h-full space-y-2">
+      {/* Compact Controls & Summary Bar (Section 9A) */}
+      <div className="bg-white border border-gray-200 rounded-lg p-2 flex flex-wrap items-center justify-between gap-2 shadow-2xs flex-shrink-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-xs font-semibold text-gray-700 flex items-center">
+            Month:
             <select
               aria-label="Planning Month"
               value={selectedMonth}
               onChange={e => setSelectedMonth(Number(e.target.value))}
-              className="ml-2 px-2.5 py-1 text-xs border border-gray-300 rounded bg-white text-gray-800 font-medium"
+              className="ml-1.5 px-2 py-1 text-xs border border-gray-300 rounded bg-white text-gray-800 font-medium"
             >
               {MONTH_NAMES.map((month, idx) => <option key={month} value={idx + 1}>{month}</option>)}
             </select>
           </label>
-          <label className="text-xs font-bold text-gray-700">
-            Planning Year:
+          <label className="text-xs font-semibold text-gray-700 flex items-center">
+            Year:
             <select
               aria-label="Planning Year"
               value={selectedYear}
               onChange={e => setSelectedYear(Number(e.target.value))}
-              className="ml-2 px-2.5 py-1 text-xs border border-gray-300 rounded bg-white text-gray-800 font-medium"
+              className="ml-1.5 px-2 py-1 text-xs border border-gray-300 rounded bg-white text-gray-800 font-medium"
             >
               {[2024, 2025, 2026, 2027, 2028, 2029, 2030].map(year => <option key={year}>{year}</option>)}
             </select>
@@ -292,18 +272,27 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
             type="button"
             onClick={() => void loadWorkspace()}
             disabled={isLoading}
-            className="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-800 border border-gray-300 rounded font-semibold text-xs"
+            className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-800 border border-gray-300 rounded font-semibold text-xs transition-colors"
           >
-            Load Purchase Plan
+            {isLoading ? 'Loading…' : 'Load Plan'}
           </button>
+
+          <div className="hidden sm:flex items-center gap-1.5 text-[11px] ml-2 border-l border-gray-200 pl-2">
+            <span className="px-1.5 py-0.5 bg-gray-50 border rounded text-gray-600">Rev: <strong>{planMetadata?.revision_label ?? 'R0'}</strong></span>
+            <span className="px-1.5 py-0.5 bg-gray-50 border rounded text-gray-600">Total: <strong>{summary.total}</strong></span>
+            <span className="px-1.5 py-0.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded">Ready: <strong>{summary.ready}</strong></span>
+            <span className="px-1.5 py-0.5 bg-blue-50 border border-blue-200 text-blue-800 rounded">Submitted: <strong>{summary.submitted}</strong></span>
+            <span className="px-1.5 py-0.5 bg-amber-50 border border-amber-200 text-amber-800 rounded">Blocked: <strong>{summary.blocked}</strong></span>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+
+        <div className="flex flex-wrap items-center gap-1.5">
           {canCreate && (
             <button
               type="button"
               onClick={() => void submitSelected()}
               disabled={isSubmitting || readySelectedIds.length === 0}
-              className="px-3 py-1 bg-brand-navy hover:bg-opacity-90 disabled:opacity-50 text-white rounded font-semibold text-xs shadow-2xs"
+              className="px-3 py-1 bg-brand-navy hover:bg-opacity-90 disabled:opacity-50 text-white rounded font-semibold text-xs shadow-2xs transition-colors"
             >
               {isSubmitting ? 'Submitting...' : `Submit to Approval${readySelectedIds.length ? ` (${readySelectedIds.length})` : ''}`}
             </button>
@@ -311,14 +300,14 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
           <button
             type="button"
             onClick={() => exportRows(selectedRowIds.size ? 'SELECTED' : 'ALL')}
-            className="px-3 py-1 bg-white hover:bg-gray-50 border border-gray-300 text-gray-800 rounded font-semibold text-xs shadow-2xs"
+            className="px-2.5 py-1 bg-white hover:bg-gray-50 border border-gray-300 text-gray-800 rounded font-semibold text-xs shadow-2xs transition-colors"
           >
             Export Excel
           </button>
           <button
             type="button"
             onClick={() => exportRows('FILTERED')}
-            className="px-3 py-1 bg-white hover:bg-gray-50 border border-gray-300 text-gray-800 rounded font-semibold text-xs shadow-2xs"
+            className="px-2.5 py-1 bg-white hover:bg-gray-50 border border-gray-300 text-gray-800 rounded font-semibold text-xs shadow-2xs transition-colors"
           >
             Export Filtered
           </button>
