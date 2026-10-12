@@ -138,11 +138,16 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="flex flex-col h-full space-y-4">
       {/* Header */}
-      <div>
-        <h1 className="text-xl font-bold text-gray-800 mb-1">Purchase Approvals Queue</h1>
-        <p className="text-sm text-gray-500">
+      <div className="bg-white p-3 rounded border border-gray-200 shadow-2xs flex-shrink-0">
+        <h1 className="text-lg font-bold text-gray-900 tracking-tight flex items-center gap-2">
+          <span>Purchase Planning & Approvals</span>
+          <span className="text-xs font-normal text-gray-500 bg-gray-100 px-2 py-0.5 rounded border border-gray-300">
+            Purchasing Module
+          </span>
+        </h1>
+        <p className="text-xs text-gray-500 mt-0.5">
           Build monthly purchase recommendations, then review approved demand before Purchase Order creation.
         </p>
       </div>
@@ -151,13 +156,13 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
       {success && <AlertBox message={success} type="success" />}
 
       {/* Tabs & Filters */}
-      <div className="flex flex-wrap items-center justify-between border-b pb-3 gap-4">
+      <div className="flex flex-wrap items-center justify-between border-b pb-2 gap-4 flex-shrink-0">
         <nav className="flex gap-2">
           <button
             onClick={() => setActiveTab('workspace')}
-            className={`px-4 py-2 text-sm font-medium rounded-t-md transition-colors ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-t-md transition-colors ${
               activeTab === 'workspace'
-                ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600 font-semibold'
+                ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600 font-bold'
                 : 'text-gray-500 hover:text-gray-700'
             }`}
           >
@@ -165,9 +170,9 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
           </button>
           <button
             onClick={() => setActiveTab('queue')}
-            className={`px-4 py-2 text-sm font-medium rounded-t-md transition-colors ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-t-md transition-colors ${
               activeTab === 'queue'
-                ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600 font-semibold'
+                ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600 font-bold'
                 : 'text-gray-500 hover:text-gray-700'
             }`}
           >
@@ -175,9 +180,9 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
           </button>
           <button
             onClick={() => setActiveTab('handoff')}
-            className={`px-4 py-2 text-sm font-medium rounded-t-md transition-colors ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-t-md transition-colors ${
               activeTab === 'handoff'
-                ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600 font-semibold'
+                ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600 font-bold'
                 : 'text-gray-500 hover:text-gray-700'
             }`}
           >
@@ -189,7 +194,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
           <div className="flex items-center gap-2">
             <label className="text-xs text-gray-600 font-medium">Filter Status:</label>
             <select
-              className="border rounded px-3 py-1.5 text-sm"
+              className="border rounded px-2.5 py-1 text-xs"
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as ApprovalStatus | '')}
             >
@@ -203,16 +208,17 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
         )}
       </div>
 
-      {/* Approvals Table */}
-      {activeTab === 'workspace' ? (
-        <PurchaseWorkspace canCreate={canUpdate} />
-      ) : loading ? (
-        <TableSkeleton columns={8 + (hasActions ? 1 : 0)} rows={5} />
-      ) : items.length === 0 ? (
-        <div className="bg-white border rounded-lg p-8 text-center text-gray-500 text-sm">
-          No purchase recommendations found in this view.
-        </div>
-      ) : (
+      {/* Content Area */}
+      <div className="flex-1 min-h-0 flex flex-col">
+        {activeTab === 'workspace' ? (
+          <PurchaseWorkspace canCreate={canUpdate} />
+        ) : loading ? (
+          <TableSkeleton columns={8 + (hasActions ? 1 : 0)} rows={5} />
+        ) : items.length === 0 ? (
+          <div className="bg-white border rounded-lg p-8 text-center text-gray-500 text-sm">
+            No purchase recommendations found in this view.
+          </div>
+        ) : (
         <div className="bg-white border border-ink-text/10 rounded-lg overflow-hidden shadow-2xs">
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm border-collapse">
@@ -299,6 +305,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

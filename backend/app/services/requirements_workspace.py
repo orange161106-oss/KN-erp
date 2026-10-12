@@ -866,6 +866,87 @@ def batch_update_requirements(
     )
 
 
+def delete_requirement_record(
+    session, record_id: UUID, current_user_id: UUID, reason: Optional[str] = None
+) -> None:
+    rec = session.get(MonthlyRequirementRecord, record_id)
+    if not rec or rec.is_deleted:
+        raise ApplicationError("RECORD_NOT_FOUND", "Requirement record not found.", 404)
+
+    rec.is_deleted = True
+    now = datetime.now(timezone.utc)
+    rec.updated_at = now
+
+    if rec.planning_version_id:
+        v = session.get(PlanningVersion, rec.planning_version_id)
+        if v:
+            v.updated_at = now
+            v.updated_by = current_user_id
+
+    session.add(
+        AuditLog(
+            actor_id=current_user_id,
+            action="DELETE",
+            entity_type="monthly_requirement_records",
+            entity_id=record_id,
+            old_values={"part_number": rec.part_number, "consumable_code": rec.consumable_code},
+            new_values={"is_deleted": True},
+            reason=reason or "Deleted single requirement record",
+        )
+    )
+    session.commit()
+
+
+def bulk_delete_requirement_records(
+    session, record_ids: list[UUID], current_user_id: UUID, reason: Optional[str] = None
+) -> tuple[int, Optional[MonthlyPlanMetadata]]:
+    if not record_ids:
+        return 0, None
+
+    deleted_count = 0
+    affected_version_ids = set()
+    sample_version = None
+    now = datetime.now(timezone.utc)
+
+    for r_id in record_ids:
+        rec = session.get(MonthlyRequirementRecord, r_id)
+        if not rec or rec.is_deleted:
+            continue
+        rec.is_deleted = True
+        rec.updated_at = now
+        if rec.planning_version_id:
+            affected_version_ids.add(rec.planning_version_id)
+        deleted_count += 1
+
+    for v_id in affected_version_ids:
+        v = session.get(PlanningVersion, v_id)
+        if v:
+            v.updated_at = now
+            v.updated_by = current_user_id
+            sample_version = v
+
+    if sample_version:
+        session.add(
+            AuditLog(
+                actor_id=current_user_id,
+                action="BULK_DELETE",
+                entity_type="planning_versions",
+                entity_id=sample_version.id,
+                old_values=None,
+                new_values={"deleted_count": deleted_count},
+                reason=reason or f"Bulk deleted {deleted_count} requirement records",
+            )
+        )
+
+    session.commit()
+
+    meta = None
+    if sample_version and sample_version.planning_month and sample_version.planning_year:
+        meta = get_monthly_plan_metadata(session, sample_version.planning_month, sample_version.planning_year)
+
+    return deleted_count, meta
+
+
 def recalculate_monthly_requirements(
     session, current_user_id: UUID, month: int, year: int
 ) -> RequirementRecalculateResponse:
