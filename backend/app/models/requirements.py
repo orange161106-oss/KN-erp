@@ -4,6 +4,7 @@ from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -127,4 +128,56 @@ class RequirementCalculationError(Base):
     product: Mapped["Product"] = relationship("Product")  # noqa: F821
     plant: Mapped[Optional["Plant"]] = relationship("Plant")  # noqa: F821
     consumable: Mapped[Optional["Consumable"]] = relationship("Consumable")  # noqa: F821
+
+
+class MonthlyRequirementRecord(Base):
+    __tablename__ = "monthly_requirement_records"
+    __table_args__ = (
+        Index("ix_monthly_req_period", "planning_period"),
+        Index("ix_monthly_req_consumable", "consumable_code"),
+        Index("ix_monthly_req_part", "part_number"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    planning_version_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("planning_versions.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    planning_period: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
+    planning_month: Mapped[int] = mapped_column(Integer, nullable=False)
+    planning_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    row_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # 1. Component identifiers
+    part_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    part_number: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    # 2. Consumable attributes & process specs
+    consumable_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    consumable_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    process_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    part_thickness: Mapped[Decimal] = mapped_column(Numeric(10, 4), default=Decimal("0.0000"), nullable=False)
+    process_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    # 3. Monthly Quantities
+    production_order_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
+    scheduled_consumable_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
+
+    # 4. Inventory, Unit & Status
+    unit: Mapped[str] = mapped_column(String(32), default="NOS", nullable=False)
+    plant: Mapped[str] = mapped_column(String(64), default="Plant 1", nullable=False)
+    stock_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
+    shortage_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
+    po_pending_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
+    msl: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
+    status: Mapped[str] = mapped_column(String(64), default="DRAFT", nullable=False)
+    remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # 5. Audit
+    created_by: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    planning_version: Mapped[Optional["PlanningVersion"]] = relationship("PlanningVersion")  # noqa: F821
+
 

@@ -34,9 +34,10 @@ def login(
     client_ip: str | None = None,
 ) -> TokenResponse:
     try:
-        user = find_user_by_username(session, credentials.username)
+         user = find_user_by_username(session, credentials.username)
     except SQLAlchemyError:
-        raise database_unavailable() from None
+         logger.exception("authentication_database_unavailable")
+         raise database_unavailable() from None
     password = credentials.password.get_secret_value()
     if user is None:
         passwords.verify_dummy(password)

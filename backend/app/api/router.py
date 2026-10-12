@@ -17,6 +17,7 @@ from app.modules.inventory.reorder_router import router as reorder_router
 from app.modules.alerts.router import router as alerts_router
 from app.modules.purchasing.recommendation_router import router as purchase_recommendation_router
 from app.modules.purchasing.approval_router import router as purchase_approval_router
+from app.modules.purchasing.workspace_router import router as purchase_workspace_router
 
 from app.modules.po_grn.router import router as purchase_orders_router
 from app.modules.po_grn.grn_router import router as grn_router
@@ -49,6 +50,7 @@ api_router.include_router(reorder_router)
 api_router.include_router(alerts_router)
 api_router.include_router(purchase_recommendation_router)
 api_router.include_router(purchase_approval_router)
+api_router.include_router(purchase_workspace_router)
 api_router.include_router(reports_router)
 api_router.include_router(inventory_purchase_reports_router)
 

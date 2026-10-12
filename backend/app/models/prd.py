@@ -37,6 +37,10 @@ class PlanningVersion(Base):
     status: Mapped[str] = mapped_column(String(32), default="DRAFT", nullable=False)  # DRAFT, VALIDATED, LOCKED, CALCULATED, RELEASED_TO_PLANTS, SUPERSEDED
     created_by: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_by: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    planning_month: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    planning_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     calculated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
