@@ -32,7 +32,7 @@ export default function StockStatementUpload({ onImported }: { onImported: () =>
       const data = new FormData(); data.append('file', file); data.append('sheet_name', sheet);
       data.append('as_of', new Date(cutoff).toISOString()); data.append('generated_at', new Date(generated).toISOString());
       data.append('exclusions_confirmed', 'true');
-      const result = await apiClient.postFormData<Preview>('/api/v1/inventory/statement/preview', data); setPreview(result);
+      const result = await apiClient.postFormData<Preview>('/api/v1/inventory/daily-statement/preview', data); setPreview(result);
     })}>Validate and preview statement</button>
     {preview && <>
       <p>{preview.snapshots.length} material balances validated. Reported at {new Date(preview.snapshots[0]?.as_of || cutoff).toLocaleString()}.</p>
