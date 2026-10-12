@@ -148,12 +148,21 @@ def get_statement_end_date(year: int, month: int) -> date:
 
 def parse_and_preview_stock_statement(
     session: Session,
-    file_bytes: bytes,
-    filename: str,
-    selected_month: int,
-    selected_year: int,
+    file_bytes: bytes = b"",
+    filename: str = "",
+    selected_month: int = 1,
+    selected_year: int = 2026,
+    content: Optional[bytes] = None,
+    month: Optional[int] = None,
+    year: Optional[int] = None,
 ) -> StockStatementPreviewResponse:
     """Inspect and validate an uploaded stock statement Excel file."""
+    if content is not None:
+        file_bytes = content
+    if month is not None:
+        selected_month = month
+    if year is not None:
+        selected_year = year
     statement_end = get_statement_end_date(selected_year, selected_month)
     file_hash = hashlib.sha256(file_bytes).hexdigest()
 
@@ -269,13 +278,19 @@ def parse_and_preview_stock_statement(
 
     # Iterate rows
     for r in range(header_row_idx + 1, sheet.max_row + 1):
+        # Check if entire row is empty (ignore empty string or whitespace cells)
+        row_has_data = any(
+            sheet.cell(row=r, column=c).value is not None
+            and str(sheet.cell(row=r, column=c).value).strip() != ""
+            for c in range(1, sheet.max_column + 1)
+        )
+        if not row_has_data:
+            continue
+
         item_id_raw = sheet.cell(row=r, column=col_mapping.get("item_id", 1)).value
         if item_id_raw is None or not str(item_id_raw).strip():
-            # Check if entire row is empty
-            row_has_data = any(sheet.cell(row=r, column=c).value is not None for c in range(1, sheet.max_column + 1))
-            if row_has_data:
-                # Missing Item ID on non-empty row
-                errors.append(RowIssue(row=r, column="Item Id", description="Row has data but Item Id is empty.", severity="ERROR"))
+            # Missing Item ID on non-empty row
+            errors.append(RowIssue(row=r, column="Item Id", description="Row has data but Item Id is empty.", severity="ERROR"))
             continue
 
         item_id_str = str(item_id_raw).strip()
@@ -283,6 +298,20 @@ def parse_and_preview_stock_statement(
 
         # Skip total / subtotal summary rows
         if "TOTAL" in item_id_upper or "GRAND TOTAL" in item_id_upper or "SUB TOTAL" in item_id_upper:
+            continue
+
+        # Skip banner / section category headers (e.g. 'KNITVEL NEEDLES', 'Loc. Id. : CONSUMABLES STORE', 'Ashok Leyland - CHILD PARTS', 'BENDING TOOL', etc.)
+        # Section banners have no unit and no opening/receipt/issue/closing quantities or values
+        unit_raw = sheet.cell(row=r, column=col_mapping["unit"]).value if "unit" in col_mapping else None
+        has_unit = unit_raw is not None and str(unit_raw).strip() != ""
+        qty_val_keys = ["opening_qty", "opening_value", "receipt_qty", "receipt_value", "issue_qty", "issue_value", "closing_qty", "closing_value"]
+        has_any_qty_or_val = any(
+            (sheet.cell(row=r, column=col_mapping[k]).value is not None and str(sheet.cell(row=r, column=col_mapping[k]).value).strip() != "")
+            for k in qty_val_keys if k in col_mapping
+        )
+        if not has_unit and not has_any_qty_or_val:
+            continue
+        if item_id_upper.startswith("LOC. ID") or "KNITVEL" in item_id_upper:
             continue
 
         # Duplicate Item ID check within file
@@ -597,6 +626,7 @@ def get_stock_statement(
     year: int,
     search: Optional[str] = None,
     unit_filter: Optional[str] = None,
+    has_warnings_only: bool = False,
 ) -> StockStatementResponse:
     """Retrieve the active stock statement for the specified month and year."""
     statement_end = get_statement_end_date(year, month)
@@ -650,12 +680,7 @@ def get_stock_statement(
         ).where(StockStatementLine.batch_id == batch.id)
     ).one()
 
-    warning_rows_count = session.scalar(
-        select(func.count(StockStatementLine.id)).where(
-            StockStatementLine.batch_id == batch.id,
-            func.jsonb_array_length(StockStatementLine.warning_codes) > 0,
-        )
-    ) or 0
+    warning_rows_count = sum(1 for l in lines if l.warning_codes and len(l.warning_codes) > 0)
 
     records: list[StockStatementLineResponse] = []
     for l in lines:
@@ -688,6 +713,9 @@ def get_stock_statement(
                 diff_closing_value=diff_v,
             )
         )
+
+    if has_warnings_only:
+        records = [r for r in records if r.warning_codes and len(r.warning_codes) > 0]
 
     meta = StockStatementMetadata(
         has_statement=True,

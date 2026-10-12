@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional
-import uuid
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
@@ -10,11 +10,12 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
+    Uuid,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -25,9 +26,7 @@ class StockStatementBatch(Base):
 
     __tablename__ = "stock_statement_batches"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     statement_month: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     statement_year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     statement_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -39,10 +38,10 @@ class StockStatementBatch(Base):
 
     row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     warning_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    validation_summary: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    validation_summary: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
 
-    uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    uploaded_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -55,8 +54,8 @@ class StockStatementBatch(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    created_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -64,8 +63,8 @@ class StockStatementBatch(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
-    updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    updated_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
     # Relationships
@@ -85,19 +84,17 @@ class StockStatementLine(Base):
 
     __tablename__ = "stock_statement_lines"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    batch_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    batch_id: Mapped[UUID] = mapped_column(
+        Uuid,
         ForeignKey("stock_statement_batches.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
     item_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    consumable_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
+    consumable_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid,
         ForeignKey("consumables.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
@@ -133,7 +130,7 @@ class StockStatementLine(Base):
     )
 
     source_row: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    warning_codes: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
+    warning_codes: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -158,9 +155,7 @@ class StockParameterBatch(Base):
 
     __tablename__ = "stock_parameter_batches"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     month: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -171,10 +166,10 @@ class StockParameterBatch(Base):
     )  # active, superseded
 
     row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    summary: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    summary: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
 
-    uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    uploaded_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -187,8 +182,8 @@ class StockParameterBatch(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    created_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -196,8 +191,8 @@ class StockParameterBatch(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
-    updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    updated_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
     # Relationships
@@ -217,19 +212,17 @@ class StockParameter(Base):
 
     __tablename__ = "stock_parameters"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    batch_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    batch_id: Mapped[UUID] = mapped_column(
+        Uuid,
         ForeignKey("stock_parameter_batches.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
     item_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    consumable_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
+    consumable_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid,
         ForeignKey("consumables.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
@@ -266,8 +259,8 @@ class StockParameter(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
-    updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    updated_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
     # Relationships

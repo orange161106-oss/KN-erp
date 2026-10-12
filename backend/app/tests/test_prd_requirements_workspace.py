@@ -191,10 +191,10 @@ def test_prd_export_excel(workspace_client):
 
     wb = openpyxl.load_workbook(io.BytesIO(export_res.content))
     ws = wb.active
-    assert ws.cell(row=1, column=2).value == "Plant"
-    assert ws.cell(row=1, column=3).value == "Customer"
-    assert ws.cell(row=1, column=4).value == "Product/Part No."
-    assert ws.cell(row=2, column=4).value == "EXP-01"
+    assert ws.cell(row=1, column=2).value == "Customer"
+    assert ws.cell(row=1, column=5).value == "Plant"
+    assert ws.cell(row=1, column=6).value == "Product / Part No."
+    assert ws.cell(row=2, column=6).value == "EXP-01"
 
 
 def test_requirements_workspace(workspace_client):

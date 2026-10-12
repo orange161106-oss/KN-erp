@@ -30,6 +30,7 @@ Database = Annotated[Session, Depends(get_db)]
 
 
 @router.get("", response_model=StockStatementResponse)
+@router.get("/", response_model=StockStatementResponse, include_in_schema=False)
 def get_statement(
     session: Database,
     user: ReadUser,

@@ -158,12 +158,21 @@ def get_previous_month(month: int, year: int) -> tuple[int, int]:
 
 def parse_and_preview_stock_parameters(
     session: Session,
-    file_bytes: bytes,
-    filename: str,
-    selected_month: int,
-    selected_year: int,
+    file_bytes: bytes = b"",
+    filename: str = "",
+    selected_month: int = 1,
+    selected_year: int = 2026,
+    content: Optional[bytes] = None,
+    month: Optional[int] = None,
+    year: Optional[int] = None,
 ) -> StockParameterPreviewResponse:
     """Validate stock parameters workbook and compare against previous month."""
+    if content is not None:
+        file_bytes = content
+    if month is not None:
+        selected_month = month
+    if year is not None:
+        selected_year = year
     effective_date = date(selected_year, selected_month, 1)
     file_hash = hashlib.sha256(file_bytes).hexdigest()
 
@@ -188,13 +197,20 @@ def parse_and_preview_stock_parameters(
         "description": "description",
         "item description": "description",
         "min stock level": "min_stock_level",
+        "minimum stock level": "min_stock_level",
         "msl": "min_stock_level",
         "max stock level": "max_stock_level",
+        "maximum stock level": "max_stock_level",
         "minimum order qty": "min_order_qty",
         "min order qty": "min_order_qty",
+        "minimum order quantity": "min_order_qty",
+        "minimum order quanity": "min_order_qty",
+        "min order quantity": "min_order_qty",
+        "min order quanity": "min_order_qty",
         "moq": "min_order_qty",
         "lead time to supply in days": "lead_time_days",
         "lead time in days": "lead_time_days",
+        "lead time to supply": "lead_time_days",
         "lead time": "lead_time_days",
     }
 
@@ -289,7 +305,11 @@ def parse_and_preview_stock_parameters(
     for r in range(header_row_idx + 1, sheet.max_row + 1):
         item_id_raw = sheet.cell(row=r, column=col_mapping.get("item_id", 1)).value
         if item_id_raw is None or not str(item_id_raw).strip():
-            row_has_data = any(sheet.cell(row=r, column=c).value is not None for c in range(1, sheet.max_column + 1))
+            row_has_data = any(
+                sheet.cell(row=r, column=c).value is not None
+                and str(sheet.cell(row=r, column=c).value).strip() != ""
+                for c in range(1, sheet.max_column + 1)
+            )
             if row_has_data:
                 errors.append(RowIssue(row=r, column="Item Id", description="Row has data but Item Id is empty.", severity="ERROR"))
             continue

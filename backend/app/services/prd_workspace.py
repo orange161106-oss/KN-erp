@@ -14,10 +14,10 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApplicationError
-from app.models.mappings import ProductPlant
+from app.models.mappings import ProductPlant, ProductProcessConsumable
 from app.models.masters import Customer, CustomerAlias, Product
 from app.models.prd import ImportBatch, PlanningVersion, PRDOrderHeader, PRDOrderItem, PRDRecord
-from app.models.production import Plant
+from app.models.production import Plant, Route, RouteStep
 from app.schemas.prd_workspace import (
     PRDExcelImportResponse,
     PRDExcelInspectResponse,
@@ -403,6 +403,208 @@ def inspect_prd_excel(file_bytes: bytes, filename: str) -> PRDExcelInspectRespon
 # Sales Schedule Multi-Step Preview & Confirmation
 # ---------------------------------------------------------------------------
 
+def _resolve_route_for_product(session: Session, product_id: UUID, plant_id: Optional[UUID] = None) -> Optional[UUID]:
+    """Deterministically resolve a valid production route associated with a product.
+
+    1. First, check active ProductPlant mappings for this product across any plant.
+       Prioritize mappings for the same plant, then primary mappings, then earliest created.
+    2. Second, check if the product has assigned processes via ProductProcessConsumable,
+       and find an active Route containing those processes via RouteStep.
+    3. Return None if no valid route is deterministically associated.
+    """
+    stmt = (
+        select(ProductPlant)
+        .where(
+            ProductPlant.product_id == product_id,
+            ProductPlant.is_active.is_(True),
+        )
+    )
+    if plant_id:
+        stmt = stmt.order_by(
+            (ProductPlant.plant_id == plant_id).desc(),
+            ProductPlant.is_primary.desc(),
+            ProductPlant.created_at.asc(),
+        )
+    else:
+        stmt = stmt.order_by(
+            ProductPlant.is_primary.desc(),
+            ProductPlant.created_at.asc(),
+        )
+
+    for pp in session.scalars(stmt).all():
+        if pp.route_id:
+            route = session.get(Route, pp.route_id)
+            if route and route.is_active:
+                return route.id
+
+    ppc_process_ids = list(session.scalars(
+        select(ProductProcessConsumable.process_id)
+        .where(
+            ProductProcessConsumable.product_id == product_id,
+            ProductProcessConsumable.is_active.is_(True),
+        )
+    ).all())
+    if ppc_process_ids:
+        candidate_route = session.scalars(
+            select(Route)
+            .join(RouteStep, Route.id == RouteStep.route_id)
+            .where(
+                Route.is_active.is_(True),
+                RouteStep.process_id.in_(ppc_process_ids),
+            )
+            .order_by(Route.name.asc())
+        ).first()
+        if candidate_route:
+            return candidate_route.id
+
+    return None
+
+
+def _lookup_or_create_product(
+    session: Session,
+    product_cache: dict[str, Product],
+    p_code: str,
+    part_no: Optional[str],
+    item_id: Optional[str],
+    description: Optional[str],
+    uom: Optional[str],
+) -> Product:
+    """Find existing product or create new one safely without violating uniqueness constraints."""
+    norm_part = part_no.strip() if part_no else None
+    norm_item = item_id.strip() if item_id else None
+    norm_code = p_code.strip() if p_code else None
+
+    existing_prod: Optional[Product] = None
+    if norm_part and norm_item:
+        existing_prod = product_cache.get(f"pair:{norm_part.upper()}:{norm_item.upper()}")
+    if not existing_prod and norm_code:
+        existing_prod = product_cache.get(f"code:{norm_code.upper()}")
+    if not existing_prod and norm_part:
+        existing_prod = product_cache.get(f"part:{norm_part.upper()}")
+    if not existing_prod and norm_item:
+        existing_prod = product_cache.get(f"item:{norm_item.upper()}")
+
+    if not existing_prod:
+        # 1. Exact match on (part_number, item_id)
+        if norm_part and norm_item:
+            existing_prod = session.scalar(
+                select(Product).where(
+                    func.lower(func.trim(Product.part_number)) == norm_part.lower(),
+                    func.lower(func.trim(Product.item_id)) == norm_item.lower(),
+                )
+            )
+
+        # 2. Composite code match
+        if not existing_prod and norm_part and norm_item:
+            existing_prod = session.scalar(
+                select(Product).where(
+                    Product.code.in_([
+                        f"{norm_part}_{norm_item}",
+                        f"{norm_part}-{norm_item}",
+                        f"{norm_item}_{norm_part}",
+                    ])
+                )
+            )
+
+        # 3. Match on code
+        if not existing_prod and norm_code:
+            existing_prod = session.scalar(
+                select(Product).where(func.lower(func.trim(Product.code)) == norm_code.lower())
+            )
+
+        # 4. Match on part_number alone if unique
+        if not existing_prod and norm_part:
+            matches = list(session.scalars(
+                select(Product).where(func.lower(func.trim(Product.part_number)) == norm_part.lower())
+            ).all())
+            if len(matches) == 1:
+                existing_prod = matches[0]
+
+        # 5. Match on item_id alone if unique
+        if not existing_prod and norm_item:
+            matches = list(session.scalars(
+                select(Product).where(func.lower(func.trim(Product.item_id)) == norm_item.lower())
+            ).all())
+            if len(matches) == 1:
+                existing_prod = matches[0]
+
+    if existing_prod:
+        if not existing_prod.is_active:
+            existing_prod.is_active = True
+        if norm_part and not existing_prod.part_number:
+            target_item = existing_prod.item_id or norm_item
+            if target_item:
+                collision = session.scalar(
+                    select(Product.id).where(
+                        Product.id != existing_prod.id,
+                        func.lower(func.trim(Product.part_number)) == norm_part.lower(),
+                        func.lower(func.trim(Product.item_id)) == target_item.lower(),
+                    )
+                )
+                if not collision:
+                    existing_prod.part_number = norm_part
+            else:
+                existing_prod.part_number = norm_part
+
+        if norm_item and not existing_prod.item_id:
+            target_part = existing_prod.part_number or norm_part
+            if target_part:
+                collision = session.scalar(
+                    select(Product.id).where(
+                        Product.id != existing_prod.id,
+                        func.lower(func.trim(Product.part_number)) == target_part.lower(),
+                        func.lower(func.trim(Product.item_id)) == norm_item.lower(),
+                    )
+                )
+                if not collision:
+                    existing_prod.item_id = norm_item
+            else:
+                existing_prod.item_id = norm_item
+    else:
+        if norm_part and norm_item:
+            dupe = session.scalar(
+                select(Product).where(
+                    func.lower(func.trim(Product.part_number)) == norm_part.lower(),
+                    func.lower(func.trim(Product.item_id)) == norm_item.lower(),
+                )
+            )
+            if dupe:
+                existing_prod = dupe
+                if not existing_prod.is_active:
+                    existing_prod.is_active = True
+
+        if not existing_prod:
+            code_cand = norm_code or (f"{norm_part}_{norm_item}" if norm_part and norm_item else (norm_part or norm_item or "PROD"))
+            code_exists = session.scalar(select(Product.id).where(Product.code == code_cand))
+            if code_exists:
+                code_cand = f"{code_cand}_{uuid4().hex[:6]}"
+
+            existing_prod = Product(
+                code=code_cand,
+                name=description or code_cand,
+                uom=uom or "PCS",
+                part_number=norm_part,
+                item_id=norm_item,
+                is_active=True,
+            )
+            session.add(existing_prod)
+            session.flush()
+
+    if norm_part and norm_item:
+        product_cache[f"pair:{norm_part.upper()}:{norm_item.upper()}"] = existing_prod
+    if norm_code:
+        product_cache[f"code:{norm_code.upper()}"] = existing_prod
+    if existing_prod.code:
+        product_cache[f"code:{existing_prod.code.upper()}"] = existing_prod
+    if norm_part:
+        product_cache[f"part:{norm_part.upper()}"] = existing_prod
+    if norm_item:
+        product_cache[f"item:{norm_item.upper()}"] = existing_prod
+    product_cache[str(existing_prod.id)] = existing_prod
+
+    return existing_prod
+
+
 def preview_sales_schedule_upload(
     session: Session,
     file_bytes: bytes,
@@ -430,6 +632,35 @@ def preview_sales_schedule_upload(
         target_period=target_period,
         revision_label=revision_label,
     )
+
+    # Check for missing routes in preview so users are alerted upfront
+    active_plant = session.scalar(select(Plant).where(Plant.is_active.is_(True)))
+    if active_plant:
+        for r in parse_result["_all_flat_rows"]:
+            p_part = (r.get("part_no") or "").strip() or None
+            p_item = (r.get("item_id") or "").strip() or None
+            p_code = (r.get("product_code") or "").strip()
+            prod = None
+            if p_part and p_item:
+                prod = session.scalar(
+                    select(Product).where(
+                        func.lower(func.trim(Product.part_number)) == p_part.lower(),
+                        func.lower(func.trim(Product.item_id)) == p_item.lower(),
+                    )
+                )
+            if not prod and p_code:
+                prod = session.scalar(select(Product).where(func.lower(func.trim(Product.code)) == p_code.lower()))
+
+            if prod:
+                r_id = _resolve_route_for_product(session, prod.id, active_plant.id)
+                if not r_id:
+                    warn = f"Product '{prod.code}' (Part: '{p_part or '-'}', Item: '{p_item or '-'}') has no production route assigned for plant '{active_plant.name}'. Map a valid route before importing."
+                    if warn not in parse_result["warnings"]:
+                        parse_result["warnings"].append(warn)
+            else:
+                warn = f"Part '{p_part or p_item or p_code}' does not exist in Product Master and will require route assignment."
+                if warn not in parse_result["warnings"]:
+                    parse_result["warnings"].append(warn)
 
     file_token = str(uuid4())
     _STAGED_FILES[file_token] = (file_bytes, filename, time.time())
@@ -474,198 +705,372 @@ def confirm_sales_schedule_import(
 
     file_bytes, filename, _ = staged_tuple
 
-    # 1. Process inline alias mappings if user supplied them in modal
-    if alias_mappings:
-        for alias_text, cust_id in alias_mappings.items():
-            cust = session.get(Customer, cust_id)
-            if cust and cust.is_active:
-                norm = normalize_alias(alias_text)
-                existing = session.scalar(select(CustomerAlias).where(CustomerAlias.normalized_alias == norm))
-                if existing:
-                    existing.customer_id = cust.id
-                    existing.alias_text = alias_text.strip()
-                    existing.is_active = True
-                else:
-                    session.add(
-                        CustomerAlias(
-                            customer_id=cust.id,
-                            alias_text=alias_text.strip(),
-                            normalized_alias=norm,
-                            is_active=True,
+    try:
+        # 1. Process inline alias mappings if user supplied them in modal
+        if alias_mappings:
+            for alias_text, cust_id in alias_mappings.items():
+                cust = session.get(Customer, cust_id)
+                if cust and cust.is_active:
+                    norm = normalize_alias(alias_text)
+                    existing = session.scalar(select(CustomerAlias).where(CustomerAlias.normalized_alias == norm))
+                    if existing:
+                        existing.customer_id = cust.id
+                        existing.alias_text = alias_text.strip()
+                        existing.is_active = True
+                    else:
+                        session.add(
+                            CustomerAlias(
+                                customer_id=cust.id,
+                                alias_text=alias_text.strip(),
+                                normalized_alias=norm,
+                                is_active=True,
+                            )
                         )
+            session.flush()
+
+        # 2. Re-parse with newly committed aliases
+        chosen_sheet, rows = read_workbook_rows(file_bytes, filename, sheet_name)
+        parse_result = parse_sales_schedule_data(
+            rows=rows,
+            session=session,
+            target_period=target_period,
+            revision_label=revision_label,
+        )
+
+        if parse_result["unmapped_aliases"]:
+            raise ApplicationError(
+                "UNMAPPED_ALIASES",
+                f"Cannot import with unmapped company headings: {', '.join(parse_result['unmapped_aliases'])}. Map them first.",
+                422,
+            )
+
+        all_flat_rows = parse_result["_all_flat_rows"]
+        if not all_flat_rows:
+            raise ApplicationError("EMPTY_DATA", "No valid parts found to import.", 422)
+
+        # 3. Determine target period & revision
+        period = all_flat_rows[0]["target_period"]
+        rev_label = all_flat_rows[0]["revision"]
+        rev_number = int(rev_label[1:]) if rev_label.startswith("R") and rev_label[1:].isdigit() else 0
+
+        # Ensure revision doesn't collide
+        existing_version = session.scalar(
+            select(PlanningVersion).where(
+                PlanningVersion.planning_period == period,
+                PlanningVersion.version_number == rev_number,
+            )
+        )
+        if existing_version and mode == "APPEND":
+            raise ApplicationError(
+                "PRD_REVISION_EXISTS",
+                f"Revision {rev_label} for {period} already exists. Increment revision (e.g. R1) to preserve audit history.",
+                409,
+            )
+
+        # 4. Ensure plant exists
+        effective_plant_name = plant_code.strip() if plant_code else "Plant 1"
+        plant_obj = session.scalar(select(Plant).where(Plant.name == effective_plant_name))
+        if not plant_obj:
+            plant_obj = session.scalar(select(Plant).where(Plant.is_active.is_(True)))
+            if not plant_obj:
+                plant_obj = Plant(name=effective_plant_name, location=effective_plant_name, is_active=True)
+                session.add(plant_obj)
+                session.flush()
+
+        # 5. Ensure products and plant mappings exist
+        product_cache: dict[str, Product] = {}
+        for r in all_flat_rows:
+            p_code = r.get("product_code") or ""
+            part_no = r.get("part_no")
+            item_id = r.get("item_id")
+            description = r.get("description")
+            uom = r.get("uom")
+
+            existing_prod = _lookup_or_create_product(
+                session=session,
+                product_cache=product_cache,
+                p_code=p_code,
+                part_no=part_no,
+                item_id=item_id,
+                description=description,
+                uom=uom,
+            )
+
+            # Route resolution and ProductPlant verification
+            pp = session.scalar(
+                select(ProductPlant).where(
+                    ProductPlant.product_id == existing_prod.id,
+                    ProductPlant.plant_id == plant_obj.id,
+                )
+            )
+            if pp:
+                route = session.get(Route, pp.route_id) if pp.route_id else None
+                if not route or not route.is_active:
+                    target_route_id = _resolve_route_for_product(session, existing_prod.id, plant_obj.id)
+                    if not target_route_id:
+                        raise ApplicationError(
+                            "ROUTE_REQUIRED",
+                            f"Product '{existing_prod.code}' (Part: '{part_no or '-'}', Item: '{item_id or '-'}') has no production route assigned for plant '{plant_obj.name}'. Map a valid route in Production Mappings before importing.",
+                            422,
+                        )
+                    pp.route_id = target_route_id
+                if not pp.is_active:
+                    pp.is_active = True
+            else:
+                target_route_id = _resolve_route_for_product(session, existing_prod.id, plant_obj.id)
+                if not target_route_id:
+                    raise ApplicationError(
+                        "ROUTE_REQUIRED",
+                        f"Product '{existing_prod.code}' (Part: '{part_no or '-'}', Item: '{item_id or '-'}') has no production route assigned for plant '{plant_obj.name}'. Map a valid route in Production Mappings before importing.",
+                        422,
                     )
+                pp = ProductPlant(
+                    product_id=existing_prod.id,
+                    plant_id=plant_obj.id,
+                    route_id=target_route_id,
+                    is_active=True,
+                    is_primary=True,
+                )
+                session.add(pp)
+
         session.flush()
 
-    # 2. Re-parse with newly committed aliases
-    chosen_sheet, rows = read_workbook_rows(file_bytes, filename, sheet_name)
-    parse_result = parse_sales_schedule_data(
-        rows=rows,
-        session=session,
-        target_period=target_period,
-        revision_label=revision_label,
-    )
+        # 6. Save PRDRecord rows
+        workspace_records: list[PRDRecord] = []
+        staged_items: list[dict[str, Any]] = []
 
-    if parse_result["unmapped_aliases"]:
-        raise ApplicationError(
-            "UNMAPPED_ALIASES",
-            f"Cannot import with unmapped company headings: {', '.join(parse_result['unmapped_aliases'])}. Map them first.",
-            422,
-        )
+        m_parts = period.split("-")
+        p_year = int(m_parts[0]) if len(m_parts) > 0 and m_parts[0].isdigit() else None
+        p_month = int(m_parts[1]) if len(m_parts) > 1 and m_parts[1].isdigit() else None
 
-    all_flat_rows = parse_result["_all_flat_rows"]
-    if not all_flat_rows:
-        raise ApplicationError("EMPTY_DATA", "No valid parts found to import.", 422)
-
-    # 3. Determine target period & revision
-    period = all_flat_rows[0]["target_period"]
-    rev_label = all_flat_rows[0]["revision"]
-    rev_number = int(rev_label[1:]) if rev_label.startswith("R") and rev_label[1:].isdigit() else 0
-
-    # Ensure revision doesn't collide
-    existing_version = session.scalar(
-        select(PlanningVersion).where(
-            PlanningVersion.planning_period == period,
-            PlanningVersion.version_number == rev_number,
-        )
-    )
-    if existing_version and mode == "APPEND":
-        raise ApplicationError(
-            "PRD_REVISION_EXISTS",
-            f"Revision {rev_label} for {period} already exists. Increment revision (e.g. R1) to preserve audit history.",
-            409,
-        )
-
-    # 4. Ensure plant exists
-    effective_plant_name = plant_code.strip() if plant_code else "Plant 1"
-    plant_obj = session.scalar(select(Plant).where(Plant.name == effective_plant_name))
-    if not plant_obj:
-        plant_obj = session.scalar(select(Plant).where(Plant.is_active.is_(True)))
-        if not plant_obj:
-            plant_obj = Plant(name=effective_plant_name, code="PLANT-1", is_active=True)
-            session.add(plant_obj)
-            session.flush()
-
-    # 5. Ensure products and plant mappings exist
-    for r in all_flat_rows:
-        p_code = r["product_code"]
-        existing_prod = session.scalar(select(Product).where(Product.code == p_code))
-        if not existing_prod:
-            existing_prod = Product(
-                code=p_code,
-                name=r["description"] or p_code,
-                uom=r["uom"] or "PCS",
-                part_number=r["part_no"],
-                item_id=r["item_id"],
-                is_active=True,
+        for idx, r in enumerate(all_flat_rows, start=1):
+            p_code = r.get("product_code") or ""
+            part_no = r.get("part_no")
+            item_id = r.get("item_id")
+            cached_prod = (
+                (product_cache.get(f"pair:{part_no.upper()}:{item_id.upper()}") if part_no and item_id else None)
+                or product_cache.get(f"code:{p_code.upper()}")
+                or (product_cache.get(f"part:{part_no.upper()}") if part_no else None)
+                or (product_cache.get(f"item:{item_id.upper()}") if item_id else None)
             )
-            session.add(existing_prod)
-            session.flush()
+            prod_id_str = str(cached_prod.id) if cached_prod else str(uuid4())
+            effective_code = cached_prod.code if cached_prod else p_code
+            qty_dec = Decimal(r["planned_quantity"])
 
-        pp = session.scalar(
-            select(ProductPlant).where(
-                ProductPlant.product_id == existing_prod.id,
-                ProductPlant.plant_id == plant_obj.id,
+            rec = PRDRecord(
+                id=uuid4(),
+                row_index=idx,
+                plant=plant_obj.name,
+                customer=r["customer"],
+                customer_id=UUID(r["customer_id"]) if r.get("customer_id") else None,
+                customer_code=r.get("customer_code"),
+                customer_group=r.get("customer_group"),
+                source_customer_label=r["customer"],
+                source_row=r["source_row"],
+                product_code=effective_code,
+                description=r["description"] or (cached_prod.name if cached_prod else effective_code),
+                planned_quantity=qty_dec,
+                uom=r["uom"] or (cached_prod.uom if cached_prod else "Nos"),
+                target_period=period,
+                planning_version=rev_label,
+                revision=rev_label,
+                schedule_given_on=datetime.fromisoformat(r["schedule_given_on"]) if r.get("schedule_given_on") else None,
+                plan_month=p_month,
+                plan_year=p_year,
+                section_type=r.get("section_type") or "STANDARD",
+                status="VALIDATED",
+                created_by=actor,
             )
-        )
-        if not pp:
-            session.add(ProductPlant(product_id=existing_prod.id, plant_id=plant_obj.id, is_active=True, is_primary=True))
+            session.add(rec)
+            workspace_records.append(rec)
 
-    session.flush()
+            staged_items.append({
+                "product_code": effective_code,
+                "product_id": prod_id_str,
+                "plant_code": plant_obj.name,
+                "planned_quantity": str(qty_dec),
+                "uom": r["uom"] or (cached_prod.uom if cached_prod else "Nos"),
+                "target_period": period,
+                "source_row_number": r["source_row"],
+                "customer_id": r.get("customer_id"),
+            })
 
-    # 6. Save PRDRecord rows
-    workspace_records: list[PRDRecord] = []
-    staged_items: list[dict[str, Any]] = []
-
-    m_parts = period.split("-")
-    p_year = int(m_parts[0]) if len(m_parts) > 0 and m_parts[0].isdigit() else None
-    p_month = int(m_parts[1]) if len(m_parts) > 1 and m_parts[1].isdigit() else None
-
-    for idx, r in enumerate(all_flat_rows, start=1):
-        p_obj = session.scalar(select(Product).where(Product.code == r["product_code"]))
-        qty_dec = Decimal(r["planned_quantity"])
-
-        rec = PRDRecord(
-            id=uuid4(),
-            row_index=idx,
-            plant=plant_obj.name,
-            customer=r["customer"],
-            customer_id=UUID(r["customer_id"]) if r.get("customer_id") else None,
-            customer_code=r.get("customer_code"),
-            customer_group=r.get("customer_group"),
-            source_customer_label=r["customer"],
-            source_row=r["source_row"],
-            product_code=r["product_code"],
-            description=r["description"],
-            planned_quantity=qty_dec,
-            uom=r["uom"] or "Nos",
-            target_period=period,
-            planning_version=rev_label,
-            revision=rev_label,
-            schedule_given_on=datetime.fromisoformat(r["schedule_given_on"]) if r.get("schedule_given_on") else None,
-            plan_month=p_month,
-            plan_year=p_year,
-            section_type=r.get("section_type") or "STANDARD",
+        # 7. Create ImportBatch and promote to PlanningVersion
+        file_sha256 = hashlib.sha256(file_bytes).hexdigest()
+        batch = ImportBatch(
+            filename=filename,
+            file_size_bytes=len(file_bytes),
+            uploaded_by=actor,
             status="VALIDATED",
-            created_by=actor,
+            row_count=len(staged_items),
+            valid_row_count=len(staged_items),
+            error_row_count=0,
+            file_hash=file_sha256,
+            validation_summary={
+                "blocks_count": len(parse_result["blocks"]),
+                "grand_total": parse_result["grand_total"],
+                "planning_period": period,
+                "revision": rev_label,
+            },
+            staged_data=staged_items,
         )
-        session.add(rec)
-        workspace_records.append(rec)
+        session.add(batch)
+        session.flush()
 
-        staged_items.append({
-            "product_code": r["product_code"],
-            "product_id": str(p_obj.id) if p_obj else str(uuid4()),
-            "plant_code": plant_obj.name,
-            "planned_quantity": str(qty_dec),
-            "uom": r["uom"] or "Nos",
+        audit(
+            session, actor, batch.id, "IMPORT_VERIFIED_PRD", reason,
+            {
+                "sheet": sheet_name,
+                "filename": filename,
+                "sha256": file_sha256,
+                "planning_period": period,
+                "revision": rev_label,
+                "row_count": len(staged_items),
+            },
+            entity="import_batches",
+        )
+
+        promote_batch_to_planning_version(session, batch.id, actor, period, rev_label)
+        session.commit()
+
+        # Clean up staged token
+        _STAGED_FILES.pop(file_token, None)
+
+        return PRDExcelImportResponse(
+            sheet_name=sheet_name,
+            imported_count=len(workspace_records),
+            records=[to_prd_record_response(r) for r in workspace_records],
+        )
+    except Exception:
+        session.rollback()
+        raise
+
+
+def import_prd_excel(
+    session: Session,
+    file_bytes: bytes,
+    filename: str,
+    sheet_name: str,
+    actor: UUID,
+    mode: str = "APPEND",
+    reason: str = "Excel PRD import",
+    target_period: Optional[str] = None,
+    revision_label: Optional[str] = None,
+) -> PRDExcelImportResponse:
+    from app.services.product_source import source_rows
+    from app.services.prd_source import parse, revision
+    from app.models.masters import Product
+    from app.models.mappings import ProductPlant
+    from app.models.production import Plant
+    from app.models.prd import ImportBatch, PlanningVersion
+    from app.services.prd import promote_batch_to_planning_version
+
+    if mode != "APPEND":
+        raise ApplicationError("PRD_HISTORY_PROTECTED", "Import a new revision instead of replacing revision history.", 409)
+
+    rows = parse(source_rows(file_bytes, filename, sheet_name), target_period, revision_label)
+    products = list(session.scalars(select(Product).where(Product.is_active.is_(True))))
+    period, label = rows[0]["period"], rows[0]["revision"]
+
+    if session.scalar(
+        select(PlanningVersion.id).where(
+            PlanningVersion.planning_period == period,
+            PlanningVersion.version_number == revision(label),
+        )
+    ):
+        raise ApplicationError("PRD_REVISION_EXISTS", "This revision already exists. Keep its history and use a new revision for changes.", 409)
+
+    staged, workspace = [], []
+    seen = set()
+    for row in rows:
+        matches = [
+            p for p in products
+            if any(source and source in {p.code, p.item_id, p.part_number} for source in (row["item_id"], row["part_number"], row["code"]))
+        ]
+        if len(matches) != 1:
+            raise ApplicationError("PRODUCT_REVIEW_REQUIRED", f"Row {row['source_row_number']} needs one unambiguous active product master. Review it in Masters → Products.", 422)
+        product = matches[0]
+        if row["uom"] and row["uom"].casefold() != product.uom.casefold():
+            raise ApplicationError("PRD_UNIT_MISMATCH", f"Product {product.code}: source production unit differs from its reviewed master.", 422)
+
+        mappings = list(session.scalars(select(ProductPlant).where(ProductPlant.product_id == product.id, ProductPlant.is_active.is_(True))))
+        if row["plant"]:
+            mappings = [m for m in mappings if session.get(Plant, m.plant_id).name == row["plant"]]
+        elif len(mappings) > 1:
+            mappings = [m for m in mappings if m.is_primary]
+
+        if len(mappings) != 1 or not session.get(Plant, mappings[0].plant_id).is_active:
+            raise ApplicationError("PLANT_MAPPING_REQUIRED", f"Product {product.code} needs one verified active plant mapping or an explicit source plant.", 422)
+
+        plant = session.get(Plant, mappings[0].plant_id)
+        if (product.id, plant.id) in seen:
+            raise ApplicationError("DUPLICATE_PRD_ITEM", f"Product {product.code} occurs more than once for {plant.name}; review the source rows.", 422)
+        seen.add((product.id, plant.id))
+
+        staged.append({
+            "product_code": product.code,
+            "product_id": str(product.id),
+            "plant_code": plant.name,
+            "planned_quantity": str(row["quantity"]),
+            "uom": product.uom,
             "target_period": period,
-            "source_row_number": r["source_row"],
-            "customer_id": r.get("customer_id"),
+            "source_row_number": row["source_row_number"],
+            "customer_id": None,
+            "source_item_id": row["item_id"],
+            "source_part_number": row["part_number"],
         })
+        workspace.append(
+            PRDRecord(
+                id=uuid4(),
+                row_index=row["source_row_number"],
+                plant=plant.name,
+                product_code=product.code,
+                description=product.name,
+                planned_quantity=row["quantity"],
+                uom=product.uom,
+                target_period=period,
+                planning_version=label,
+                status="VALIDATED",
+                created_by=actor,
+            )
+        )
 
-    # 7. Create ImportBatch and promote to PlanningVersion
     file_sha256 = hashlib.sha256(file_bytes).hexdigest()
     batch = ImportBatch(
         filename=filename,
         file_size_bytes=len(file_bytes),
         uploaded_by=actor,
         status="VALIDATED",
-        row_count=len(staged_items),
-        valid_row_count=len(staged_items),
+        row_count=len(staged),
+        valid_row_count=len(staged),
         error_row_count=0,
-        file_hash=file_sha256,
-        validation_summary={
-            "blocks_count": len(parse_result["blocks"]),
-            "grand_total": parse_result["grand_total"],
-            "planning_period": period,
-            "revision": rev_label,
-        },
-        staged_data=staged_items,
+        staged_data=staged,
     )
     session.add(batch)
+    session.add_all(workspace)
     session.flush()
 
     audit(
-        session, actor, batch.id, "IMPORT_VERIFIED_PRD", reason,
+        session,
+        actor,
+        batch.id,
+        "IMPORT_VERIFIED_PRD",
+        reason,
         {
             "sheet": sheet_name,
             "filename": filename,
             "sha256": file_sha256,
             "planning_period": period,
-            "revision": rev_label,
-            "row_count": len(staged_items),
+            "revision": label,
+            "row_count": len(staged),
         },
         entity="import_batches",
     )
-
-    promote_batch_to_planning_version(session, batch.id, actor, period, rev_label)
-
-    # Clean up staged token
-    _STAGED_FILES.pop(file_token, None)
-
+    promote_batch_to_planning_version(session, batch.id, actor, period, label)
     return PRDExcelImportResponse(
         sheet_name=sheet_name,
-        imported_count=len(workspace_records),
-        records=[to_prd_record_response(r) for r in workspace_records],
+        imported_count=len(workspace),
+        records=[to_prd_record_response(r) for r in workspace],
     )
 
 
