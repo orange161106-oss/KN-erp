@@ -194,26 +194,12 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   const [customHeight, setCustomHeight] = useState<number>(
     initialHeightPref?.customHeight || 540
   );
-  const [fitHeight, setFitHeight] = useState<number>(540);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isResizingHeight, setIsResizingHeight] = useState(false);
   const rootContainerRef = useRef<HTMLDivElement>(null);
 
-  // Measure available vertical space for 'fit' mode
-  const updateFitHeight = useCallback(() => {
-    if (!rootContainerRef.current) return;
-    const rect = rootContainerRef.current.getBoundingClientRect();
-    const available = window.innerHeight - rect.top - 24;
-    setFitHeight(Math.max(480, Math.floor(available)));
-  }, []);
-
-  useLayoutEffect(() => {
-    updateFitHeight();
-    const handleResize = () => updateFitHeight();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [updateFitHeight]);
-
+  // Fit follows the bounded flex parent, including sidebar transitions and
+  // wrapping toolbars. A viewport measurement becomes stale as those change.
   // Persist height preference
   useEffect(() => {
     if (!heightStorageKey) return;
@@ -244,14 +230,14 @@ export default function DataTable<T extends { id: string; row_index?: number | n
     if (heightMode === 'standard') return 540;
     if (heightMode === 'large') return 720;
     if (heightMode === 'custom') return customHeight;
-    return fitHeight;
-  }, [isFullscreen, heightMode, customHeight, fitHeight]);
+    return 540;
+  }, [isFullscreen, heightMode, customHeight]);
 
   const handleStartResizeHeight = (e: React.MouseEvent) => {
     e.preventDefault();
     setIsResizingHeight(true);
     const startY = e.clientY;
-    const startH = currentHeightPx;
+    const startH = rootContainerRef.current?.getBoundingClientRect().height || currentHeightPx;
 
     const onMouseMove = (moveEvent: MouseEvent) => {
       const diff = moveEvent.clientY - startY;
@@ -282,7 +268,6 @@ export default function DataTable<T extends { id: string; row_index?: number | n
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       setHeightMode('fit');
-      updateFitHeight();
     }
   };
 
@@ -327,8 +312,12 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   const [editValue, setEditValue] = useState<string>('');
 
   // --- Undo / Redo History Stack ---
-  const [undoStack, setUndoStack] = useState<Array<{ rowId: string; colKey: keyof T & string; oldVal: string; newVal: string }>>([]);
-  const [redoStack, setRedoStack] = useState<Array<{ rowId: string; colKey: keyof T & string; oldVal: string; newVal: string }>>([]);
+  type CellEdit = { rowId: string; colKey: keyof T & string; oldVal: string; newVal: string };
+  const [undoStack, setUndoStack] = useState<CellEdit[][]>([]);
+  const [redoStack, setRedoStack] = useState<CellEdit[][]>([]);
+  const [editError, setEditError] = useState<string | null>(null);
+  const saveHandlerRef = useRef(onSave);
+  saveHandlerRef.current = onSave;
 
   // --- Context Menu State ---
   const [contextMenu, setContextMenu] = useState<{
@@ -349,10 +338,21 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   // --- DOM References ---
   const lastClickedIndexRef = useRef<number | null>(null);
   const cellInputRef = useRef<HTMLInputElement>(null);
+  const selectEditorOnFocus = useRef(true);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const groupHeaderRef = useRef<HTMLTableRowElement>(null);
   const [groupHeaderHeight, setGroupHeaderHeight] = useState<number>(32);
   const [isScrolledLeft, setIsScrolledLeft] = useState<boolean>(false);
+
+  useLayoutEffect(() => {
+    if (!editingCell) return;
+    cellInputRef.current?.focus();
+    if (selectEditorOnFocus.current) cellInputRef.current?.select();
+    else {
+      const input = cellInputRef.current;
+      if (input) input.setSelectionRange(input.value.length, input.value.length);
+    }
+  }, [editingCell?.rowId, editingCell?.colKey]);
 
   // Measure group header height dynamically to set column header `top` offset cleanly
   useLayoutEffect(() => {
@@ -554,9 +554,41 @@ export default function DataTable<T extends { id: string; row_index?: number | n
     onSelectionChange(next);
   };
 
+  const applyEdits = (edits: Array<{ rowId: string; colKey: keyof T & string; value: string }>) => {
+    if (!canUpdate || !onCellChange) return;
+    const actions: CellEdit[] = [];
+    for (const edit of edits) {
+      if (columns.find(col => col.key === edit.colKey)?.isEditable === false) {
+        setEditError('This column is read-only. Paste into an editable quantity or parameter column.');
+        return;
+      }
+      const row = data.find(item => item.id === edit.rowId);
+      if (!row) return;
+      const oldVal = String(row[edit.colKey] ?? '');
+      if (oldVal !== edit.value) actions.push({ ...edit, oldVal, newVal: edit.value });
+    }
+    if (!actions.length) return;
+    setEditError(null);
+    setUndoStack(prev => [...prev.slice(-99), actions]);
+    setRedoStack([]);
+    actions.forEach(action => onCellChange(action.rowId, action.colKey, action.newVal));
+  };
+  const applyCellEdit = (rowId: string, colKey: keyof T & string, value: string) =>
+    applyEdits([{ rowId, colKey, value }]);
+
+  useEffect(() => {
+    setRowEditorItem(prev => prev ? data.find(row => row.id === prev.id) || null : null);
+  }, [data]);
+
   // Keyboard shortcut Ctrl/Cmd+S and Ctrl/Cmd+A and Undo/Redo inside grid
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      const target = document.activeElement;
+      if (!rootContainerRef.current?.contains(target) && !(target === document.body && selectedCell)) return;
+      const typing = target instanceof HTMLElement &&
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable);
+
       // 1. Ctrl+S / Cmd+S: Save changes
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
@@ -564,20 +596,22 @@ export default function DataTable<T extends { id: string; row_index?: number | n
         if (editingCell) {
           handleCommitEdit();
         }
-        if (onSave) {
-          void onSave();
+        if (canUpdate && onSave) {
+          // Let the just-committed editor update parent state before saving.
+          if (editingCell) setTimeout(() => { void saveHandlerRef.current?.(); }, 0);
+          else void onSave();
         }
         return;
       }
 
       // 2. Ctrl+Z: Undo
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
-        if (undoStack.length > 0 && onCellChange) {
+        if ((!typing || target?.getAttribute('aria-label') === 'Formula bar' || rowEditorItem) && !editingCell && canUpdate && undoStack.length > 0 && onCellChange) {
           e.preventDefault();
           const lastAction = undoStack[undoStack.length - 1];
           setUndoStack(prev => prev.slice(0, -1));
           setRedoStack(prev => [...prev, lastAction]);
-          onCellChange(lastAction.rowId, lastAction.colKey, lastAction.oldVal);
+          lastAction.forEach(action => onCellChange(action.rowId, action.colKey, action.oldVal));
         }
         return;
       }
@@ -587,12 +621,12 @@ export default function DataTable<T extends { id: string; row_index?: number | n
         ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') ||
         ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'z')
       ) {
-        if (redoStack.length > 0 && onCellChange) {
+        if ((!typing || target?.getAttribute('aria-label') === 'Formula bar' || rowEditorItem) && !editingCell && canUpdate && redoStack.length > 0 && onCellChange) {
           e.preventDefault();
           const lastRedo = redoStack[redoStack.length - 1];
           setRedoStack(prev => prev.slice(0, -1));
           setUndoStack(prev => [...prev, lastRedo]);
-          onCellChange(lastRedo.rowId, lastRedo.colKey, lastRedo.newVal);
+          lastRedo.forEach(action => onCellChange(action.rowId, action.colKey, action.newVal));
         }
         return;
       }
@@ -610,23 +644,21 @@ export default function DataTable<T extends { id: string; row_index?: number | n
 
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [editingCell, onSave, undoStack, redoStack, onCellChange, processedData, onSelectionChange]);
+  }, [editingCell, onSave, undoStack, redoStack, onCellChange, processedData, onSelectionChange, canUpdate, selectedCell, editValue, rowEditorItem]);
 
   // Start editing a cell
   const handleStartEdit = (rowId: string, colKey: keyof T & string) => {
     const colDef = columns.find(c => c.key === colKey);
-    if (!canUpdate || (colDef && colDef.isEditable === false)) return;
+    if (!canUpdate || !onCellChange || (colDef && colDef.isEditable === false)) return;
+    if (editingCell?.rowId === rowId && editingCell.colKey === colKey) return;
 
     const row = data.find(r => r.id === rowId);
     if (!row) return;
 
+    selectEditorOnFocus.current = true;
     setSelectedCell({ rowId, colKey });
     setEditingCell({ rowId, colKey });
     setEditValue(String((row as any)[colKey] ?? ''));
-    setTimeout(() => {
-      cellInputRef.current?.focus();
-      cellInputRef.current?.select();
-    }, 10);
   };
 
   const handleCommitEdit = (newVal?: string) => {
@@ -636,9 +668,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
     const oldVal = row ? String((row as any)[editingCell.colKey] ?? '') : '';
 
     if (val !== oldVal && onCellChange) {
-      setUndoStack(prev => [...prev, { rowId: editingCell.rowId, colKey: editingCell.colKey, oldVal, newVal: val }]);
-      setRedoStack([]); // reset redo on new change
-      onCellChange(editingCell.rowId, editingCell.colKey, val);
+      applyCellEdit(editingCell.rowId, editingCell.colKey, val);
     }
     setEditingCell(null);
   };
@@ -666,7 +696,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
       const colDef = columns.find(c => c.key === colKey);
       if (canUpdate && colDef?.isEditable !== false) {
         e.preventDefault();
-        onCellChange?.(processedData[rowIndex].id, colKey, '');
+        applyCellEdit(processedData[rowIndex].id, colKey, '');
       }
       return;
     }
@@ -700,11 +730,9 @@ export default function DataTable<T extends { id: string; row_index?: number | n
       if (canUpdate && colDef?.isEditable !== false) {
         e.preventDefault();
         setSelectedCell({ rowId: processedData[rowIndex].id, colKey });
+        selectEditorOnFocus.current = false;
         setEditingCell({ rowId: processedData[rowIndex].id, colKey });
         setEditValue(e.key);
-        setTimeout(() => {
-          cellInputRef.current?.focus();
-        }, 10);
         return;
       }
     }
@@ -757,28 +785,37 @@ export default function DataTable<T extends { id: string; row_index?: number | n
     setCustomWidths(prev => ({ ...prev, [colKey]: autoWidth }));
   };
 
-  // Copy / Paste TSV
-  const handleCopySelection = () => {
-    if (!selectedCell) return;
-    const row = data.find(r => r.id === selectedCell.rowId);
-    if (!row) return;
-    const val = String((row as any)[selectedCell.colKey] ?? '');
-    void navigator.clipboard.writeText(val);
+  // Native clipboard events support Ctrl+C/V without requiring clipboard-read permission.
+  const selectedText = () => {
+    const row = data.find(item => item.id === selectedCell?.rowId);
+    return row && selectedCell ? String(row[selectedCell.colKey] ?? '') : '';
   };
-
+  const handleCopySelection = async () => {
+    if (!selectedCell) return;
+    try { await navigator.clipboard.writeText(selectedText()); }
+    catch { setEditError('Clipboard access was blocked. Select the cell and use Ctrl+C.'); }
+  };
+  const pasteText = (text: string) => {
+    if (!selectedCell || !canUpdate) return;
+    const rowIndex = processedData.findIndex(row => row.id === selectedCell.rowId);
+    const colIndex = visibleColumns.findIndex(col => col.key === selectedCell.colKey);
+    if (rowIndex < 0 || colIndex < 0) return;
+    const rows = text.replace(/\r/g, '').replace(/\n$/, '').split('\n').map(row => row.split('\t'));
+    const edits: Array<{ rowId: string; colKey: keyof T & string; value: string }> = [];
+    for (let r = 0; r < rows.length; r++) {
+      for (let c = 0; c < rows[r].length; c++) {
+        const row = processedData[rowIndex + r];
+        const col = visibleColumns[colIndex + c];
+        if (!row || !col) { setEditError('The pasted range extends beyond the table.'); return; }
+        edits.push({ rowId: row.id, colKey: col.key, value: rows[r][c] });
+      }
+    }
+    applyEdits(edits);
+  };
   const handlePasteSelection = async () => {
     if (!selectedCell || !canUpdate) return;
-    try {
-      const text = await navigator.clipboard.readText();
-      if (!text) return;
-      const lines = text.split(/\r?\n/).filter(Boolean);
-      if (lines.length === 1 && !lines[0].includes('\t')) {
-        // Single cell paste
-        onCellChange?.(selectedCell.rowId, selectedCell.colKey, lines[0]);
-      }
-    } catch {
-      // clipboard access denied
-    }
+    try { pasteText(await navigator.clipboard.readText()); }
+    catch { setEditError('Clipboard access was blocked. Select an editable cell and use Ctrl+V.'); }
   };
 
   // Context Menu Handlers
@@ -834,16 +871,27 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   return (
     <div
       ref={rootContainerRef}
-      style={{
-        height: isFullscreen ? '100vh' : heightMode === 'fit' ? `${fitHeight}px` : `${currentHeightPx}px`,
-        maxHeight: isFullscreen ? '100vh' : undefined,
+      onCopy={event => {
+        if (!selectedCell || (event.target instanceof HTMLElement && ['INPUT', 'TEXTAREA'].includes(event.target.tagName))) return;
+        event.preventDefault();
+        event.clipboardData.setData('text/plain', selectedText());
       }}
-      className={`flex flex-col min-h-[320px] bg-white border border-ink-text/15 rounded-lg shadow-2xs select-none relative transition-[height] duration-75 ${
-        isFullscreen ? 'fixed inset-0 z-[9990] rounded-none p-3 shadow-2xl' : 'flex-1'
+      onPaste={event => {
+        if (event.target instanceof HTMLElement && ['INPUT', 'TEXTAREA'].includes(event.target.tagName)) return;
+        event.preventDefault();
+        pasteText(event.clipboardData.getData('text/plain'));
+      }}
+      style={{
+        height: isFullscreen ? '100dvh' : heightMode === 'fit' ? undefined : `${currentHeightPx}px`,
+        maxHeight: isFullscreen ? '100dvh' : undefined,
+      }}
+      className={`min-w-0 w-full flex flex-col ${heightMode === 'fit' ? 'min-h-0' : 'min-h-[320px]'} bg-white border border-ink-text/15 rounded-lg shadow-2xs select-none transition-[height] duration-75 ${
+        isFullscreen ? 'fixed inset-0 z-[9990] rounded-none p-3 shadow-2xl' : 'relative flex-1'
       }`}
     >
+      {editError && <p role="alert" className="shrink-0 bg-red-50 text-red-700 p-2 text-xs">{editError}</p>}
       {/* 1. Formula Bar & Column Controls Toolbar */}
-      <div className="flex items-center gap-2 py-1.5 px-3 bg-vanilla-surface border-b border-ink-text/10 text-xs">
+      <div className="shrink-0 flex flex-wrap items-center gap-2 py-1.5 px-3 bg-vanilla-surface border-b border-ink-text/10 text-xs">
         {/* Cell Reference Box */}
         <div
           title="Active cell reference"
@@ -868,15 +916,15 @@ export default function DataTable<T extends { id: string; row_index?: number | n
           aria-label="Formula bar"
           placeholder={selectedCell ? `Value of ${selectedColLabel || 'selected cell'}` : 'Select a cell to view or edit value (Ctrl+S to save)'}
           value={externalFormulaValue !== undefined ? externalFormulaValue : selectedCellValue}
-          disabled={!selectedCell || !onCellChange || !canUpdate}
+          disabled={!selectedCell || !onCellChange || !canUpdate || columns.find(col => col.key === selectedCell.colKey)?.isEditable === false}
           onChange={e => {
             if (externalOnFormulaChange) {
               externalOnFormulaChange(e.target.value);
             } else if (selectedCell && onCellChange) {
-              onCellChange(selectedCell.rowId, selectedCell.colKey, e.target.value);
+              applyCellEdit(selectedCell.rowId, selectedCell.colKey, e.target.value);
             }
           }}
-          className="flex-1 px-2.5 py-0.5 bg-white border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-brand-steel disabled:bg-gray-100 text-gray-800 font-mono text-xs"
+          className="min-w-0 flex-1 px-2.5 py-0.5 bg-white border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-brand-steel disabled:bg-gray-100 text-gray-800 font-mono text-xs"
         />
 
         {/* Save Status Badge */}
@@ -1025,7 +1073,6 @@ export default function DataTable<T extends { id: string; row_index?: number | n
               title="Fit to screen height (fills available viewport height)"
               onClick={() => {
                 setHeightMode('fit');
-                updateFitHeight();
               }}
               className={`px-2 py-0.5 font-medium transition-colors ${
                 heightMode === 'fit'
@@ -1369,12 +1416,18 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                           {isCellEditing ? (
                             <input
                               ref={cellInputRef}
+                              aria-label={`Edit ${col.label}`}
+                              onClick={event => event.stopPropagation()}
+                              onDoubleClick={event => event.stopPropagation()}
+                              onContextMenu={event => event.stopPropagation()}
                               type="text"
                               value={editValue}
                               onChange={e => setEditValue(e.target.value)}
                               onBlur={() => handleCommitEdit()}
                               onKeyDown={e => {
-                                if (e.key === 'Enter') handleCommitEdit();
+                                // Let Ctrl+S/Z keep their existing global/native behavior.
+                                if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Tab') e.stopPropagation();
+                                if (e.key === 'Enter') { e.preventDefault(); handleCommitEdit(); }
                                 if (e.key === 'Escape') setEditingCell(null);
                                 if (e.key === 'Tab') {
                                   e.preventDefault();
@@ -1450,7 +1503,6 @@ export default function DataTable<T extends { id: string; row_index?: number | n
           onMouseDown={handleStartResizeHeight}
           onDoubleClick={() => {
             setHeightMode('fit');
-            updateFitHeight();
           }}
           onKeyDown={handleResizeHandleKeyDown}
           className={`h-2.5 w-full bg-gray-100 hover:bg-burnt-orange/20 border-t border-gray-300 flex items-center justify-center cursor-row-resize select-none transition-colors group focus:outline-none focus:ring-1 focus:ring-burnt-orange ${
@@ -1531,6 +1583,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                     {canUpdate && (
                       <button
                         type="button"
+                        disabled={columns.find(col => col.key === contextMenu.colKey)?.isEditable === false}
                         onClick={() => {
                           void handlePasteSelection();
                           setContextMenu(null);
@@ -1545,9 +1598,10 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                     {canUpdate && (
                       <button
                         type="button"
+                        disabled={columns.find(col => col.key === contextMenu.colKey)?.isEditable === false}
                         onClick={() => {
                           if (contextMenu.rowId && contextMenu.colKey) {
-                            onCellChange?.(contextMenu.rowId, contextMenu.colKey as keyof T & string, '');
+                            applyCellEdit(contextMenu.rowId, contextMenu.colKey as keyof T & string, '');
                           }
                           setContextMenu(null);
                         }}
@@ -1788,15 +1842,16 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                 const val = String((rowEditorItem as any)[col.key] ?? '');
                 return (
                   <div key={col.key} className="space-y-1">
-                    <label className="font-semibold text-gray-700 block">{col.label}</label>
+                    <label htmlFor={`edit-row-${rowEditorItem.id}-${col.key}`} className="font-semibold text-gray-700 block">{col.label}</label>
                     {isEditable ? (
                       <input
                         type="text"
+                        id={`edit-row-${rowEditorItem.id}-${col.key}`}
                         value={val}
                         onChange={e => {
                           const nextVal = e.target.value;
                           setRowEditorItem(prev => (prev ? { ...prev, [col.key]: nextVal } : null));
-                          onCellChange?.(rowEditorItem.id, col.key, nextVal);
+                          applyCellEdit(rowEditorItem.id, col.key, nextVal);
                         }}
                         className="w-full px-2.5 py-1.5 border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 font-mono text-xs"
                       />

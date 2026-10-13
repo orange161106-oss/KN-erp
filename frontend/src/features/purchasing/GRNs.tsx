@@ -527,7 +527,7 @@ export default function GRNs() {
   const singleSelectedRecord = selectedCount === 1 ? records.find(r => selectedRowIds.has(r.id)) : null;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-6rem)] -m-6 p-4 bg-white select-none">
+    <div className="flex flex-col h-full min-h-0 min-w-0 p-4 bg-white select-none">
       {/* 1. Header & Title */}
       <div className="flex items-center justify-between pb-2 border-b border-gray-200">
         <div>

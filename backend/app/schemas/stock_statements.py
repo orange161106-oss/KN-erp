@@ -1,9 +1,9 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ── Stock Statement Schemas ───────────────────────────────────────────
@@ -115,6 +115,26 @@ class StockStatementConfirmRequest(BaseModel):
     replace_confirmed: bool = False
 
 
+class StockStatementDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: UUID
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def trim_reason(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class StockStatementDeleteResponse(BaseModel):
+    batch_id: UUID
+    statement_month: int
+    statement_year: int
+    deleted_row_count: int
+    replayed: bool = False
+
+
 class StockStatementHistoryItem(BaseModel):
     batch_id: str
     statement_month: int
@@ -207,18 +227,48 @@ class StockParameterConfirmRequest(BaseModel):
     replace_confirmed: bool = False
 
 
+StockQuantityDecimal = Annotated[Decimal, Field(ge=0, max_digits=14, decimal_places=4)]
+StockEditDecimal = Annotated[Decimal, Field(ge=0, max_digits=16, decimal_places=4)]
+
+
 class StockParameterUpdateItem(BaseModel):
-    id: str
-    min_stock_level: Optional[Decimal] = None
-    max_stock_level: Optional[Decimal] = None
-    min_order_qty: Optional[Decimal] = None
-    lead_time_days: Optional[int] = None
+    model_config = ConfigDict(extra="forbid")
+    id: UUID
+    description: Optional[str] = Field(default=None, max_length=2000)
+    min_stock_level: Optional[StockQuantityDecimal] = None
+    max_stock_level: Optional[StockQuantityDecimal] = None
+    min_order_qty: Optional[StockQuantityDecimal] = None
+    lead_time_days: Optional[Annotated[int, Field(ge=0, strict=True)]] = None
 
 
 class StockParameterBatchUpdateRequest(BaseModel):
-    month: int
-    year: int
-    updates: list[StockParameterUpdateItem]
+    model_config = ConfigDict(extra="forbid")
+    month: int = Field(ge=1, le=12)
+    year: int = Field(ge=2000, le=2100)
+    batch_id: Optional[UUID] = None
+    updates: list[StockParameterUpdateItem] = Field(min_length=1, max_length=5000)
+
+
+class StockStatementUpdateItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: UUID
+    item_description: Optional[str] = Field(default=None, max_length=2000)
+    opening_qty: Optional[StockQuantityDecimal] = None
+    opening_value: Optional[StockEditDecimal] = None
+    receipt_qty: Optional[StockQuantityDecimal] = None
+    receipt_value: Optional[StockEditDecimal] = None
+    issue_qty: Optional[StockQuantityDecimal] = None
+    issue_value: Optional[StockEditDecimal] = None
+    closing_qty: Optional[StockQuantityDecimal] = None
+    closing_value: Optional[StockEditDecimal] = None
+
+
+class StockStatementBatchUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    month: int = Field(ge=1, le=12)
+    year: int = Field(ge=2000, le=2100)
+    batch_id: UUID
+    updates: list[StockStatementUpdateItem] = Field(min_length=1, max_length=5000)
 
 
 class StockParameterHistoryItem(BaseModel):
@@ -231,4 +281,25 @@ class StockParameterHistoryItem(BaseModel):
     row_count: int
     uploaded_at: datetime
     uploaded_by_name: Optional[str] = None
+
+
+
+class StockParameterDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: UUID
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def trim_reason(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class StockParameterDeleteResponse(BaseModel):
+    batch_id: UUID
+    month: int
+    year: int
+    deleted_row_count: int
+    replayed: bool = False
 

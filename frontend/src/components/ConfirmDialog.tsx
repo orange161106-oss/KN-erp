@@ -6,6 +6,7 @@ interface ConfirmDialogProps {
   cancelLabel?: string;
   isDestructive?: boolean;
   isLoading?: boolean;
+  isConfirmDisabled?: boolean;
   details?: React.ReactNode;
   onConfirm: () => void;
   onCancel: () => void;
@@ -19,6 +20,7 @@ export default function ConfirmDialog({
   cancelLabel = 'Cancel',
   isDestructive = false,
   isLoading = false,
+  isConfirmDisabled = false,
   details,
   onConfirm,
   onCancel,
@@ -26,7 +28,7 @@ export default function ConfirmDialog({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+    <div role="dialog" aria-modal="true" aria-label={title} className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-2xl max-w-sm w-full p-5 border border-gray-200 text-xs space-y-3 animate-in fade-in zoom-in-95 duration-100">
         <div className="flex items-start gap-2">
           {isDestructive ? (
@@ -58,7 +60,7 @@ export default function ConfirmDialog({
           <button
             type="button"
             onClick={onConfirm}
-            disabled={isLoading}
+            disabled={isLoading || isConfirmDisabled}
             className={`px-3 py-1.5 text-white rounded font-semibold transition-colors disabled:opacity-50 ${
               isDestructive
                 ? 'bg-red-600 hover:bg-red-700 active:bg-red-800'

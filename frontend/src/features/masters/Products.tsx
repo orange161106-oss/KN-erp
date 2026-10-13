@@ -635,7 +635,7 @@ export default function Products() {
 
   if (!canRead) {
     return (
-      <div className="p-6 bg-erp-vanilla min-h-screen">
+      <div className="p-6 bg-erp-vanilla min-h-full">
         <p role="alert" className="text-sm text-erp-topaz font-medium">
           You do not have permission to view product master records.
         </p>

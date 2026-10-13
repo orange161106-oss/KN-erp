@@ -22,6 +22,11 @@
   --color-brand-charcoal: #1C140F;
 }
 
+html, body, #root {
+  width: 100%;
+  height: 100%;
+}
+
 body {
   background-color: var(--color-erp-vanilla, #fff6c0);
   color: var(--color-erp-chocolate, #400101);
@@ -37,6 +42,11 @@ body {
   button,
   .no-print {
     display: none !important;
+  }
+
+  html, body, #root, .app-shell, .app-shell-content {
+    height: auto !important;
+    overflow: visible !important;
   }
 
   body {
@@ -78,4 +88,4 @@ body {
   tr {
     page-break-inside: avoid !important;
   }
-}
+}
