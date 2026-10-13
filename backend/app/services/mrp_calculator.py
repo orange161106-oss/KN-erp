@@ -73,9 +73,18 @@ def run_monthly_aggregation(db: Session, month: int, year: int) -> AggregationRu
     ).scalars().all()
 
     if not approved_plans:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"No approved monthly requirement plans found for period {month}/{year} to aggregate.",
+        # Gracefully clear/zero out any existing aggregated records for this month/year and return empty
+        db.query(AggregatedRequirement).filter(
+            AggregatedRequirement.month == month,
+            AggregatedRequirement.year == year,
+        ).delete(synchronize_session=False)
+        db.commit()
+        return AggregationRunResponse(
+            month=month,
+            year=year,
+            total_approved_plans=0,
+            total_aggregated_consumables=0,
+            records=[],
         )
 
     approved_plan_ids = [plan.id for plan in approved_plans]

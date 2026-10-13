@@ -339,11 +339,80 @@ def test_cross_plant_aggregation_math(client, test_data):
     assert re_agg.json()["total_aggregated_consumables"] == 2
 
 
-def test_aggregation_fails_when_no_approved_plans(client, test_data):
-    # Call aggregation for a period with no approved plans
+def test_aggregation_clears_gracefully_when_no_approved_plans(client, test_data):
+    # Call aggregation for a period with no approved plans -> returns 200 with 0 records
     res = client.post("/api/v1/aggregate/9/2028", headers=test_data["admin_headers"])
-    assert res.status_code == 400
-    assert "no approved" in res.text.lower()
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total_approved_plans"] == 0
+    assert data["total_aggregated_consumables"] == 0
+    assert data["records"] == []
+
+
+def test_auto_provisioning_all_5_plants_on_fetch(client, test_data):
+    # GET /plans?month=10&year=2026 for admin auto-provisions all 5 plants
+    res = client.get("/api/v1/plans?month=10&year=2026", headers=test_data["admin_headers"])
+    assert res.status_code == 200
+    plans = res.json()
+    plants = [p["plant_id"] for p in plans if p["month"] == 10 and p["year"] == 2026]
+    for expected in ["PLANT_I", "PLANT_II", "PLANT_III", "PLANT_IV", "PLANT_V"]:
+        assert expected in plants
+    # All auto-provisioned plans are in DRAFT status
+    for p in plans:
+        if p["month"] == 10 and p["year"] == 2026:
+            assert p["status"] in ("DRAFT", "APPROVED", "SUBMITTED")
+
+
+def test_direct_draft_to_approved_by_admin(client, test_data):
+    # Create plan in DRAFT
+    res_plan = client.post("/api/v1/plans", json={"plant_id": "PLANT_III", "month": 5, "year": 2027}, headers=test_data["admin_headers"])
+    assert res_plan.status_code == 201
+    plan_id = res_plan.json()["id"]
+    assert res_plan.json()["status"] == "DRAFT"
+
+    # Admin approves directly from DRAFT without SUBMITTED first
+    res_app = client.patch(f"/api/v1/plans/{plan_id}/approve", headers=test_data["admin_headers"])
+    assert res_app.status_code == 200
+    assert res_app.json()["status"] == "APPROVED"
+
+
+def test_automatic_background_aggregation_on_approval_and_item_update(client, test_data):
+    c1 = test_data["c1"]
+
+    # 1. Create plan for 7/2027
+    res_plan = client.post("/api/v1/plans", json={"plant_id": "PLANT_I", "month": 7, "year": 2027}, headers=test_data["admin_headers"])
+    plan_id = res_plan.json()["id"]
+
+    # 2. Add item
+    item_res = client.post(
+        f"/api/v1/plans/{plan_id}/items/single",
+        json={"consumable_id": str(c1.id), "requested_qty": 350.0},
+        headers=test_data["admin_headers"],
+    )
+    item_id = item_res.json()["id"]
+
+    # 3. Direct approve plan -> triggers background aggregation
+    client.patch(f"/api/v1/plans/{plan_id}/approve", headers=test_data["admin_headers"])
+
+    # 4. Verify GET /aggregate/7/2027 immediately reflects the 350.0 quantity without manual aggregation call
+    agg_res = client.get("/api/v1/aggregate/7/2027", headers=test_data["admin_headers"])
+    assert agg_res.status_code == 200
+    records = agg_res.json()
+    assert len(records) == 1
+    assert records[0]["consumable_id"] == str(c1.id)
+    assert records[0]["total_gross_qty"] == 350.0
+
+    # 5. Update item quantity -> automatic background recalculation
+    client.put(
+        f"/api/v1/plans/{plan_id}/items/{item_id}",
+        json={"requested_qty": 500.0},
+        headers=test_data["admin_headers"],
+    )
+    agg_res2 = client.get("/api/v1/aggregate/7/2027", headers=test_data["admin_headers"])
+    assert agg_res2.status_code == 200
+    records2 = agg_res2.json()
+    assert len(records2) == 1
+    assert records2[0]["total_gross_qty"] == 500.0
 
 
 def test_get_aggregated_requirements_endpoint(client, test_data):

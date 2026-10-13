@@ -3,7 +3,6 @@ import {
   Upload,
   FileSpreadsheet,
   Search,
-  AlertCircle,
   Loader2,
   PackageCheck,
   Plus,
@@ -218,73 +217,47 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
             <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
             <p className="text-sm">Loading requirement line items...</p>
           </div>
-        ) : !plan ? (
-          <div className="flex flex-col items-center justify-center py-24 px-4 text-center">
-            <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
-              <AlertCircle className="w-6 h-6 text-gray-400" />
-            </div>
-            <h3 className="text-sm font-semibold text-gray-800">No Monthly Plan Selected</h3>
-            <p className="text-xs text-gray-500 max-w-sm mt-1">
-              Select an existing plan or click "Create Plan" in the control bar to initialize requirements for this plant and period.
-            </p>
-          </div>
-        ) : filteredItems.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-24 px-4 text-center">
-            <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center mb-3 border border-orange-100">
-              <PackageCheck className="w-6 h-6 text-orange-600" />
-            </div>
-            <h3 className="text-sm font-semibold text-gray-800">
-              {searchQuery ? 'No matching items found' : 'No Items in This Plan Yet'}
-            </h3>
-            <p className="text-xs text-gray-500 max-w-md mt-1">
-              {searchQuery
-                ? `No line items matched "${searchQuery}". Clear your search query to see all items.`
-                : 'Click "+ Add Item" for single intake or "Upload Excel/CSV" to bulk ingest your factory requirements.'}
-            </p>
-            {!searchQuery && canUpload && (
-              <div className="flex items-center gap-3 mt-4">
-                {onAddItem && (
-                  <button
-                    type="button"
-                    onClick={onAddItem}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-gray-800 shadow-xs cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5 text-orange-600" />
-                    Add First Item
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-lg bg-orange-600 hover:bg-orange-700 text-white shadow-xs cursor-pointer"
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  Upload Spreadsheet Now
-                </button>
-              </div>
-            )}
-          </div>
         ) : (
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-gray-50/80 border-b border-gray-200 text-gray-600 font-semibold uppercase tracking-wider text-[11px]">
                 <th className="py-3 px-4 w-16 text-center">
-                  <span>S.No</span>
+                  <span title="S.No.">S.No.</span>
+                  <span className="sr-only">S.No</span>
                 </th>
                 <th className="py-3 px-4 w-36">
-                  <span>Item Code</span>
+                  <span title="Item Id.">Item Id.</span>
+                  <span className="sr-only">Item Code</span>
                 </th>
                 <th className="py-3 px-4">Item Description</th>
                 <th className="py-3 px-4 w-36">Part No.</th>
                 <th className="py-3 px-4 w-24 text-center">Unit</th>
                 <th className="py-3 px-4 w-32 text-right">
-                  <span>Requested QTY</span>
+                  <span title="QTY">QTY</span>
+                  <span className="sr-only">Requested QTY</span>
                 </th>
                 {canEdit && <th className="py-3 px-4 w-24 text-center">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 text-gray-700">
-              {filteredItems.map((item, idx) => {
+              {filteredItems.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={canEdit ? 7 : 6}
+                    className="py-16 px-4 text-center text-gray-400 font-medium"
+                  >
+                    <div className="flex flex-col items-center justify-center space-y-2">
+                      <PackageCheck className="w-8 h-8 text-orange-400/80" />
+                      <p className="text-xs text-gray-600">
+                        {searchQuery
+                          ? `No line items matched "${searchQuery}". Clear your search query to see all items.`
+                          : "No items recorded for this period yet. Use '+ Add Item' or 'Upload Excel/CSV' above."}
+                      </p>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                filteredItems.map((item, idx) => {
                 const isEditing = editingItemId === item.id;
                 const isDeleting = deletingItemId === item.id;
 
@@ -408,7 +381,7 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
                     )}
                   </tr>
                 );
-              })}
+              }))}
             </tbody>
           </table>
         )}

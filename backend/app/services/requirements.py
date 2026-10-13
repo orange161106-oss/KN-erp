@@ -545,6 +545,13 @@ def is_admin_user(user: CurrentUser) -> bool:
     return any(r in ("SUPER ADMIN", "SUPER_ADMIN", "ADMIN") for r in roles_normalized)
 
 
+def is_admin_or_planner_user(user: CurrentUser) -> bool:
+    if is_admin_user(user):
+        return True
+    roles_normalized = [str(r).upper().strip() for r in (user.roles or [])]
+    return any(r in ("PLANNER",) for r in roles_normalized)
+
+
 def auto_get_or_create_consumable(
     db: Session,
     item_id_or_code: str,
@@ -631,7 +638,7 @@ def _to_plan_response(plan: MonthlyRequirementPlan) -> MonthlyRequirementPlanRes
     status_str = plan.status.value if hasattr(plan.status, "value") else str(plan.status)
     items = sorted(
         [_to_line_item_response(it) for it in (plan.line_items or [])],
-        key=lambda x: (x.serial_no is None, x.serial_no or 0, str(x.item_id or ""))
+        key=lambda x: (x.serial_no is None, x.serial_no or 0, str(x.id or ""))
     )
     return MonthlyRequirementPlanResponse(
         id=plan.id,
@@ -648,7 +655,40 @@ def _to_plan_response(plan: MonthlyRequirementPlan) -> MonthlyRequirementPlanRes
 def get_monthly_plans(
     db: Session,
     user: CurrentUser,
+    month: Optional[int] = None,
+    year: Optional[int] = None,
 ) -> list[MonthlyRequirementPlanResponse]:
+    """Fetch monthly requirement plans.
+    Auto-provisions missing plant plans in DRAFT status when month and year are specified.
+    """
+    ALL_PLANTS = ["PLANT_I", "PLANT_II", "PLANT_III", "PLANT_IV", "PLANT_V"]
+
+    # Auto-provision plans if month and year are provided
+    if month is not None and year is not None:
+        if is_admin_or_planner_user(user):
+            target_plants = ALL_PLANTS
+        else:
+            assigned = getattr(user, "assigned_plant", None)
+            target_plants = [assigned] if assigned else []
+
+        for p_id in target_plants:
+            existing = db.execute(
+                select(MonthlyRequirementPlan).where(
+                    MonthlyRequirementPlan.plant_id == p_id,
+                    MonthlyRequirementPlan.month == month,
+                    MonthlyRequirementPlan.year == year,
+                )
+            ).scalar_one_or_none()
+            if not existing:
+                new_plan = MonthlyRequirementPlan(
+                    plant_id=p_id,
+                    month=month,
+                    year=year,
+                    status=RequirementStatus.DRAFT,
+                )
+                db.add(new_plan)
+        db.commit()
+
     stmt = (
         select(MonthlyRequirementPlan)
         .options(
@@ -656,7 +696,12 @@ def get_monthly_plans(
         )
         .order_by(MonthlyRequirementPlan.year.desc(), MonthlyRequirementPlan.month.desc())
     )
-    if not is_admin_user(user):
+    if month is not None:
+        stmt = stmt.where(MonthlyRequirementPlan.month == month)
+    if year is not None:
+        stmt = stmt.where(MonthlyRequirementPlan.year == year)
+
+    if not is_admin_or_planner_user(user):
         assigned_plant = getattr(user, "assigned_plant", None)
         stmt = stmt.where(MonthlyRequirementPlan.plant_id == assigned_plant)
 
@@ -764,6 +809,14 @@ def upsert_single_line_item(
     db.refresh(item)
     if not item.consumable:
         item.consumable = consumable
+
+    # Automatic background aggregation
+    try:
+        from app.services.mrp_calculator import run_monthly_aggregation
+        run_monthly_aggregation(db, plan.month, plan.year)
+    except Exception:
+        pass
+
     return _to_line_item_response(item)
 
 
@@ -807,6 +860,14 @@ def update_single_line_item(
 
     db.commit()
     db.refresh(item)
+
+    # Automatic background aggregation
+    try:
+        from app.services.mrp_calculator import run_monthly_aggregation
+        run_monthly_aggregation(db, plan.month, plan.year)
+    except Exception:
+        pass
+
     return _to_line_item_response(item)
 
 
@@ -832,6 +893,14 @@ def delete_single_line_item(
 
     db.delete(item)
     db.commit()
+
+    # Automatic background aggregation
+    try:
+        from app.services.mrp_calculator import run_monthly_aggregation
+        run_monthly_aggregation(db, plan.month, plan.year)
+    except Exception:
+        pass
+
     return {"message": "Line item deleted successfully", "id": str(item_id)}
 
 
@@ -1096,6 +1165,13 @@ def bulk_upsert_line_items(
         all_upserted_items.extend(items)
 
     db.commit()
+
+    # Automatic background aggregation
+    try:
+        from app.services.mrp_calculator import run_monthly_aggregation
+        run_monthly_aggregation(db, plan.month, plan.year)
+    except Exception:
+        pass
 
     results = [_to_line_item_response(it) for it in all_upserted_items]
     return BulkUploadResponse(

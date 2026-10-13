@@ -99,13 +99,16 @@ def get_version_calculation_errors(
 def handle_get_plans(
     session: Annotated[Session, Depends(get_db)],
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    month: Optional[int] = Query(None),
+    year: Optional[int] = Query(None),
 ) -> list[MonthlyRequirementPlanResponse]:
     """Fetch monthly requirement plans.
 
     Admins/Super Admins see all plans. Standard users (Plant Incharge)
     are automatically filtered to their assigned plant.
+    When month and year are specified, automatically auto-provisions missing plant plans in DRAFT.
     """
-    return get_monthly_plans(session, current_user)
+    return get_monthly_plans(session, current_user, month=month, year=year)
 
 
 def handle_create_plan(
@@ -230,22 +233,29 @@ def handle_approve_plan(
     session: Annotated[Session, Depends(get_db)],
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> MonthlyRequirementPlanResponse:
-    """Transition status from SUBMITTED to APPROVED. Strictly protected: Admin or Planner."""
+    """Transition status to APPROVED (directly from DRAFT or SUBMITTED). Strictly protected: Admin or Planner."""
     require_admin_or_planner_role(current_user)
 
     plan = session.get(MonthlyRequirementPlan, plan_id)
     if not plan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monthly requirement plan not found.")
 
-    if plan.status != RequirementStatus.SUBMITTED:
+    if plan.status not in (RequirementStatus.SUBMITTED, RequirementStatus.DRAFT):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot approve plan in '{plan.status.value}' status. Only SUBMITTED plans can be approved.",
+            detail=f"Cannot approve plan in '{plan.status.value}' status. Plan is already {plan.status.value}.",
         )
 
     plan.status = RequirementStatus.APPROVED
     session.commit()
     session.refresh(plan)
+
+    # Automatic background aggregation upon plan approval
+    try:
+        run_monthly_aggregation(session, month=plan.month, year=plan.year)
+    except Exception:
+        pass
+
     return _to_plan_response(plan)
 
 

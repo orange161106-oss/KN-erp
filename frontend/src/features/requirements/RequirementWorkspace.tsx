@@ -135,7 +135,7 @@ export const RequirementWorkspace: React.FC = () => {
   const loadPlans = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchPlans();
+      const data = await fetchPlans(selectedMonth, selectedYear);
       setPlans(data || []);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to fetch requirement plans';
@@ -143,7 +143,7 @@ export const RequirementWorkspace: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedMonth, selectedYear]);
 
   useEffect(() => {
     loadPlans();
@@ -463,7 +463,7 @@ export const RequirementWorkspace: React.FC = () => {
               >
                 {MONTH_NAMES.map((name, idx) => (
                   <option key={idx + 1} value={idx + 1}>
-                    {idx + 1} - {name}
+                    {name}
                   </option>
                 ))}
               </select>

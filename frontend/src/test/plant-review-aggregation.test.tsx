@@ -37,14 +37,6 @@ describe('Plant Review UI & Aggregation Dashboard', () => {
     },
   ];
 
-  const mockRunResponse: reqApi.AggregationRunResponse = {
-    month: 10,
-    year: 2026,
-    total_approved_plans: 3,
-    total_aggregated_consumables: 2,
-    records: mockAggregatedRecords,
-  };
-
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -80,9 +72,9 @@ describe('Plant Review UI & Aggregation Dashboard', () => {
     });
   });
 
-  describe('Task 3: UI Layout & Controls', () => {
-    it('removes manual UUID input from main view and provides floating Control Bar with Month, Year, and Action buttons', async () => {
-      vi.spyOn(reqApi, 'fetchAggregatedRequirements').mockResolvedValue(mockAggregatedRecords);
+  describe('Task 3: Compact 5-Plant Layout & Controls', () => {
+    it('renders ONLY the 5 plant tabs and clean month labels without numeric prefixes', async () => {
+      vi.spyOn(reqApi, 'fetchPlans').mockResolvedValue([]);
 
       renderPlantWorkflow();
 
@@ -98,107 +90,103 @@ describe('Plant Review UI & Aggregation Dashboard', () => {
       expect(monthSelect).toBeInTheDocument();
       expect(yearSelect).toBeInTheDocument();
 
-      // Verify Action Buttons
-      expect(screen.getByRole('button', { name: /Load Aggregation/i })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Run\/Refresh Aggregation Engine/i })).toBeInTheDocument();
+      // Verify Clean Month Dropdown Labels (January, February... no "1 - ")
+      expect(screen.getByRole('option', { name: 'January' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'October' })).toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: '10 - October' })).not.toBeInTheDocument();
+
+      // Verify ONLY 5 plant tabs are present (No Final Requirements, Confirmations, or Additional Requirements)
+      expect(screen.getByRole('button', { name: 'Plant I' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Plant II' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Plant III' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Plant IV' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Plant V' })).toBeInTheDocument();
+
+      expect(screen.queryByRole('button', { name: /Final Requirements/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Confirmations/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Additional Requirements/i })).not.toBeInTheDocument();
+
+      // Verify Old Aggregation buttons and badge are removed
+      expect(screen.queryByRole('button', { name: /Load Aggregation/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Run\/Refresh Aggregation Engine/i })).not.toBeInTheDocument();
+      expect(screen.queryByText('Phase 4 Workspace')).not.toBeInTheDocument();
     });
 
-    it('clicking "Load Aggregation" triggers GET request for selected month and year', async () => {
-      const fetchSpy = vi.spyOn(reqApi, 'fetchAggregatedRequirements').mockResolvedValue(mockAggregatedRecords);
+    it('switches between plant tabs and renders always-visible table headers even when empty', async () => {
+      const mockPlant1Plan: reqApi.MonthlyRequirementPlan = {
+        id: 'plan-p1',
+        plant_id: 'PLANT_I',
+        month: 10,
+        year: 2026,
+        status: 'DRAFT',
+        line_items: [],
+      };
+      vi.spyOn(reqApi, 'fetchPlans').mockResolvedValue([mockPlant1Plan]);
 
       renderPlantWorkflow();
 
-      await screen.findByText('Plant Review & Aggregation');
-      const loadBtn = screen.getByRole('button', { name: /Load Aggregation/i });
+      expect(await screen.findByText('Plant Review & Aggregation')).toBeInTheDocument();
 
-      await userEvent.click(loadBtn);
-
-      await waitFor(() => {
-        expect(fetchSpy).toHaveBeenCalled();
-      });
-    });
-
-    it('clicking "Run/Refresh Aggregation Engine" triggers calculation and auto-reloads grid', async () => {
-      const fetchSpy = vi.spyOn(reqApi, 'fetchAggregatedRequirements').mockResolvedValue(mockAggregatedRecords);
-      const runSpy = vi.spyOn(reqApi, 'runAggregation').mockResolvedValue(mockRunResponse);
-
-      renderPlantWorkflow();
-
-      await screen.findByText('Plant Review & Aggregation');
-      const runBtn = screen.getByRole('button', { name: /Run\/Refresh Aggregation Engine/i });
-
-      await userEvent.click(runBtn);
-
-      await waitFor(() => {
-        expect(runSpy).toHaveBeenCalled();
-      });
-
-      expect(await screen.findByText(/Aggregation complete! Consolidated 2 items across 3 approved plans/)).toBeInTheDocument();
-      expect(fetchSpy).toHaveBeenCalled();
-    });
-  });
-
-  describe('Task 4: Aggregated Data Grid', () => {
-    it('renders data table under Final Requirements tab with Item Code, Description, Part No, Unit, Gross QTY, and Net Purchase QTY', async () => {
-      vi.spyOn(reqApi, 'fetchAggregatedRequirements').mockResolvedValue(mockAggregatedRecords);
-
-      renderPlantWorkflow();
-
-      // Final Requirements is default active tab
-      const headings = await screen.findAllByText('Final Requirements (Handoff)');
-      expect(headings.length).toBeGreaterThan(0);
-
-      // Verify Table Columns
-      expect(screen.getByText('S.No')).toBeInTheDocument();
-      expect(screen.getByText('Item Code')).toBeInTheDocument();
+      // Table headers are clearly visible
+      expect(screen.getByText('S.No.')).toBeInTheDocument();
+      expect(screen.getByText('Item Id.')).toBeInTheDocument();
       expect(screen.getByText('Item Description')).toBeInTheDocument();
-      expect(screen.getByText('Part No')).toBeInTheDocument();
+      expect(screen.getByText('Part No.')).toBeInTheDocument();
       expect(screen.getByText('Unit')).toBeInTheDocument();
-      expect(screen.getByText('Total Gross QTY (Sum across plants)')).toBeInTheDocument();
-      expect(screen.getByText('Net Purchase QTY')).toBeInTheDocument();
+      expect(screen.getByText('QTY')).toBeInTheDocument();
+      expect(screen.getByText('Actions')).toBeInTheDocument();
 
-      // Verify Records
-      expect(screen.getByText('WLD-WIRE-01')).toBeInTheDocument();
-      expect(screen.getByText('MIG Welding Wire 1.2mm')).toBeInTheDocument();
-      expect(screen.getByText('PN-WLD-12')).toBeInTheDocument();
-      expect(screen.getByText('Kg')).toBeInTheDocument();
-      expect(screen.getByText('4,500')).toBeInTheDocument();
-      expect(screen.getByText('4,200')).toBeInTheDocument();
+      // Clean empty state message inside tbody
+      expect(
+        screen.getByText("No items recorded for this period yet. Use '+ Add Item' or 'Upload Excel/CSV' above.")
+      ).toBeInTheDocument();
 
-      expect(screen.getByText('PNT-THIN-01')).toBeInTheDocument();
-      expect(screen.getByText('Industrial Paint Thinner')).toBeInTheDocument();
-      expect(screen.getByText('PN-THIN-01')).toBeInTheDocument();
-      expect(screen.getByText('Ltr')).toBeInTheDocument();
-      expect(screen.getByText('1,250')).toBeInTheDocument();
-      expect(screen.getByText('1,100')).toBeInTheDocument();
-
-      // Verify Summary Footer
-      expect(screen.getByText(/5,750/)).toBeInTheDocument(); // 4500 + 1250
-      expect(screen.getByText(/5,300/)).toBeInTheDocument(); // 4200 + 1100
+      // Verify action readiness
+      expect(screen.getAllByRole('button', { name: '+ Add Item' }).length).toBeGreaterThan(0);
+      expect(screen.getByRole('button', { name: /Upload Excel\/CSV/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Approve Plant I' })).toBeInTheDocument();
     });
 
-    it('filters rows via search input', async () => {
-      vi.spyOn(reqApi, 'fetchAggregatedRequirements').mockResolvedValue(mockAggregatedRecords);
+    it('renders line items and allows approving plant plan directly', async () => {
+      const mockPlant1Plan: reqApi.MonthlyRequirementPlan = {
+        id: 'plan-p1',
+        plant_id: 'PLANT_I',
+        month: 10,
+        year: 2026,
+        status: 'DRAFT',
+        line_items: [
+          {
+            id: 'item-1',
+            plan_id: 'plan-p1',
+            consumable_id: 'c1',
+            item_id: 'CON-001',
+            item_code: 'CON-001',
+            consumable_name: 'Hydraulic Oil 68',
+            part_no: 'OIL-68',
+            unit: 'L',
+            requested_qty: 250,
+          },
+        ],
+      };
+      vi.spyOn(reqApi, 'fetchPlans').mockResolvedValue([mockPlant1Plan]);
+      const approveSpy = vi.spyOn(reqApi, 'approvePlan').mockResolvedValue({
+        ...mockPlant1Plan,
+        status: 'APPROVED',
+      });
 
       renderPlantWorkflow();
 
-      await screen.findByText('MIG Welding Wire 1.2mm');
+      expect(await screen.findByText('Hydraulic Oil 68')).toBeInTheDocument();
+      expect(screen.getByText('CON-001')).toBeInTheDocument();
+      expect(screen.getByText('OIL-68')).toBeInTheDocument();
+      expect(screen.getAllByText('250').length).toBeGreaterThan(0);
 
-      const searchInput = screen.getByPlaceholderText(/Search code, description, part no/i);
-      await userEvent.type(searchInput, 'Thinner');
+      const approveBtn = screen.getByRole('button', { name: 'Approve Plant I' });
+      await userEvent.click(approveBtn);
 
-      expect(screen.queryByText('MIG Welding Wire 1.2mm')).not.toBeInTheDocument();
-      expect(screen.getByText('Industrial Paint Thinner')).toBeInTheDocument();
-    });
-
-    it('displays friendly empty state when no aggregation exists', async () => {
-      vi.spyOn(reqApi, 'fetchAggregatedRequirements').mockResolvedValue([]);
-
-      renderPlantWorkflow();
-
-      expect(await screen.findByText('No Aggregated Requirements Found')).toBeInTheDocument();
-      expect(screen.getByText(/Click "Run\/Refresh Aggregation Engine" to group approved monthly plans/)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Run Aggregation Engine Now/i })).toBeInTheDocument();
+      await waitFor(() => {
+        expect(approveSpy).toHaveBeenCalledWith('plan-p1');
+      });
     });
   });
 });

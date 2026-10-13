@@ -93,8 +93,16 @@ requirementsClient.interceptors.request.use((config) => {
   return config;
 });
 
-export async function fetchPlans(): Promise<MonthlyRequirementPlan[]> {
-  const response = await requirementsClient.get<MonthlyRequirementPlan[]>('/api/v1/requirements/plans');
+export async function fetchPlans(month?: number, year?: number): Promise<MonthlyRequirementPlan[]> {
+  const hasParams = (month !== undefined && month !== null) || (year !== undefined && year !== null);
+  const response = hasParams
+    ? await requirementsClient.get<MonthlyRequirementPlan[]>('/api/v1/requirements/plans', {
+        params: {
+          ...(month !== undefined && month !== null ? { month } : {}),
+          ...(year !== undefined && year !== null ? { year } : {}),
+        },
+      })
+    : await requirementsClient.get<MonthlyRequirementPlan[]>('/api/v1/requirements/plans');
   return response.data;
 }
 
