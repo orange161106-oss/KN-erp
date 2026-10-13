@@ -26,6 +26,9 @@ from app.schemas.stock_statements import (
     GroupedWarningResponse,
     RowIssue,
     StockStatementConfirmRequest,
+    StockStatementBatchUpdateRequest,
+    StockStatementDeleteRequest,
+    StockStatementDeleteResponse,
     StockStatementHistoryItem,
     StockStatementLineResponse,
     StockStatementMetadata,
@@ -665,7 +668,7 @@ def confirm_stock_statement_import(
                 StockStatementBatch.statement_month == req.statement_month,
                 StockStatementBatch.statement_year == req.statement_year,
                 StockStatementBatch.status == "active",
-            )
+            ).with_for_update().execution_options(populate_existing=True)
         ).all()
 
         if existing_batches and not req.replace_confirmed:
@@ -765,6 +768,98 @@ def confirm_stock_statement_import(
         _PREVIEW_STORE.pop(req.file_token, None)
 
     return get_stock_statement(session, req.statement_month, req.statement_year)
+
+
+def batch_update_stock_statement(session: Session, *, payload: StockStatementBatchUpdateRequest,
+                                 user: CurrentUser) -> StockStatementResponse:
+    try:
+        batch = session.scalar(select(StockStatementBatch).where(
+            StockStatementBatch.id == payload.batch_id,
+            StockStatementBatch.statement_month == payload.month,
+            StockStatementBatch.statement_year == payload.year,
+            StockStatementBatch.status == "active",
+        ).with_for_update().execution_options(populate_existing=True))
+        if batch is None:
+            raise ApplicationError("STATEMENT_CHANGED", "The active statement has changed. Refresh before saving.", 409)
+        for update in payload.updates:
+            line = session.get(StockStatementLine, update.id)
+            if line is None or line.batch_id != batch.id:
+                raise ApplicationError("INVALID_STATEMENT_ROW", "A row does not belong to the selected statement.", 422)
+            changes = update.model_dump(exclude_unset=True, exclude={"id"})
+            if not changes:
+                continue
+            before = {key: str(getattr(line, key)) if getattr(line, key) is not None else None for key in changes}
+            for key, value in changes.items():
+                setattr(line, key, value)
+            line.updated_at = datetime.now(timezone.utc)
+            log_audit_event(session=session, entity_type="StockStatementLine", entity_id=line.id,
+                action="UPDATE", actor_id=user.id, old_values=before,
+                new_values={key: str(value) if value is not None else None for key, value in changes.items()},
+                reason=f"Reviewed statement correction for {payload.month}/{payload.year}.")
+        batch.updated_at = datetime.now(timezone.utc)
+        batch.updated_by = user.id
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    return get_stock_statement(session, payload.month, payload.year, item_class_filter="ALL")
+
+
+def delete_stock_statement(
+    session: Session,
+    *,
+    month: int,
+    year: int,
+    payload: StockStatementDeleteRequest,
+    user: CurrentUser,
+) -> StockStatementDeleteResponse:
+    """Deactivate one reviewed monthly batch and retain its lines and audit history."""
+    try:
+        batch = session.scalar(
+            select(StockStatementBatch).where(
+                StockStatementBatch.id == payload.batch_id,
+                StockStatementBatch.statement_month == month,
+                StockStatementBatch.statement_year == year,
+            ).with_for_update().execution_options(populate_existing=True)
+        )
+        if batch is None:
+            raise ApplicationError(
+                "STATEMENT_NOT_FOUND", "The selected upload does not belong to this month and year. Refresh the statement.", 404,
+            )
+        if batch.status not in {"active", "deleted"}:
+            raise ApplicationError(
+                "STATEMENT_CHANGED", "This statement has been replaced. Refresh and review the current upload before deleting.", 409,
+            )
+        replayed = batch.status == "deleted"
+        result = StockStatementDeleteResponse(
+            batch_id=batch.id,
+            statement_month=month,
+            statement_year=year,
+            deleted_row_count=batch.row_count,
+            replayed=replayed,
+        )
+        if not replayed:
+            batch.status = "deleted"
+            batch.updated_at = datetime.now(timezone.utc)
+            batch.updated_by = user.id
+            log_audit_event(
+                session=session,
+                entity_type="StockStatementBatch",
+                entity_id=batch.id,
+                action="DELETE",
+                actor_id=user.id,
+                old_values={
+                    "status": "active", "statement_month": month, "statement_year": year,
+                    "source_filename": batch.source_filename, "row_count": batch.row_count,
+                },
+                new_values={"status": "deleted", "statement_month": month, "statement_year": year},
+                reason=payload.reason,
+            )
+        session.commit()
+        return result
+    except Exception:
+        session.rollback()
+        raise
 
 
 def get_stock_statement(
@@ -922,7 +1017,7 @@ def list_stock_statement_history(
     month: int,
     year: int,
 ) -> list[StockStatementHistoryItem]:
-    """List historical upload batches for a month/year (active and superseded)."""
+    """List historical uploads for a month/year, including deleted batches."""
     batches = session.scalars(
         select(StockStatementBatch)
         .where(

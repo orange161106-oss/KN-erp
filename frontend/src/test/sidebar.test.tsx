@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
@@ -59,7 +59,7 @@ describe('Sidebar Component - Dynamic Sidebar & Premium Motion', () => {
     // Title text visible
     expect(screen.getByText('KNL Consumable ERP')).toBeInTheDocument();
 
-    // Click hamburger button to toggle collapsed state
+    // Click sidebar toggle to collapse the navigation
     const toggleButton = screen.getByRole('button', { name: /Collapse sidebar/i });
     expect(toggleButton).toBeInTheDocument();
     await user.click(toggleButton);
@@ -73,6 +73,52 @@ describe('Sidebar Component - Dynamic Sidebar & Premium Motion', () => {
 
     // Button label switched to expand
     expect(screen.getByRole('button', { name: /Expand sidebar/i })).toBeInTheDocument();
+  });
+
+  it('shows menu names on hover outside the collapsed scrolling sidebar', async () => {
+    const user = userEvent.setup();
+    renderSidebar({ isCollapsed: true });
+
+    const reports = screen.getByRole('link', { name: 'Reports' });
+    await user.hover(reports.querySelector('svg')!);
+    const tooltip = screen.getByRole('tooltip');
+    expect(tooltip).toHaveTextContent('Reports');
+    expect(reports).toHaveAttribute('aria-describedby', tooltip.id);
+    expect(screen.getByTestId('sidebar-container')).not.toContainElement(tooltip);
+
+    await user.unhover(reports.querySelector('svg')!);
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+
+    await user.hover(screen.getByRole('button', { name: 'Master data' }));
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Master data');
+  });
+
+  it('shows tooltips on keyboard focus and dismisses them on Escape and scrolling', () => {
+    renderSidebar({ isCollapsed: true });
+    const dashboard = screen.getByRole('link', { name: 'Dashboard' });
+
+    fireEvent.focus(dashboard);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Dashboard');
+    fireEvent.keyDown(dashboard, { key: 'Escape' });
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+
+    fireEvent.focus(screen.getByRole('link', { name: 'Stock statement' }));
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Stock statement');
+    fireEvent.scroll(screen.getByRole('navigation'));
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+  });
+
+  it('keeps the expanded menu free of hover tooltips and clears them when expanded', async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    await user.hover(screen.getByRole('link', { name: 'Dashboard' }));
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+    await user.hover(screen.getByRole('link', { name: 'Dashboard' }));
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Dashboard');
+    await user.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
   });
 
   it('Task 1: respects external isCollapsed prop when passed from layout', () => {

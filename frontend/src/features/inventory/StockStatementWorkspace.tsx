@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
@@ -7,12 +7,16 @@ import {
   FileSpreadsheet,
   RefreshCw,
   Search,
+  Save,
+  Trash2,
   Upload,
   X,
 } from 'lucide-react';
 import DataTable, { type ColumnDef, type HeaderGroupDef } from '../../components/DataTable';
+import ConfirmDialog from '../../components/ConfirmDialog';
 import { apiClient, getAccessToken, getApiBaseUrl } from '../../api/client';
 import { useAuth } from '../auth/context';
+import { stockEditValue, validatedStockValue, validatedStockText } from './stockEditing';
 import { canPerform } from '../../core/rbac';
 
 export interface StockStatementLine {
@@ -72,6 +76,14 @@ export interface StockStatementResponse {
   metadata: StockStatementMetadata;
   summary: StockStatementSummary;
   records: StockStatementLine[];
+}
+
+interface StatementDeleteTarget {
+  batchId: string;
+  month: number;
+  year: number;
+  rowCount: number;
+  filename: string | null;
 }
 
 export interface RowIssue {
@@ -172,11 +184,23 @@ export default function StockStatementWorkspace() {
   const [warningsOnly, setWarningsOnly] = useState(false);
   const [itemClassFilter, setItemClassFilter] = useState<'CONSUMABLE' | 'ALL'>('CONSUMABLE');
 
+  const [originalRecords, setOriginalRecords] = useState<Map<string, StockStatementLine>>(new Map());
+  const [dirtyMap, setDirtyMap] = useState<Map<string, Partial<StockStatementLine>>>(new Map());
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [draftVersion, setDraftVersion] = useState(0);
   const [records, setRecords] = useState<StockStatementLine[]>([]);
   const [metadata, setMetadata] = useState<StockStatementMetadata | null>(null);
   const [summary, setSummary] = useState<StockStatementSummary | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const loadRequestId = useRef(0);
+  const [deleteTarget, setDeleteTarget] = useState<StatementDeleteTarget | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const deleteInProgress = useRef(false);
+  const saveInProgress = useRef(false);
 
   // Table selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -191,9 +215,14 @@ export default function StockStatementWorkspace() {
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const canUpload = user ? canPerform(user, 'inventory', 'import') || canPerform(user, 'inventory', 'create') : false;
+  const canEdit = user ? canPerform(user, 'inventory', 'update') : false;
+  const canDeleteStatement = user ? canPerform(user, 'inventory', 'delete') : false;
+  const selectedStatementLoaded = Boolean(metadata?.has_statement && metadata.batch_id
+    && metadata.statement_month === selectedMonth && metadata.statement_year === selectedYear);
 
   const loadData = useCallback(async () => {
     if (!selectedMonth || !selectedYear) return;
+    const requestId = ++loadRequestId.current;
     setIsLoading(true);
     setErrorMsg(null);
     try {
@@ -202,23 +231,99 @@ export default function StockStatementWorkspace() {
           searchQuery ? `&search=${encodeURIComponent(searchQuery)}` : ''
         }`
       );
+      if (requestId !== loadRequestId.current) return;
       setRecords(res.records || []);
+      setOriginalRecords(new Map((res.records || []).map(row => [row.id, { ...row }])));
+      setDirtyMap(new Map());
+      setDraftVersion(prev => prev + 1);
       setMetadata(res.metadata);
       setSummary(res.summary);
       setSelectedIds(new Set());
     } catch (err: any) {
+      if (requestId !== loadRequestId.current) return;
       setErrorMsg(err.message || 'Failed to load stock statement.');
       setRecords([]);
+      setOriginalRecords(new Map());
+      setDirtyMap(new Map());
       setMetadata(null);
       setSummary(null);
     } finally {
-      setIsLoading(false);
+      if (requestId === loadRequestId.current) setIsLoading(false);
     }
   }, [selectedMonth, selectedYear, itemClassFilter, warningsOnly, searchQuery]);
 
   useEffect(() => {
+    setSuccessMsg(null);
     loadData();
   }, [loadData]);
+
+  const handleDeleteStatement = async () => {
+    if (!deleteTarget || !canDeleteStatement || deleteInProgress.current) return;
+    const reason = deleteReason.trim();
+    if (!reason) { setDeleteError('Enter a reason for deleting this statement.'); return; }
+    const target = deleteTarget;
+    deleteInProgress.current = true;
+    setIsDeleting(true);
+    setDeleteError(null);
+    ++loadRequestId.current;
+    try {
+      await apiClient.delete(`/api/v1/inventory/statement?month=${target.month}&year=${target.year}`, {
+        batch_id: target.batchId,
+        reason,
+      });
+      setRecords([]);
+      setOriginalRecords(new Map());
+      setDirtyMap(new Map());
+      setMetadata(null);
+      setSummary(null);
+      setSelectedIds(new Set());
+      setDeleteTarget(null);
+      setSuccessMsg(`Deleted the ${MONTH_NAMES[target.month - 1]} ${target.year} stock statement.`);
+      await loadData();
+    } catch (err: unknown) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete the statement.');
+    } finally {
+      deleteInProgress.current = false;
+      setIsDeleting(false);
+    }
+  };
+
+  const handleCellChange = useCallback((rowId: string, colKey: string, value: string) => {
+    if (!canEdit || isDeleting || deleteTarget) return;
+    setRecords(prev => prev.map(row => row.id === rowId ? { ...row, [colKey]: value } : row));
+    setDirtyMap(prev => {
+      const next = new Map(prev);
+      const changes = { ...next.get(rowId) } as Record<string, unknown>;
+      const original = originalRecords.get(rowId) as unknown as Record<string, unknown> | undefined;
+      if (stockEditValue(original?.[colKey]) === value) delete changes[colKey];
+      else changes[colKey] = value;
+      if (Object.keys(changes).length) next.set(rowId, changes as Partial<StockStatementLine>);
+      else next.delete(rowId);
+      return next;
+    });
+  }, [canEdit, isDeleting, deleteTarget, originalRecords]);
+
+  const handleSave = async () => {
+    if (!canEdit || !metadata?.batch_id || !dirtyMap.size || deleteTarget || isDeleting || saveStatus === 'saving') return;
+    if (saveInProgress.current) return;
+    saveInProgress.current = true;
+    setSaveStatus('saving');
+    setErrorMsg(null);
+    try {
+      const updates = Array.from(dirtyMap.entries()).map(([id, changes]) => ({ id,
+        ...Object.fromEntries(Object.entries(changes).map(([key, value]) => [key, key === 'item_description' ? validatedStockText(value) : validatedStockValue(value)])),
+      }));
+      await apiClient.patch('/api/v1/inventory/statement/batch-update', {
+        month: selectedMonth, year: selectedYear, batch_id: metadata.batch_id, updates,
+      });
+      await loadData();
+      setSaveStatus('saved');
+      setSuccessMsg('Stock statement corrections saved with audit history.');
+    } catch (err) {
+      setSaveStatus('error');
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to save statement corrections.');
+    } finally { saveInProgress.current = false; }
+  };
 
   // Export Stock Statement
   const handleExport = async () => {
@@ -321,6 +426,7 @@ export default function StockStatementWorkspace() {
     () => [
       {
         key: 'item_id',
+        isEditable: false,
         label: 'Item Id',
         width: 130,
         isSticky: true,
@@ -340,18 +446,21 @@ export default function StockStatementWorkspace() {
       },
       {
         key: 'item_description',
+        isEditable: canEdit,
         label: 'Item Description',
         width: 240,
         render: val => <span className="truncate block" title={val || ''}>{val || '—'}</span>,
       },
       {
         key: 'cust_part_no',
+        isEditable: false,
         label: 'Cust. Part No.',
         width: 140,
         render: val => <span>{val || '—'}</span>,
       },
       {
         key: 'unit',
+        isEditable: false,
         label: 'Unit',
         width: 80,
         align: 'center',
@@ -431,6 +540,7 @@ export default function StockStatementWorkspace() {
         ? [
             {
               key: 'item_class' as keyof StockStatementLine,
+              isEditable: false,
               label: 'Class',
               width: 130,
               align: 'center' as const,
@@ -452,7 +562,7 @@ export default function StockStatementWorkspace() {
           ]
         : []),
     ],
-    [itemClassFilter]
+    [itemClassFilter, canEdit]
   );
 
   // Grouped Header Bands
@@ -468,7 +578,7 @@ export default function StockStatementWorkspace() {
       { label: 'ISSUES', colSpan: 2, className: 'bg-amber-50 text-amber-800' },
       { label: 'CLOSING', colSpan: 2, className: 'bg-purple-50 text-purple-800' },
     ],
-    [itemClassFilter]
+    [itemClassFilter, canEdit]
   );
 
   return (
@@ -521,6 +631,8 @@ export default function StockStatementWorkspace() {
           <div className="flex items-center gap-1.5">
             <label className="text-xs font-semibold text-stone-700">Month:</label>
             <select
+              aria-label="Statement month"
+              disabled={isDeleting || Boolean(deleteTarget) || dirtyMap.size > 0 || saveStatus === 'saving'}
               value={selectedMonth}
               onChange={e => setSelectedMonth(Number(e.target.value))}
               className="text-xs border border-stone-300 rounded-lg px-2.5 py-1.5 bg-white font-medium text-stone-800 focus:outline-none focus:ring-1 focus:ring-erp-orange"
@@ -537,6 +649,8 @@ export default function StockStatementWorkspace() {
           <div className="flex items-center gap-1.5">
             <label className="text-xs font-semibold text-stone-700">Year:</label>
             <select
+              aria-label="Statement year"
+              disabled={isDeleting || Boolean(deleteTarget) || dirtyMap.size > 0 || saveStatus === 'saving'}
               value={selectedYear}
               onChange={e => setSelectedYear(Number(e.target.value))}
               className="text-xs border border-stone-300 rounded-lg px-2.5 py-1.5 bg-white font-medium text-stone-800 focus:outline-none focus:ring-1 focus:ring-erp-orange"
@@ -560,7 +674,7 @@ export default function StockStatementWorkspace() {
               setPreviewData(null);
               setUploadError(null);
             }}
-            disabled={!canUpload || !selectedMonth || !selectedYear || isLoading}
+            disabled={!canUpload || !selectedMonth || !selectedYear || isLoading || isDeleting || dirtyMap.size > 0 || saveStatus === 'saving'}
             className="flex items-center gap-1.5 text-xs font-semibold bg-erp-orange text-white px-3 py-1.5 rounded-lg shadow-xs hover:bg-erp-orange/90 disabled:opacity-50 transition-colors"
             title={canUpload ? 'Upload monthly statement spreadsheet' : 'Permission required'}
           >
@@ -568,11 +682,39 @@ export default function StockStatementWorkspace() {
             Upload statement
           </button>
 
+          {canDeleteStatement && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!selectedStatementLoaded || !metadata?.batch_id) return;
+                setDeleteTarget({ batchId: metadata.batch_id, month: selectedMonth, year: selectedYear,
+                  rowCount: metadata.row_count, filename: metadata.source_filename });
+                setDeleteReason('');
+                setDeleteError(null);
+              }}
+              disabled={!selectedStatementLoaded || isLoading || isDeleting || dirtyMap.size > 0 || saveStatus === 'saving'}
+              className="flex items-center gap-1.5 text-xs font-semibold border border-red-300 text-red-700 bg-white px-3 py-1.5 rounded-lg hover:bg-red-50 disabled:opacity-50 transition-colors"
+              title={`Delete the ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear} statement`}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Delete statement
+            </button>
+          )}
+
+          {canEdit && <button type="button" onClick={() => { void handleSave(); }}
+            disabled={!dirtyMap.size || saveStatus === 'saving' || isDeleting}
+            className="flex items-center gap-1.5 text-xs font-semibold bg-emerald-600 text-white px-3 py-1.5 rounded-lg disabled:opacity-50">
+            <Save className="w-3.5 h-3.5" />Save changes
+          </button>}
+
+          {dirtyMap.size > 0 && <button type="button" disabled={saveStatus === 'saving' || isDeleting}
+            onClick={() => { setRecords(Array.from(originalRecords.values())); setDirtyMap(new Map()); setDraftVersion(prev => prev + 1); }}
+            className="text-xs underline px-2">Discard edits</button>}
           {/* Export to Excel */}
           <button
             type="button"
             onClick={handleExport}
-            disabled={!metadata?.has_statement || records.length === 0}
+            disabled={!metadata?.has_statement || records.length === 0 || isDeleting}
             className="flex items-center gap-1.5 text-xs font-medium border border-stone-300 bg-white hover:bg-stone-50 text-stone-700 px-3 py-1.5 rounded-lg disabled:opacity-50 transition-colors"
           >
             <ArrowDownToLine className="w-3.5 h-3.5 text-stone-600" />
@@ -583,7 +725,7 @@ export default function StockStatementWorkspace() {
           <button
             type="button"
             onClick={() => loadData()}
-            disabled={isLoading}
+            disabled={isLoading || isDeleting || dirtyMap.size > 0 || saveStatus === 'saving'}
             className="p-1.5 border border-stone-300 rounded-lg hover:bg-stone-50 text-stone-600 disabled:opacity-50 transition-colors"
             title="Refresh statement"
           >
@@ -597,6 +739,7 @@ export default function StockStatementWorkspace() {
           <div className="flex items-center bg-stone-100 p-0.5 rounded-lg border border-stone-200 text-xs">
             <button
               type="button"
+              disabled={dirtyMap.size > 0 || saveStatus === 'saving'}
               onClick={() => setItemClassFilter('CONSUMABLE')}
               className={`px-2.5 py-1 rounded-md font-semibold transition-all ${
                 itemClassFilter === 'CONSUMABLE'
@@ -608,6 +751,7 @@ export default function StockStatementWorkspace() {
             </button>
             <button
               type="button"
+              disabled={dirtyMap.size > 0 || saveStatus === 'saving'}
               onClick={() => setItemClassFilter('ALL')}
               className={`px-2.5 py-1 rounded-md font-semibold transition-all ${
                 itemClassFilter === 'ALL'
@@ -624,6 +768,7 @@ export default function StockStatementWorkspace() {
             <input
               type="text"
               placeholder="Search items..."
+              disabled={dirtyMap.size > 0 || saveStatus === 'saving'}
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               className="text-xs pl-8 pr-3 py-1.5 border border-stone-300 rounded-lg w-44 focus:outline-none focus:ring-1 focus:ring-erp-orange"
@@ -633,6 +778,7 @@ export default function StockStatementWorkspace() {
           <label className="flex items-center gap-1.5 text-xs text-stone-700 font-medium cursor-pointer select-none border border-stone-200 px-2.5 py-1.5 rounded-lg hover:bg-stone-50">
             <input
               type="checkbox"
+              disabled={dirtyMap.size > 0 || saveStatus === 'saving'}
               checked={warningsOnly}
               onChange={e => setWarningsOnly(e.target.checked)}
               className="rounded text-erp-orange focus:ring-erp-orange"
@@ -683,7 +829,9 @@ export default function StockStatementWorkspace() {
         </div>
       )}
 
+      {dirtyMap.size > 0 && <p className="text-xs text-amber-800">Unsaved edits: use Ctrl+Z to undo, then save or discard before changing the period or filters.</p>}
       {/* Error alert if load failed */}
+      {successMsg && <div role="status" className="p-3 bg-green-50 border border-green-200 text-green-800 text-xs rounded-xl">{successMsg}</div>}
       {errorMsg && (
         <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center gap-2">
           <AlertCircle className="w-4 h-4 shrink-0" />
@@ -694,6 +842,11 @@ export default function StockStatementWorkspace() {
       {/* 4. Table Area */}
       <div className="flex-1 min-h-0 bg-white rounded-xl border border-stone-200 shadow-xs overflow-hidden flex flex-col">
         <DataTable
+          key={`${metadata?.batch_id || `${selectedYear}-${selectedMonth}`}:${draftVersion}`}
+          originalData={originalRecords}
+          onCellChange={handleCellChange}
+          onSave={handleSave}
+          saveStatus={saveStatus}
           columns={columns}
           headerGroups={headerGroups}
           data={records}
@@ -707,7 +860,7 @@ export default function StockStatementWorkspace() {
           }
           storageKey="knl_stock_statement_grid"
           canCreate={false}
-          canUpdate={false}
+          canUpdate={canEdit && !isDeleting && !deleteTarget && saveStatus !== 'saving'}
           canDelete={false}
           getRowClassName={row =>
             row.warning_codes && row.warning_codes.length > 0
@@ -716,6 +869,28 @@ export default function StockStatementWorkspace() {
           }
         />
       </div>
+
+      <ConfirmDialog
+        isOpen={Boolean(deleteTarget)}
+        title={`Delete ${deleteTarget ? `${MONTH_NAMES[deleteTarget.month - 1]} ${deleteTarget.year}` : ''} stock statement?`}
+        message="This removes the entire selected month's statement from the active view and future purchase planning. Other months and years are unaffected. Upload and audit history are retained."
+        confirmLabel="Delete statement"
+        isDestructive
+        isLoading={isDeleting}
+        isConfirmDisabled={!deleteReason.trim()}
+        onConfirm={() => { void handleDeleteStatement(); }}
+        onCancel={() => { if (!isDeleting) setDeleteTarget(null); }}
+        details={<div className="font-sans space-y-2">
+          <p>{deleteTarget?.rowCount} rows in the complete statement, including rows hidden by filters.</p>
+          {dirtyMap.size > 0 && <p>Unsaved edits will be discarded after deletion.</p>}
+          {deleteTarget?.filename && <p>File: {deleteTarget.filename}</p>}
+          <label className="block" htmlFor="statement-delete-reason">Reason for deletion</label>
+          <textarea id="statement-delete-reason" autoFocus maxLength={1000} disabled={isDeleting}
+            value={deleteReason} onChange={event => setDeleteReason(event.target.value)}
+            className="w-full rounded border border-gray-300 p-2" rows={2} />
+          {deleteError && <p role="alert" className="text-red-700">{deleteError}</p>}
+        </div>}
+      />
 
       {/* 5. Upload & Preview Modal */}
       {showUploadModal && (

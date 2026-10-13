@@ -13,12 +13,14 @@ from app.schemas.auth import CurrentUser
 from app.schemas.error import ErrorResponse
 from app.schemas.stock_statements import (
     StockManagementResponse,
+    StockParameterDeleteRequest,
+    StockParameterDeleteResponse,
     StockParameterBatchUpdateRequest,
     StockParameterConfirmRequest,
     StockParameterHistoryItem,
     StockParameterPreviewResponse,
 )
-from app.security.permissions import require_permissions
+from app.security.permissions import require_feature_flag, require_permissions
 from app.services import stock_management_service as service
 
 router = APIRouter(
@@ -29,6 +31,7 @@ router = APIRouter(
 
 ReadUser = Annotated[CurrentUser, Depends(require_permissions("inventory.stock.read", "inventory.read"))]
 ImportUser = Annotated[CurrentUser, Depends(require_permissions("inventory.stock.import", "inventory.create", "inventory.update"))]
+DeleteUser = Annotated[CurrentUser, Depends(require_feature_flag("inventory_delete"))]
 Database = Annotated[Session, Depends(get_db)]
 
 
@@ -52,6 +55,17 @@ def get_management(
         category_filter=category,
         multi_category_only=multi_category_only,
     )
+
+
+@router.delete("", response_model=StockParameterDeleteResponse)
+def delete_parameters(
+    session: Database,
+    user: DeleteUser,
+    payload: StockParameterDeleteRequest,
+    month: Annotated[int, Query(ge=1, le=12)],
+    year: Annotated[int, Query(ge=2000, le=2100)],
+) -> StockParameterDeleteResponse:
+    return service.delete_stock_parameters(session, month=month, year=year, payload=payload, user=user)
 
 
 @router.post("/preview", response_model=StockParameterPreviewResponse)
@@ -91,14 +105,14 @@ def confirm_parameters(
 @router.patch("/batch-update", response_model=StockManagementResponse)
 def batch_update_parameters(
     session: Database,
-    user: ImportUser,
+    user: Annotated[CurrentUser, Depends(require_feature_flag("inventory_update"))],
     payload: StockParameterBatchUpdateRequest,
 ) -> StockManagementResponse:
     """Save inline edits to stock parameters (MSL, Max, MOQ, Lead Time) for the month."""
     return service.batch_update_stock_parameters(
         session,
-        payload=payload,
-        user=user,
+        request=payload,
+        current_user=user,
     )
 
 

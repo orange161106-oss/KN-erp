@@ -28,6 +28,8 @@ from app.schemas.stock_statements import (
     StockManagementSummary,
     StockParameterBatchUpdateRequest,
     StockParameterConfirmRequest,
+    StockParameterDeleteRequest,
+    StockParameterDeleteResponse,
     StockParameterHistoryItem,
     StockParameterPreviewResponse,
     StockParameterRecord,
@@ -1496,7 +1498,7 @@ def confirm_stock_parameters_import(
                 StockParameterBatch.month == req.month,
                 StockParameterBatch.year == req.year,
                 StockParameterBatch.status == "active",
-            )
+            ).with_for_update().execution_options(populate_existing=True)
         ).all()
 
         if existing_batches and not req.replace_confirmed:
@@ -1615,6 +1617,63 @@ def confirm_stock_parameters_import(
         _PARAM_PREVIEW_STORE.pop(req.file_token, None)
 
     return get_stock_management(session, req.month, req.year)
+
+
+def delete_stock_parameters(
+    session: Session,
+    *,
+    month: int,
+    year: int,
+    payload: StockParameterDeleteRequest,
+    user: CurrentUser,
+) -> StockParameterDeleteResponse:
+    """Deactivate one reviewed parameter batch and retain its records and audit history."""
+    try:
+        batch = session.scalar(
+            select(StockParameterBatch).where(
+                StockParameterBatch.id == payload.batch_id,
+                StockParameterBatch.month == month,
+                StockParameterBatch.year == year,
+            ).with_for_update().execution_options(populate_existing=True)
+        )
+        if batch is None:
+            raise ApplicationError(
+                "PARAMETERS_NOT_FOUND", "The selected upload does not belong to this month and year. Refresh the parameters.", 404,
+            )
+        if batch.status not in {"active", "deleted"}:
+            raise ApplicationError(
+                "PARAMETERS_CHANGED", "These parameters have been replaced. Refresh and review the current upload before deleting.", 409,
+            )
+        replayed = batch.status == "deleted"
+        result = StockParameterDeleteResponse(
+            batch_id=batch.id,
+            month=month,
+            year=year,
+            deleted_row_count=batch.row_count,
+            replayed=replayed,
+        )
+        if not replayed:
+            batch.status = "deleted"
+            batch.updated_at = datetime.now(timezone.utc)
+            batch.updated_by = user.id
+            log_audit_event(
+                session=session,
+                entity_type="StockParameterBatch",
+                entity_id=batch.id,
+                action="DELETE",
+                actor_id=user.id,
+                old_values={
+                    "status": "active", "month": month, "year": year,
+                    "source_filename": batch.source_filename, "row_count": batch.row_count,
+                },
+                new_values={"status": "deleted", "month": month, "year": year},
+                reason=payload.reason,
+            )
+        session.commit()
+        return result
+    except Exception:
+        session.rollback()
+        raise
 
 
 def get_stock_management(
@@ -1771,6 +1830,7 @@ def get_stock_management(
     return StockManagementResponse(metadata=meta, summary=summary, records=records)
 
 
+<<<<<<< HEAD
 def batch_update_stock_parameters(
     session: Session,
     request: Optional[StockParameterBatchUpdateRequest] = None,
@@ -1850,6 +1910,47 @@ def batch_update_stock_parameters(
 
     session.commit()
     return get_stock_management(session, req.month, req.year)
+=======
+def batch_update_stock_parameters(session: Session, request: StockParameterBatchUpdateRequest,
+                                  current_user: CurrentUser) -> StockManagementResponse:
+    try:
+        batch = session.scalar(select(StockParameterBatch).where(
+            StockParameterBatch.month == request.month, StockParameterBatch.year == request.year,
+            StockParameterBatch.status == "active",
+        ).with_for_update().execution_options(populate_existing=True))
+        if batch is None:
+            raise ApplicationError("NOT_FOUND", "No active parameter batch for this period.", 404)
+        if request.batch_id is not None and request.batch_id != batch.id:
+            raise ApplicationError("PARAMETERS_CHANGED", "Parameters were replaced. Refresh before saving.", 409)
+        for update in request.updates:
+            param = session.get(StockParameter, update.id)
+            if param is None or param.batch_id != batch.id:
+                raise ApplicationError("INVALID_PARAMETER_ROW", "A row does not belong to the selected parameters.", 422)
+            changes = update.model_dump(exclude_unset=True, exclude={"id"})
+            if not changes:
+                continue
+            minimum = changes.get("min_stock_level", param.min_stock_level)
+            maximum = changes.get("max_stock_level", param.max_stock_level)
+            if minimum is not None and maximum is not None and minimum > maximum:
+                raise ApplicationError("VALIDATION_ERROR", f"Min stock level exceeds Max for {param.item_id}.", 422)
+            before = {key: str(getattr(param, key)) if getattr(param, key) is not None else None for key in changes}
+            for key, value in changes.items():
+                setattr(param, key, value)
+            param.edited_after_import = True
+            param.updated_at = datetime.now(timezone.utc)
+            param.updated_by = current_user.id
+            log_audit_event(session=session, entity_type="StockParameter", entity_id=param.id,
+                action="UPDATE", actor_id=current_user.id, old_values=before,
+                new_values={key: str(value) if value is not None else None for key, value in changes.items()},
+                reason=f"Reviewed stock parameter correction for {request.month}/{request.year}.")
+        batch.updated_at = datetime.now(timezone.utc)
+        batch.updated_by = current_user.id
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    return get_stock_management(session, request.month, request.year)
+>>>>>>> 362c115b98d983cd87509f7de4c16cdbe1e4c33f
 
 
 def list_stock_parameter_history(

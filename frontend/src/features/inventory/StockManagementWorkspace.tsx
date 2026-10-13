@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
@@ -15,11 +15,14 @@ import {
   Sliders,
   Sparkles,
   Upload,
+  Trash2,
   X,
 } from 'lucide-react';
+import ConfirmDialog from '../../components/ConfirmDialog';
 import DataTable, { type ColumnDef } from '../../components/DataTable';
 import { apiClient, getAccessToken, getApiBaseUrl } from '../../api/client';
 import { useAuth } from '../auth/context';
+import { stockEditValue, validatedStockValue, validatedStockText } from './stockEditing';
 import { canPerform } from '../../core/rbac';
 
 export interface StockParameterRecord {
@@ -68,6 +71,14 @@ export interface StockManagementSummary {
   ambiguous_limits_items_count?: number;
   skipped_rows_count?: number;
   resolved_rows_count?: number;
+}
+
+interface ParameterDeleteTarget {
+  batchId: string;
+  month: number;
+  year: number;
+  rowCount: number;
+  filename: string | null;
 }
 
 export interface StockManagementResponse {
@@ -253,15 +264,31 @@ export default function StockManagementWorkspace() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [showComparisonDetails, setShowComparisonDetails] = useState(false);
 
+<<<<<<< HEAD
   // Issue filter & row resolutions inside the upload modal
   const [issueTypeFilter, setIssueTypeFilter] = useState<string>('ALL');
   const [resolutions, setResolutions] = useState<Record<number, RowResolutionInput>>({});
+=======
+  const [deleteTarget, setDeleteTarget] = useState<ParameterDeleteTarget | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const deleteInProgress = useRef(false);
+  const saveInProgress = useRef(false);
+  const loadRequestId = useRef(0);
+  const [draftVersion, setDraftVersion] = useState(0);
+  const canDeleteParameters = user ? canPerform(user, 'inventory', 'delete') : false;
+  const selectedParametersLoaded = Boolean(metadata?.has_parameters && metadata.batch_id
+    && metadata.month === selectedMonth && metadata.year === selectedYear);
+>>>>>>> 362c115b98d983cd87509f7de4c16cdbe1e4c33f
 
   const canUpload = user ? canPerform(user, 'inventory', 'import') || canPerform(user, 'inventory', 'create') : false;
-  const canEdit = user ? canPerform(user, 'inventory', 'update') || canPerform(user, 'inventory', 'create') : false;
+  const canEdit = user ? canPerform(user, 'inventory', 'update') : false;
 
   const loadData = useCallback(async () => {
     if (!selectedMonth || !selectedYear) return;
+    const requestId = ++loadRequestId.current;
     setIsLoading(true);
     setErrorMsg(null);
     try {
@@ -275,81 +302,97 @@ export default function StockManagementWorkspace() {
       const res = await apiClient.get<StockManagementResponse>(
         `/api/v1/inventory/management?${params.toString()}`
       );
+      if (requestId !== loadRequestId.current) return;
       setRecords(res.records || []);
       const orig = new Map<string, StockParameterRecord>();
       (res.records || []).forEach(r => orig.set(r.id, { ...r }));
       setOriginalRecords(orig);
+      setDraftVersion(prev => prev + 1);
       setMetadata(res.metadata);
       setSummary(res.summary);
       setDirtyMap(new Map());
       setSelectedIds(new Set());
     } catch (err: any) {
+      if (requestId !== loadRequestId.current) return;
       setErrorMsg(err.message || 'Failed to load stock parameters.');
       setRecords([]);
       setOriginalRecords(new Map());
       setMetadata(null);
       setSummary(null);
     } finally {
-      setIsLoading(false);
+      if (requestId === loadRequestId.current) setIsLoading(false);
     }
   }, [selectedMonth, selectedYear, searchQuery, multiCategoryOnly]);
 
   useEffect(() => {
+    setSuccessMsg(null);
     loadData();
   }, [loadData]);
 
-  // Handle cell edit
-  const handleCellChange = useCallback(
-    (rowId: string, colKey: string, value: string) => {
-      setRecords(prev =>
-        prev.map(row => {
-          if (row.id !== rowId) return row;
-          let parsedVal: any = value;
-          if (colKey === 'lead_time_days') {
-            parsedVal = value === '' ? null : parseInt(value, 10);
-            if (isNaN(parsedVal)) parsedVal = null;
-          } else {
-            parsedVal = value === '' ? null : parseFloat(value);
-            if (isNaN(parsedVal)) parsedVal = null;
-          }
-          return { ...row, [colKey]: parsedVal };
-        })
-      );
-
-      setDirtyMap(prev => {
-        const next = new Map(prev);
-        const existing = next.get(rowId) || {};
-        let parsedVal: any = value;
-        if (colKey === 'lead_time_days') {
-          parsedVal = value === '' ? null : parseInt(value, 10);
-          if (isNaN(parsedVal)) parsedVal = null;
-        } else {
-          parsedVal = value === '' ? null : parseFloat(value);
-          if (isNaN(parsedVal)) parsedVal = null;
-        }
-        next.set(rowId, { ...existing, [colKey]: parsedVal });
-        return next;
+  const handleDeleteParameters = async () => {
+    if (!deleteTarget || !canDeleteParameters || deleteInProgress.current) return;
+    const reason = deleteReason.trim();
+    if (!reason) { setDeleteError('Enter a reason for deleting these parameters.'); return; }
+    const target = deleteTarget;
+    deleteInProgress.current = true;
+    setIsDeleting(true);
+    setDeleteError(null);
+    ++loadRequestId.current;
+    try {
+      await apiClient.delete(`/api/v1/inventory/management?month=${target.month}&year=${target.year}`, {
+        batch_id: target.batchId,
+        reason,
       });
-    },
-    []
-  );
+      setRecords([]);
+      setOriginalRecords(new Map());
+      setDirtyMap(new Map());
+      setSaveStatus('idle');
+      setMetadata(null);
+      setSummary(null);
+      setSelectedIds(new Set());
+      setDeleteTarget(null);
+      setSuccessMsg(`Deleted the ${MONTH_NAMES[target.month - 1]} ${target.year} stock parameters.`);
+      await loadData();
+    } catch (err: unknown) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete the parameters.');
+    } finally {
+      deleteInProgress.current = false;
+      setIsDeleting(false);
+    }
+  };
+
+  // Drafts retain exact decimal text and remove dirty fields when undone to the saved value.
+  const handleCellChange = useCallback((rowId: string, colKey: string, value: string) => {
+    if (!canEdit || isDeleting || deleteTarget) return;
+    setRecords(prev => prev.map(row => row.id === rowId ? { ...row, [colKey]: value } : row));
+    setDirtyMap(prev => {
+      const next = new Map(prev);
+      const changes = { ...next.get(rowId) } as Record<string, unknown>;
+      const original = originalRecords.get(rowId) as unknown as Record<string, unknown> | undefined;
+      if (stockEditValue(original?.[colKey]) === value) delete changes[colKey];
+      else changes[colKey] = value;
+      if (Object.keys(changes).length) next.set(rowId, changes as Partial<StockParameterRecord>);
+      else next.delete(rowId);
+      return next;
+    });
+  }, [canEdit, isDeleting, deleteTarget, originalRecords]);
 
   // Save batch updates (Ctrl+S)
   const handleSave = useCallback(async () => {
-    if (dirtyMap.size === 0) return;
+    if (dirtyMap.size === 0 || !canEdit || deleteTarget || deleteInProgress.current) return;
+    if (saveInProgress.current) return;
+    saveInProgress.current = true;
     setSaveStatus('saving');
     try {
-      const updates = Array.from(dirtyMap.entries()).map(([id, changes]) => ({
-        id,
-        min_stock_level: changes.min_stock_level,
-        max_stock_level: changes.max_stock_level,
-        min_order_qty: changes.min_order_qty,
-        lead_time_days: changes.lead_time_days,
+      const updates = Array.from(dirtyMap.entries()).map(([id, changes]) => ({ id,
+        ...Object.fromEntries(Object.entries(changes).map(([key, value]) =>
+          [key, key === 'description' ? validatedStockText(value) : validatedStockValue(value, key === 'lead_time_days')])),
       }));
 
       await apiClient.patch('/api/v1/inventory/management/batch-update', {
         month: selectedMonth,
         year: selectedYear,
+        batch_id: metadata?.batch_id,
         updates,
       });
 
@@ -359,21 +402,10 @@ export default function StockManagementWorkspace() {
       setTimeout(() => setSaveStatus('idle'), 2000);
     } catch (err: any) {
       setSaveStatus('error');
-      alert(`Save failed: ${err.message}`);
-    }
-  }, [dirtyMap, selectedMonth, selectedYear, loadData]);
+      setErrorMsg(`Save failed: ${err.message}`);
+    } finally { saveInProgress.current = false; }
+  }, [dirtyMap, selectedMonth, selectedYear, loadData, canEdit, deleteTarget, metadata]);
 
-  // Global Ctrl+S key listener
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault();
-        handleSave();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleSave]);
 
   // Export Stock Management
   const handleExport = async () => {
@@ -628,7 +660,7 @@ export default function StockManagementWorkspace() {
 
   // Discard changes
   const handleDiscard = () => {
-    if (dirtyMap.size === 0) return;
+    if (dirtyMap.size === 0 || !canEdit || deleteTarget || deleteInProgress.current) return;
     if (window.confirm('Discard all unsaved edits?')) {
       const origList: StockParameterRecord[] = [];
       originalRecords.forEach(r => origList.push({ ...r }));
@@ -642,6 +674,7 @@ export default function StockManagementWorkspace() {
     () => [
       {
         key: 'category',
+        isEditable: false,
         label: 'Category',
         width: 170,
         render: (val, row) => (
@@ -669,12 +702,14 @@ export default function StockManagementWorkspace() {
       },
       {
         key: 'type_of_material',
+        isEditable: false,
         label: 'Type of Material',
         width: 160,
         render: val => <span>{val || '—'}</span>,
       },
       {
         key: 'item_id',
+        isEditable: false,
         label: 'Item Id',
         width: 150,
         isSticky: true,
@@ -708,6 +743,7 @@ export default function StockManagementWorkspace() {
       },
       {
         key: 'description',
+        isEditable: canEdit,
         label: 'Description',
         width: 260,
         render: val => <span className="truncate block" title={val || ''}>{val || '—'}</span>,
@@ -815,6 +851,8 @@ export default function StockManagementWorkspace() {
           <div className="flex items-center gap-1.5">
             <label className="text-xs font-semibold text-stone-700">Month:</label>
             <select
+              aria-label="Parameters month"
+              disabled={isDeleting || Boolean(deleteTarget) || dirtyMap.size > 0 || saveStatus === 'saving'}
               value={selectedMonth}
               onChange={e => setSelectedMonth(Number(e.target.value))}
               className="text-xs border border-stone-300 rounded-lg px-2.5 py-1.5 bg-white font-medium text-stone-800 focus:outline-none focus:ring-1 focus:ring-erp-orange"
@@ -831,6 +869,8 @@ export default function StockManagementWorkspace() {
           <div className="flex items-center gap-1.5">
             <label className="text-xs font-semibold text-stone-700">Year:</label>
             <select
+              aria-label="Parameters year"
+              disabled={isDeleting || Boolean(deleteTarget) || dirtyMap.size > 0 || saveStatus === 'saving'}
               value={selectedYear}
               onChange={e => setSelectedYear(Number(e.target.value))}
               className="text-xs border border-stone-300 rounded-lg px-2.5 py-1.5 bg-white font-medium text-stone-800 focus:outline-none focus:ring-1 focus:ring-erp-orange"
@@ -855,7 +895,7 @@ export default function StockManagementWorkspace() {
               setUploadError(null);
               setResolutions({});
             }}
-            disabled={!canUpload || !selectedMonth || !selectedYear || isLoading}
+            disabled={!canUpload || !selectedMonth || !selectedYear || isLoading || isDeleting || Boolean(deleteTarget) || dirtyMap.size > 0 || saveStatus === 'saving'}
             className="flex items-center gap-1.5 text-xs font-semibold bg-erp-orange text-white px-3 py-1.5 rounded-lg shadow-xs hover:bg-erp-orange/90 disabled:opacity-50 transition-colors"
             title={canUpload ? 'Upload stock management parameters spreadsheet' : 'Permission required'}
           >
@@ -863,12 +903,28 @@ export default function StockManagementWorkspace() {
             Upload parameters
           </button>
 
+          {canDeleteParameters && (
+            <button type="button"
+              onClick={() => {
+                if (!selectedParametersLoaded || !metadata?.batch_id) return;
+                setDeleteTarget({ batchId: metadata.batch_id, month: selectedMonth, year: selectedYear,
+                  rowCount: metadata.row_count, filename: metadata.source_filename });
+                setDeleteReason('');
+                setDeleteError(null);
+              }}
+              disabled={!selectedParametersLoaded || isLoading || isDeleting || saveStatus === 'saving'}
+              className="flex items-center gap-1.5 text-xs font-semibold border border-red-300 text-red-700 bg-white px-3 py-1.5 rounded-lg hover:bg-red-50 disabled:opacity-50 transition-colors">
+              <Trash2 className="w-3.5 h-3.5" />
+              Delete parameters
+            </button>
+          )}
+
           {/* Save Edits (Ctrl+S) */}
           {canEdit && (
             <button
               type="button"
               onClick={handleSave}
-              disabled={dirtyMap.size === 0 || saveStatus === 'saving'}
+              disabled={dirtyMap.size === 0 || saveStatus === 'saving' || isDeleting || Boolean(deleteTarget)}
               className="flex items-center gap-1.5 text-xs font-semibold bg-emerald-600 text-white px-3 py-1.5 rounded-lg shadow-xs hover:bg-emerald-700 disabled:opacity-50 transition-colors"
               title="Save changes (Ctrl+S)"
             >
@@ -886,7 +942,7 @@ export default function StockManagementWorkspace() {
           {dirtyMap.size > 0 && (
             <button
               type="button"
-              onClick={handleDiscard}
+              onClick={() => { handleDiscard(); setDraftVersion(prev => prev + 1); }}
               className="text-xs text-stone-600 hover:text-stone-800 px-2 py-1.5 underline"
             >
               Discard edits
@@ -914,7 +970,7 @@ export default function StockManagementWorkspace() {
           <button
             type="button"
             onClick={handleExport}
-            disabled={!metadata?.has_parameters || records.length === 0}
+            disabled={!metadata?.has_parameters || records.length === 0 || isDeleting || Boolean(deleteTarget) || dirtyMap.size > 0 || saveStatus === 'saving'}
             className="flex items-center gap-1.5 text-xs font-medium border border-stone-300 bg-white hover:bg-stone-50 text-stone-700 px-3 py-1.5 rounded-lg disabled:opacity-50 transition-colors"
           >
             <ArrowDownToLine className="w-3.5 h-3.5 text-stone-600" />
@@ -943,7 +999,7 @@ export default function StockManagementWorkspace() {
           <button
             type="button"
             onClick={() => loadData()}
-            disabled={isLoading}
+            disabled={isLoading || isDeleting || Boolean(deleteTarget) || dirtyMap.size > 0 || saveStatus === 'saving'}
             className="p-1.5 border border-stone-300 rounded-lg hover:bg-stone-50 text-stone-600 disabled:opacity-50 transition-colors"
             title="Refresh parameters"
           >
@@ -957,6 +1013,7 @@ export default function StockManagementWorkspace() {
           <input
             type="text"
             placeholder="Search items or category..."
+            disabled={isDeleting || Boolean(deleteTarget) || dirtyMap.size > 0 || saveStatus === 'saving'}
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             className="text-xs pl-8 pr-3 py-1.5 border border-stone-300 rounded-lg w-56 focus:outline-none focus:ring-1 focus:ring-erp-orange"
@@ -1009,7 +1066,9 @@ export default function StockManagementWorkspace() {
         </div>
       )}
 
+      {dirtyMap.size > 0 && <p className="text-xs text-amber-800">Unsaved edits: use Ctrl+Z to undo, then save or discard before changing the period or filters.</p>}
       {/* Error alert if load failed */}
+      {successMsg && <div role="status" className="p-3 bg-green-50 border border-green-200 text-green-800 text-xs rounded-xl">{successMsg}</div>}
       {errorMsg && (
         <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center gap-2">
           <AlertCircle className="w-4 h-4 shrink-0" />
@@ -1020,6 +1079,8 @@ export default function StockManagementWorkspace() {
       {/* 4. Table Area */}
       <div className="flex-1 min-h-0 bg-white rounded-xl border border-stone-200 shadow-xs overflow-hidden flex flex-col">
         <DataTable
+          key={`${metadata?.batch_id || `${selectedYear}-${selectedMonth}`}:${draftVersion}`}
+          originalData={originalRecords}
           columns={columns}
           data={records}
           selectedIds={selectedIds}
@@ -1035,12 +1096,38 @@ export default function StockManagementWorkspace() {
           }
           storageKey="knl_stock_management_grid"
           canCreate={false}
-          canUpdate={canEdit}
+          canUpdate={canEdit && !isDeleting && !deleteTarget && saveStatus !== 'saving'}
           canDelete={false}
         />
       </div>
 
+<<<<<<< HEAD
       {/* 5. Upload, Validation & Interactive Resolution Modal */}
+=======
+      <ConfirmDialog
+        isOpen={Boolean(deleteTarget)}
+        title={`Delete ${deleteTarget ? `${MONTH_NAMES[deleteTarget.month - 1]} ${deleteTarget.year}` : ''} stock parameters?`}
+        message="This removes the entire selected month's parameters from the active view and future purchase planning. Other months and years are unaffected. Upload and audit history are retained."
+        confirmLabel="Delete parameters"
+        isDestructive
+        isLoading={isDeleting}
+        isConfirmDisabled={!deleteReason.trim()}
+        onConfirm={() => { void handleDeleteParameters(); }}
+        onCancel={() => { if (!isDeleting) setDeleteTarget(null); }}
+        details={<div className="font-sans space-y-2">
+          <p>{deleteTarget?.rowCount} rows in the complete parameter batch, including rows hidden by filters.</p>
+          {dirtyMap.size > 0 && <p>Unsaved edits for this month will also be discarded after deletion.</p>}
+          {deleteTarget?.filename && <p>File: {deleteTarget.filename}</p>}
+          <label className="block" htmlFor="parameters-delete-reason">Reason for deletion</label>
+          <textarea id="parameters-delete-reason" autoFocus maxLength={1000} disabled={isDeleting}
+            value={deleteReason} onChange={event => setDeleteReason(event.target.value)}
+            className="w-full rounded border border-gray-300 p-2" rows={2} />
+          {deleteError && <p role="alert" className="text-red-700">{deleteError}</p>}
+        </div>}
+      />
+
+      {/* 5. Upload & Preview Modal */}
+>>>>>>> 362c115b98d983cd87509f7de4c16cdbe1e4c33f
       {showUploadModal && (
         <div className="fixed inset-0 z-[10000] bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-5xl w-full p-6 shadow-2xl border border-stone-200 flex flex-col max-h-[92vh]">

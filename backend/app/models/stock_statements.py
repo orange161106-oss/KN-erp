@@ -34,7 +34,7 @@ class StockStatementBatch(Base):
     file_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="active", index=True
-    )  # active, superseded
+    )  # active, superseded, deleted (historical rows are retained)
 
     row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     warning_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -166,7 +166,7 @@ class StockParameterBatch(Base):
     file_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="active", index=True
-    )  # active, superseded
+    )  # active, superseded, deleted
 
     row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     summary: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)

@@ -13,11 +13,14 @@ from app.schemas.auth import CurrentUser
 from app.schemas.error import ErrorResponse
 from app.schemas.stock_statements import (
     StockStatementConfirmRequest,
+    StockStatementBatchUpdateRequest,
+    StockStatementDeleteRequest,
+    StockStatementDeleteResponse,
     StockStatementHistoryItem,
     StockStatementPreviewResponse,
     StockStatementResponse,
 )
-from app.security.permissions import require_permissions
+from app.security.permissions import require_feature_flag, require_permissions
 from app.services import stock_statement_service as service
 
 router = APIRouter(
@@ -28,6 +31,7 @@ router = APIRouter(
 
 ReadUser = Annotated[CurrentUser, Depends(require_permissions("inventory.stock.read", "inventory.read"))]
 ImportUser = Annotated[CurrentUser, Depends(require_permissions("inventory.stock.import", "inventory.create", "inventory.update"))]
+DeleteUser = Annotated[CurrentUser, Depends(require_feature_flag("inventory_delete"))]
 Database = Annotated[Session, Depends(get_db)]
 
 
@@ -71,6 +75,25 @@ async def preview_statement(
         month=statement_month,
         year=statement_year,
     )
+
+
+@router.patch("/batch-update", response_model=StockStatementResponse)
+def update_statement(session: Database,
+                     user: Annotated[CurrentUser, Depends(require_feature_flag("inventory_update"))],
+                     payload: StockStatementBatchUpdateRequest) -> StockStatementResponse:
+    return service.batch_update_stock_statement(session, payload=payload, user=user)
+
+
+@router.delete("", response_model=StockStatementDeleteResponse)
+def delete_statement(
+    session: Database,
+    user: DeleteUser,
+    payload: StockStatementDeleteRequest,
+    month: Annotated[int, Query(ge=1, le=12)],
+    year: Annotated[int, Query(ge=2000, le=2100)],
+) -> StockStatementDeleteResponse:
+    """Remove only the reviewed active upload for the selected month/year."""
+    return service.delete_stock_statement(session, month=month, year=year, payload=payload, user=user)
 
 
 @router.post("/confirm", response_model=StockStatementResponse, status_code=status.HTTP_201_CREATED)
