@@ -209,10 +209,29 @@ export default function SalesScheduleImportModal({
         </div>
 
         {errorMsg && (
-          <div className="mx-5 mt-3 p-3 bg-red-50 border border-red-300 text-red-800 rounded-lg text-xs flex items-start gap-2">
-            <span>⚠️</span>
-            <div className="flex-1">{errorMsg}</div>
-            <button onClick={() => setErrorMsg(null)} className="font-bold text-red-500">✕</button>
+          <div className="mx-5 mt-3 p-3 bg-red-50 border border-red-300 text-red-800 rounded-lg text-xs flex items-center justify-between gap-3">
+            <div className="flex items-start gap-2 flex-1">
+              <span>⚠️</span>
+              <div>
+                <p className="font-medium">{errorMsg}</p>
+                {errorMsg.toLowerCase().includes('database') && (
+                  <p className="text-red-600 mt-0.5">The connection was interrupted. Please retry your inspection.</p>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {file && (
+                <button
+                  type="button"
+                  onClick={() => void handleUploadFile()}
+                  disabled={isLoading}
+                  className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white font-medium rounded text-xs transition-colors flex items-center gap-1 shadow-sm"
+                >
+                  <span>🔄</span> Retry
+                </button>
+              )}
+              <button onClick={() => setErrorMsg(null)} className="font-bold text-red-500 hover:text-red-700 p-1">✕</button>
+            </div>
           </div>
         )}
 

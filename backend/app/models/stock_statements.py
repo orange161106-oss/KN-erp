@@ -99,6 +99,9 @@ class StockStatementLine(Base):
         nullable=True,
         index=True,
     )
+    item_class: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="CONSUMABLE", server_default="CONSUMABLE", index=True
+    )
 
     item_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     cust_part_no: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)

@@ -128,7 +128,10 @@ def list_purchase_workspace(
     stmt_lines_map: dict[str, StockStatementLine] = {}
     if prev_statement_batch:
         lines = session.scalars(
-            select(StockStatementLine).where(StockStatementLine.batch_id == prev_statement_batch.id)
+            select(StockStatementLine).where(
+                StockStatementLine.batch_id == prev_statement_batch.id,
+                StockStatementLine.item_class == "CONSUMABLE",
+            )
         ).all()
         for l in lines:
             stmt_lines_map[l.item_id.strip().upper()] = l

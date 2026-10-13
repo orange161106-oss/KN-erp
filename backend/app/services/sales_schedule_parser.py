@@ -111,35 +111,52 @@ def normalize_alias(text: str) -> str:
 
 def seed_default_customers_and_aliases(session: Session) -> None:
     """Ensure standard KNL customers and verified aliases exist in PostgreSQL."""
-    for item in DEFAULT_CUSTOMERS:
-        existing_cust = session.scalar(select(Customer).where(Customer.code == item["code"]))
-        if not existing_cust:
-            existing_cust = Customer(
+    existing_codes = set(session.scalars(select(Customer.code)).all())
+    existing_aliases = set(session.scalars(select(CustomerAlias.normalized_alias)).all())
+
+    needed_custs = [c for c in DEFAULT_CUSTOMERS if c["code"] not in existing_codes]
+    needed_aliases = [
+        (c["code"], a) for c in DEFAULT_CUSTOMERS
+        for a in c["aliases"]
+        if normalize_alias(a["alias"]) not in existing_aliases
+    ]
+    if not needed_custs and not needed_aliases:
+        return
+
+    cust_by_code: dict[str, Customer] = {}
+    if existing_codes:
+        for c in session.scalars(select(Customer).where(Customer.code.in_(list(existing_codes)))).all():
+            cust_by_code[c.code] = c
+
+    for item in needed_custs:
+        new_cust = Customer(
+            id=uuid4(),
+            code=item["code"],
+            name=item["name"],
+            is_active=True,
+        )
+        session.add(new_cust)
+        cust_by_code[item["code"]] = new_cust
+    if needed_custs:
+        session.flush()
+
+    for code, alias_data in needed_aliases:
+        parent_cust = cust_by_code.get(code)
+        if not parent_cust:
+            continue
+        alias_text = alias_data["alias"]
+        norm = normalize_alias(alias_text)
+        session.add(
+            CustomerAlias(
                 id=uuid4(),
-                code=item["code"],
-                name=item["name"],
+                customer_id=parent_cust.id,
+                alias_text=alias_text,
+                normalized_alias=norm,
+                group_label=alias_data["group"],
                 is_active=True,
             )
-            session.add(existing_cust)
-            session.flush()
-
-        for alias_data in item["aliases"]:
-            alias_text = alias_data["alias"]
-            norm = normalize_alias(alias_text)
-            existing_alias = session.scalar(
-                select(CustomerAlias).where(CustomerAlias.normalized_alias == norm)
-            )
-            if not existing_alias:
-                session.add(
-                    CustomerAlias(
-                        id=uuid4(),
-                        customer_id=existing_cust.id,
-                        alias_text=alias_text,
-                        normalized_alias=norm,
-                        group_label=alias_data["group"],
-                        is_active=True,
-                    )
-                )
+        )
+    session.flush()
     session.flush()
 
 
@@ -441,12 +458,15 @@ def parse_sales_schedule_data(
         active_qty_cols = qty_cols  # keep all if filter yielded none
 
     # Load active aliases into memory map: normalized_alias -> (Customer, CustomerAlias)
-    aliases_db = session.scalars(select(CustomerAlias).where(CustomerAlias.is_active.is_(True))).all()
-    alias_map: dict[str, tuple[Customer, CustomerAlias]] = {}
-    for a in aliases_db:
-        cust = session.get(Customer, a.customer_id)
-        if cust and cust.is_active:
-            alias_map[a.normalized_alias] = (cust, a)
+    alias_results = session.execute(
+        select(CustomerAlias, Customer)
+        .join(Customer, CustomerAlias.customer_id == Customer.id)
+        .where(CustomerAlias.is_active.is_(True), Customer.is_active.is_(True))
+    ).all()
+    alias_map: dict[str, tuple[Customer, CustomerAlias]] = {
+        alias.normalized_alias: (cust, alias)
+        for alias, cust in alias_results
+    }
 
     # Load active products for part number checks
     active_products = list(session.scalars(select(Product).where(Product.is_active.is_(True))))

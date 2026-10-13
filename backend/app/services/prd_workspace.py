@@ -2,6 +2,8 @@ import hashlib
 import io
 import time
 import zipfile
+from collections import defaultdict
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
@@ -12,6 +14,8 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.core.errors import ApplicationError
 from app.models.mappings import ProductPlant, ProductProcessConsumable
@@ -403,7 +407,15 @@ def inspect_prd_excel(file_bytes: bytes, filename: str) -> PRDExcelInspectRespon
 # Sales Schedule Multi-Step Preview & Confirmation
 # ---------------------------------------------------------------------------
 
-def _resolve_route_for_product(session: Session, product_id: UUID, plant_id: Optional[UUID] = None) -> Optional[UUID]:
+def _resolve_route_for_product(
+    session: Session,
+    product_id: UUID,
+    plant_id: Optional[UUID] = None,
+    product_plants_by_prod: Optional[dict[UUID, list[ProductPlant]]] = None,
+    routes_by_id: Optional[dict[UUID, Route]] = None,
+    ppc_proc_by_prod: Optional[dict[UUID, set[UUID]]] = None,
+    route_proc_map: Optional[dict[UUID, set[UUID]]] = None,
+) -> Optional[UUID]:
     """Deterministically resolve a valid production route associated with a product.
 
     1. First, check active ProductPlant mappings for this product across any plant.
@@ -412,6 +424,35 @@ def _resolve_route_for_product(session: Session, product_id: UUID, plant_id: Opt
        and find an active Route containing those processes via RouteStep.
     3. Return None if no valid route is deterministically associated.
     """
+    if product_plants_by_prod is not None and routes_by_id is not None:
+        pps = product_plants_by_prod.get(product_id, [])
+        sorted_pps = sorted(
+            pps,
+            key=lambda pp: (
+                0 if (plant_id and pp.plant_id == plant_id) else 1,
+                0 if pp.is_primary else 1,
+                pp.created_at,
+            ),
+        )
+        for pp in sorted_pps:
+            if pp.route_id and pp.route_id in routes_by_id:
+                route = routes_by_id[pp.route_id]
+                if route.is_active:
+                    return route.id
+
+        if ppc_proc_by_prod is not None and route_proc_map is not None:
+            proc_ids = ppc_proc_by_prod.get(product_id, set())
+            if proc_ids:
+                matching_routes = [
+                    r for r_id, r in routes_by_id.items()
+                    if r.is_active and proc_ids.intersection(route_proc_map.get(r_id, set()))
+                ]
+                if matching_routes:
+                    matching_routes.sort(key=lambda r: r.name or "")
+                    return matching_routes[0].id
+        return None
+
+    # Fallback to direct DB query if in-memory dicts not provided
     stmt = (
         select(ProductPlant)
         .where(
@@ -613,7 +654,7 @@ def preview_sales_schedule_upload(
     target_period: Optional[str] = None,
     revision_label: Optional[str] = None,
 ) -> SalesScheduleImportPreviewResponse:
-    """Parse sales schedule workbook and return interactive inspection results."""
+    t_start = time.perf_counter()
     _cleanup_stale_staged_files()
 
     # Get available sheets
@@ -626,33 +667,82 @@ def preview_sales_schedule_upload(
 
     chosen_sheet, rows = read_workbook_rows(file_bytes, filename, sheet_name)
 
+    t_parse_start = time.perf_counter()
     parse_result = parse_sales_schedule_data(
         rows=rows,
         session=session,
         target_period=target_period,
         revision_label=revision_label,
     )
+    t_parse_end = time.perf_counter()
 
-    # Check for missing routes in preview so users are alerted upfront
+    # Check for missing routes in preview so users are alerted upfront (batch lookups to eliminate N+1)
+    t_lookup_start = time.perf_counter()
     active_plant = session.scalar(select(Plant).where(Plant.is_active.is_(True)))
     if active_plant:
+        # 1. Batch products
+        all_products = session.scalars(select(Product).where(Product.is_active.is_(True))).all()
+        prod_by_pair: dict[tuple[str, str], Product] = {}
+        prod_by_code: dict[str, Product] = {}
+        prod_by_part: dict[str, list[Product]] = defaultdict(list)
+        prod_by_item: dict[str, list[Product]] = defaultdict(list)
+
+        for p in all_products:
+            if p.part_number and p.item_id:
+                prod_by_pair[(p.part_number.strip().lower(), p.item_id.strip().lower())] = p
+            if p.code:
+                prod_by_code[p.code.strip().lower()] = p
+            if p.part_number:
+                prod_by_part[p.part_number.strip().lower()].append(p)
+            if p.item_id:
+                prod_by_item[p.item_id.strip().lower()].append(p)
+
+        # 2. Batch ProductPlant mappings
+        all_pps = session.scalars(select(ProductPlant).where(ProductPlant.is_active.is_(True))).all()
+        product_plants_by_prod: dict[UUID, list[ProductPlant]] = defaultdict(list)
+        for pp in all_pps:
+            product_plants_by_prod[pp.product_id].append(pp)
+
+        # 3. Batch Routes
+        all_routes = session.scalars(select(Route).where(Route.is_active.is_(True))).all()
+        routes_by_id: dict[UUID, Route] = {r.id: r for r in all_routes}
+
+        # 4. Batch PPC and RouteSteps
+        all_ppcs = session.scalars(select(ProductProcessConsumable).where(ProductProcessConsumable.is_active.is_(True))).all()
+        ppc_proc_by_prod: dict[UUID, set[UUID]] = defaultdict(set)
+        for ppc in all_ppcs:
+            ppc_proc_by_prod[ppc.product_id].add(ppc.process_id)
+
+        all_steps = session.scalars(select(RouteStep)).all()
+        route_proc_map: dict[UUID, set[UUID]] = defaultdict(set)
+        for step in all_steps:
+            route_proc_map[step.route_id].add(step.process_id)
+        t_lookup_end = time.perf_counter()
+
         for r in parse_result["_all_flat_rows"]:
             p_part = (r.get("part_no") or "").strip() or None
             p_item = (r.get("item_id") or "").strip() or None
             p_code = (r.get("product_code") or "").strip()
             prod = None
             if p_part and p_item:
-                prod = session.scalar(
-                    select(Product).where(
-                        func.lower(func.trim(Product.part_number)) == p_part.lower(),
-                        func.lower(func.trim(Product.item_id)) == p_item.lower(),
-                    )
-                )
+                prod = prod_by_pair.get((p_part.lower(), p_item.lower()))
             if not prod and p_code:
-                prod = session.scalar(select(Product).where(func.lower(func.trim(Product.code)) == p_code.lower()))
+                prod = prod_by_code.get(p_code.lower())
+            if not prod and p_part and len(prod_by_part.get(p_part.lower(), [])) == 1:
+                prod = prod_by_part[p_part.lower()][0]
+            if not prod and p_item and len(prod_by_item.get(p_item.lower(), [])) == 1:
+                prod = prod_by_item[p_item.lower()][0]
 
             if prod:
-                r_id = _resolve_route_for_product(session, prod.id, active_plant.id)
+                r_id = _resolve_route_for_product(
+                    session=session,
+                    product_id=prod.id,
+                    plant_id=active_plant.id,
+                    product_plants_by_prod=product_plants_by_prod,
+                    routes_by_id=routes_by_id,
+                    ppc_proc_by_prod=ppc_proc_by_prod,
+                    route_proc_map=route_proc_map,
+                )
                 if not r_id:
                     warn = f"Product '{prod.code}' (Part: '{p_part or '-'}', Item: '{p_item or '-'}') has no production route assigned for plant '{active_plant.name}'. Map a valid route before importing."
                     if warn not in parse_result["warnings"]:
@@ -664,6 +754,13 @@ def preview_sales_schedule_upload(
 
     file_token = str(uuid4())
     _STAGED_FILES[file_token] = (file_bytes, filename, time.time())
+    t_total = time.perf_counter() - t_start
+    logger.info(
+        "preview_sales_schedule_upload finished in %.3fs (parse=%.3fs, rows=%d)",
+        t_total,
+        t_parse_end - t_parse_start,
+        len(parse_result.get("_all_flat_rows", [])),
+    )
 
     return SalesScheduleImportPreviewResponse(
         filename=filename,
@@ -779,6 +876,38 @@ def confirm_sales_schedule_import(
 
         # 5. Ensure products and plant mappings exist
         product_cache: dict[str, Product] = {}
+        for p in session.scalars(select(Product)).all():
+            if p.part_number and p.item_id:
+                product_cache[f"pair:{p.part_number.strip().upper()}:{p.item_id.strip().upper()}"] = p
+            if p.code:
+                product_cache[f"code:{p.code.strip().upper()}"] = p
+            if p.part_number:
+                product_cache[f"part:{p.part_number.strip().upper()}"] = p
+            if p.item_id:
+                product_cache[f"item:{p.item_id.strip().upper()}"] = p
+            product_cache[str(p.id)] = p
+
+        pps_by_prod_plant: dict[tuple[UUID, UUID], ProductPlant] = {
+            (pp.product_id, pp.plant_id): pp
+            for pp in session.scalars(select(ProductPlant)).all()
+        }
+        product_plants_by_prod: dict[UUID, list[ProductPlant]] = defaultdict(list)
+        for pp in pps_by_prod_plant.values():
+            if pp.is_active:
+                product_plants_by_prod[pp.product_id].append(pp)
+
+        routes_by_id: dict[UUID, Route] = {
+            r.id: r for r in session.scalars(select(Route).where(Route.is_active.is_(True))).all()
+        }
+        all_ppcs = session.scalars(select(ProductProcessConsumable).where(ProductProcessConsumable.is_active.is_(True))).all()
+        ppc_proc_by_prod: dict[UUID, set[UUID]] = defaultdict(set)
+        for ppc in all_ppcs:
+            ppc_proc_by_prod[ppc.product_id].add(ppc.process_id)
+        all_steps = session.scalars(select(RouteStep)).all()
+        route_proc_map: dict[UUID, set[UUID]] = defaultdict(set)
+        for step in all_steps:
+            route_proc_map[step.route_id].add(step.process_id)
+
         for r in all_flat_rows:
             p_code = r.get("product_code") or ""
             part_no = r.get("part_no")
@@ -797,16 +926,19 @@ def confirm_sales_schedule_import(
             )
 
             # Route resolution and ProductPlant verification
-            pp = session.scalar(
-                select(ProductPlant).where(
-                    ProductPlant.product_id == existing_prod.id,
-                    ProductPlant.plant_id == plant_obj.id,
-                )
-            )
+            pp = pps_by_prod_plant.get((existing_prod.id, plant_obj.id))
             if pp:
-                route = session.get(Route, pp.route_id) if pp.route_id else None
+                route = routes_by_id.get(pp.route_id) if pp.route_id else None
                 if not route or not route.is_active:
-                    target_route_id = _resolve_route_for_product(session, existing_prod.id, plant_obj.id)
+                    target_route_id = _resolve_route_for_product(
+                        session,
+                        existing_prod.id,
+                        plant_obj.id,
+                        product_plants_by_prod=product_plants_by_prod,
+                        routes_by_id=routes_by_id,
+                        ppc_proc_by_prod=ppc_proc_by_prod,
+                        route_proc_map=route_proc_map,
+                    )
                     if not target_route_id:
                         raise ApplicationError(
                             "ROUTE_REQUIRED",
@@ -817,7 +949,15 @@ def confirm_sales_schedule_import(
                 if not pp.is_active:
                     pp.is_active = True
             else:
-                target_route_id = _resolve_route_for_product(session, existing_prod.id, plant_obj.id)
+                target_route_id = _resolve_route_for_product(
+                    session,
+                    existing_prod.id,
+                    plant_obj.id,
+                    product_plants_by_prod=product_plants_by_prod,
+                    routes_by_id=routes_by_id,
+                    ppc_proc_by_prod=ppc_proc_by_prod,
+                    route_proc_map=route_proc_map,
+                )
                 if not target_route_id:
                     raise ApplicationError(
                         "ROUTE_REQUIRED",
@@ -832,6 +972,8 @@ def confirm_sales_schedule_import(
                     is_primary=True,
                 )
                 session.add(pp)
+                pps_by_prod_plant[(existing_prod.id, plant_obj.id)] = pp
+                product_plants_by_prod[existing_prod.id].append(pp)
 
         session.flush()
 

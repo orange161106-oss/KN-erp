@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import io
 import re
+import time
 from typing import Any, Optional
 import uuid
 
@@ -17,10 +18,12 @@ from app.core.errors import ApplicationError
 from app.models.audit import AuditLog
 from app.models.auth import User
 from app.models.inventory_masters import Consumable, Unit
+from app.models.masters import Product
 from app.models.stock_statements import StockStatementBatch, StockStatementLine
 from app.schemas.auth import CurrentUser
 from app.schemas.stock_statements import (
     ComparisonSummary,
+    GroupedWarningResponse,
     RowIssue,
     StockStatementConfirmRequest,
     StockStatementHistoryItem,
@@ -33,8 +36,31 @@ from app.schemas.stock_statements import (
 from app.services.audit import log_audit_event
 
 
-# In-memory storage for validated preview payloads (token -> payload)
+# In-memory storage for preview sessions (token -> payload)
 _PREVIEW_STORE: dict[str, dict[str, Any]] = {}
+PREVIEW_TTL_SECONDS: int = 3600  # 1 hour preview lifetime
+
+
+def _cleanup_stale_preview_entries() -> None:
+    """Evict expired preview entries to prevent unbounded memory growth."""
+    now = time.time()
+    stale = [k for k, v in _PREVIEW_STORE.items() if now - v.get("created_at", 0) > PREVIEW_TTL_SECONDS]
+    for k in stale:
+        _PREVIEW_STORE.pop(k, None)
+
+
+def normalize_item_id(val: Any) -> str:
+    """Safely normalize item IDs handling unicode spaces, tabs, and line breaks without altering code meaning."""
+    if val is None:
+        return ""
+    # Collapse any form of whitespace (including non-breaking space \u00a0 and zero-width \ufeff)
+    return re.sub(r"[\s\u00a0\ufeff]+", " ", str(val)).strip()
+
+
+def normalize_item_id_key(val: Any) -> str:
+    """Uppercase normalized item id for deterministic case-insensitive dictionary lookup."""
+    return normalize_item_id(val).upper()
+
 
 # Exact KNL column specification for Stock Statement
 EXPECTED_STATEMENT_COLUMNS = [
@@ -74,7 +100,7 @@ def parse_raw_decimal(value: Any, row_num: int, col_name: str, issues: list[RowI
     # Already numeric
     if isinstance(value, (int, float, Decimal)):
         if isinstance(value, float) and (value != value or value == float("inf") or value == float("-inf")):
-            issues.append(RowIssue(row=row_num, column=col_name, description="Invalid float or NaN/Inf", severity="ERROR"))
+            issues.append(RowIssue(row=row_num, column=col_name, description="Invalid float or NaN/Inf", severity="ERROR", code="INVALID_DECIMAL"))
             return None
         return Decimal(str(value))
 
@@ -84,7 +110,7 @@ def parse_raw_decimal(value: Any, row_num: int, col_name: str, issues: list[RowI
 
     # Check for excel errors
     if val_str.startswith("#") or val_str in ("#REF!", "#VALUE!", "#DIV/0!", "#N/A", "#NAME?", "#NUM!"):
-        issues.append(RowIssue(row=row_num, column=col_name, description=f"Excel calculation error: {val_str}", severity="ERROR"))
+        issues.append(RowIssue(row=row_num, column=col_name, description=f"Excel calculation error: {val_str}", severity="ERROR", code="EXCEL_CALC_ERROR"))
         return None
 
     # Zero indicators
@@ -106,7 +132,7 @@ def parse_raw_decimal(value: Any, row_num: int, col_name: str, issues: list[RowI
         dec = Decimal(clean_val)
         return -dec if is_negative else dec
     except InvalidOperation:
-        issues.append(RowIssue(row=row_num, column=col_name, description=f"Non-numeric value '{value}' in numeric column", severity="ERROR"))
+        issues.append(RowIssue(row=row_num, column=col_name, description=f"Non-numeric value '{value}' in numeric column", severity="ERROR", code="INVALID_DECIMAL"))
         return None
 
 
@@ -267,7 +293,24 @@ def parse_and_preview_stock_statement(
     consumables = session.execute(
         select(Consumable.id, Consumable.code, Consumable.name, Consumable.unit_id)
     ).all()
-    consumable_by_code = {c.code.strip().upper(): c for c in consumables}
+    consumable_by_code = {
+        normalize_item_id_key(c.code): c
+        for c in consumables
+        if c.code
+    }
+
+    # Pre-fetch Products master to identify parts/products in whole-store statement
+    products = session.execute(
+        select(Product.id, Product.code, Product.part_number, Product.item_id)
+    ).all()
+    product_keys: set[str] = set()
+    for p in products:
+        if p.code:
+            product_keys.add(normalize_item_id_key(p.code))
+        if p.part_number:
+            product_keys.add(normalize_item_id_key(p.part_number))
+        if p.item_id:
+            product_keys.add(normalize_item_id_key(p.item_id))
 
     units = session.execute(select(Unit.id, Unit.code)).all()
     unit_code_by_id = {u.id: u.code for u in units}
@@ -288,12 +331,12 @@ def parse_and_preview_stock_statement(
             continue
 
         item_id_raw = sheet.cell(row=r, column=col_mapping.get("item_id", 1)).value
-        if item_id_raw is None or not str(item_id_raw).strip():
+        item_id_str = normalize_item_id(item_id_raw)
+        if not item_id_str:
             # Missing Item ID on non-empty row
-            errors.append(RowIssue(row=r, column="Item Id", description="Row has data but Item Id is empty.", severity="ERROR"))
+            errors.append(RowIssue(row=r, column="Item Id", description="Row has data but Item Id is empty.", severity="ERROR", code="EMPTY_ITEM_ID"))
             continue
 
-        item_id_str = str(item_id_raw).strip()
         item_id_upper = item_id_str.upper()
 
         # Skip total / subtotal summary rows
@@ -314,28 +357,47 @@ def parse_and_preview_stock_statement(
         if item_id_upper.startswith("LOC. ID") or "KNITVEL" in item_id_upper:
             continue
 
+        # Classify item into CONSUMABLE, PRODUCT_OR_OTHER, UNKNOWN
+        master_consumable = consumable_by_code.get(item_id_upper)
+        if master_consumable:
+            item_class = "CONSUMABLE"
+        elif item_id_upper in product_keys:
+            item_class = "PRODUCT_OR_OTHER"
+        else:
+            item_class = "UNKNOWN"
+            unknown_items.add(item_id_str)
+
         # Duplicate Item ID check within file
         if item_id_upper in seen_item_ids:
-            errors.append(RowIssue(row=r, column="Item Id", description=f"Duplicate Item Id '{item_id_str}' in upload file.", severity="ERROR"))
-        seen_item_ids.add(item_id_upper)
-
-        # Check in Consumable Master
-        master_consumable = consumable_by_code.get(item_id_upper)
-        if not master_consumable:
-            unknown_items.add(item_id_str)
             errors.append(RowIssue(
                 row=r,
                 column="Item Id",
-                description=f"Item Id '{item_id_str}' was not found in Consumable Master.",
+                description=f"Duplicate Item Id '{item_id_str}' in upload file.",
                 severity="ERROR",
+                code="DUPLICATE_ITEM_ID",
+                item_id=item_id_str,
+                item_class=item_class,
             ))
+        seen_item_ids.add(item_id_upper)
+
+        line_issues: list[str] = []
+
+        if item_class == "UNKNOWN":
+            warnings.append(RowIssue(
+                row=r,
+                column="Item Id",
+                description=f"Item Id '{item_id_str}' was not found in Consumable Master. Classified as UNKNOWN.",
+                severity="WARNING",
+                code="ITEM_UNKNOWN_IN_MASTER",
+                item_id=item_id_str,
+                item_class=item_class,
+            ))
+            line_issues.append("ITEM_UNKNOWN_IN_MASTER")
 
         # Extract values
         desc_val = sheet.cell(row=r, column=col_mapping["item_description"]).value if "item_description" in col_mapping else None
         cust_part_val = sheet.cell(row=r, column=col_mapping["cust_part_no"]).value if "cust_part_no" in col_mapping else None
         unit_val = sheet.cell(row=r, column=col_mapping["unit"]).value if "unit" in col_mapping else None
-
-        line_issues: list[str] = []
 
         open_qty = parse_raw_decimal(sheet.cell(row=r, column=col_mapping["opening_qty"]).value if "opening_qty" in col_mapping else None, r, "Opening Qty.", errors)
         open_val = parse_raw_decimal(sheet.cell(row=r, column=col_mapping["opening_value"]).value if "opening_value" in col_mapping else None, r, "Opening Value", errors)
@@ -348,13 +410,13 @@ def parse_and_preview_stock_statement(
 
         # Check for negative receipts or issues (blocking errors)
         if rcpt_qty is not None and rcpt_qty < Decimal("0"):
-            errors.append(RowIssue(row=r, column="Receipt Qty.", description="Receipt Qty. cannot be negative.", severity="ERROR"))
+            errors.append(RowIssue(row=r, column="Receipt Qty.", description="Receipt Qty. cannot be negative.", severity="ERROR", code="NEGATIVE_RECEIPT", item_id=item_id_str, item_class=item_class))
         if rcpt_val is not None and rcpt_val < Decimal("0"):
-            errors.append(RowIssue(row=r, column="Receipt Value", description="Receipt Value cannot be negative.", severity="ERROR"))
+            errors.append(RowIssue(row=r, column="Receipt Value", description="Receipt Value cannot be negative.", severity="ERROR", code="NEGATIVE_RECEIPT_VAL", item_id=item_id_str, item_class=item_class))
         if iss_qty is not None and iss_qty < Decimal("0"):
-            errors.append(RowIssue(row=r, column="Issue Qty.", description="Issue Qty. cannot be negative.", severity="ERROR"))
+            errors.append(RowIssue(row=r, column="Issue Qty.", description="Issue Qty. cannot be negative.", severity="ERROR", code="NEGATIVE_ISSUE", item_id=item_id_str, item_class=item_class))
         if iss_val is not None and iss_val < Decimal("0"):
-            errors.append(RowIssue(row=r, column="Issue Value", description="Issue Value cannot be negative.", severity="ERROR"))
+            errors.append(RowIssue(row=r, column="Issue Value", description="Issue Value cannot be negative.", severity="ERROR", code="NEGATIVE_ISSUE_VAL", item_id=item_id_str, item_class=item_class))
 
         # Arithmetic warnings
         diff_qty = None
@@ -364,7 +426,7 @@ def parse_and_preview_stock_statement(
             if abs(diff_q) > Decimal("0.0001"):
                 diff_qty = diff_q
                 w_msg = f"Closing Qty ({cls_qty}) != Opening ({open_qty}) + Receipt ({rcpt_qty}) - Issue ({iss_qty}). Diff: {diff_q:+f}"
-                warnings.append(RowIssue(row=r, column="Closing Qty.", description=w_msg, severity="WARNING"))
+                warnings.append(RowIssue(row=r, column="Closing Qty.", description=w_msg, severity="WARNING", code="QTY_MISMATCH", item_id=item_id_str, item_class=item_class))
                 line_issues.append("QTY_MISMATCH")
 
         diff_val = None
@@ -374,19 +436,19 @@ def parse_and_preview_stock_statement(
             if abs(diff_v) > Decimal("1.0000"):  # 1.0 tolerance for paise/rounding
                 diff_val = diff_v
                 w_msg = f"Closing Value ({cls_val}) != Opening ({open_val}) + Receipt ({rcpt_val}) - Issue ({iss_val}). Diff: {diff_v:+f}"
-                warnings.append(RowIssue(row=r, column="Closing Value", description=w_msg, severity="WARNING"))
+                warnings.append(RowIssue(row=r, column="Closing Value", description=w_msg, severity="WARNING", code="VAL_MISMATCH", item_id=item_id_str, item_class=item_class))
                 line_issues.append("VAL_MISMATCH")
 
         # Negative opening or closing quantity warnings
         if open_qty is not None and open_qty < Decimal("0"):
-            warnings.append(RowIssue(row=r, column="Opening Qty.", description=f"Negative Opening Qty ({open_qty}).", severity="WARNING"))
+            warnings.append(RowIssue(row=r, column="Opening Qty.", description=f"Negative Opening Qty ({open_qty}).", severity="WARNING", code="NEGATIVE_OPENING", item_id=item_id_str, item_class=item_class))
             line_issues.append("NEGATIVE_OPENING")
         if cls_qty is not None and cls_qty < Decimal("0"):
-            warnings.append(RowIssue(row=r, column="Closing Qty.", description=f"Negative Closing Qty ({cls_qty}).", severity="WARNING"))
+            warnings.append(RowIssue(row=r, column="Closing Qty.", description=f"Negative Closing Qty ({cls_qty}).", severity="WARNING", code="NEGATIVE_CLOSING", item_id=item_id_str, item_class=item_class))
             line_issues.append("NEGATIVE_CLOSING")
 
-        # Unit mismatch warning
-        if master_consumable and unit_val:
+        # Unit mismatch warning (consumables only)
+        if item_class == "CONSUMABLE" and master_consumable and unit_val:
             master_unit_code = unit_code_by_id.get(master_consumable.unit_id)
             if master_unit_code and str(unit_val).strip().upper() != master_unit_code.upper():
                 warnings.append(RowIssue(
@@ -394,11 +456,14 @@ def parse_and_preview_stock_statement(
                     column="Unit",
                     description=f"Unit '{unit_val}' differs from Consumable Master unit '{master_unit_code}'.",
                     severity="WARNING",
+                    code="UNIT_MISMATCH",
+                    item_id=item_id_str,
+                    item_class=item_class,
                 ))
                 line_issues.append("UNIT_MISMATCH")
 
-        # Description mismatch warning (info only)
-        if master_consumable and desc_val and master_consumable.name:
+        # Description mismatch warning (consumables only, info)
+        if item_class == "CONSUMABLE" and master_consumable and desc_val and master_consumable.name:
             if str(desc_val).strip().upper() != master_consumable.name.strip().upper():
                 line_issues.append("DESC_MISMATCH")
 
@@ -410,12 +475,22 @@ def parse_and_preview_stock_statement(
             ("Closing Qty.", cls_qty), ("Closing Value", cls_val),
         ]:
             if col_v is None:
-                warnings.append(RowIssue(row=r, column=col_n, description=f"Empty cell in {col_n} (treated as null).", severity="WARNING"))
-                line_issues.append(f"EMPTY_{col_n.upper().replace(' ', '_')}")
+                code_str = f"EMPTY_{col_n.upper().replace(' ', '_').replace('.', '')}"
+                warnings.append(RowIssue(
+                    row=r,
+                    column=col_n,
+                    description=f"Empty cell in {col_n} (treated as null).",
+                    severity="WARNING",
+                    code=code_str,
+                    item_id=item_id_str,
+                    item_class=item_class,
+                ))
+                line_issues.append(code_str)
 
         parsed_lines.append({
             "source_row": r,
             "item_id": item_id_str,
+            "item_class": item_class,
             "consumable_id": str(master_consumable.id) if master_consumable else None,
             "item_description": str(desc_val).strip() if desc_val else None,
             "cust_part_no": str(cust_part_val).strip() if cust_part_val else None,
@@ -433,6 +508,36 @@ def parse_and_preview_stock_statement(
             "warning_codes": line_issues,
         })
 
+    # Class counts
+    consumable_count = sum(1 for p in parsed_lines if p["item_class"] == "CONSUMABLE")
+    product_or_other_count = sum(1 for p in parsed_lines if p["item_class"] == "PRODUCT_OR_OTHER")
+    unknown_count = sum(1 for p in parsed_lines if p["item_class"] == "UNKNOWN")
+
+    # Group warnings by code
+    grouped_map: dict[str, dict[str, Any]] = {}
+    for w in warnings:
+        c_code = w.code or "OTHER_WARNING"
+        if c_code not in grouped_map:
+            grouped_map[c_code] = {
+                "code": c_code,
+                "description": w.description,
+                "count": 0,
+                "sample_rows": [],
+            }
+        grouped_map[c_code]["count"] += 1
+        if len(grouped_map[c_code]["sample_rows"]) < 10 and w.row not in grouped_map[c_code]["sample_rows"]:
+            grouped_map[c_code]["sample_rows"].append(w.row)
+
+    grouped_warnings = [
+        GroupedWarningResponse(
+            code=v["code"],
+            description=v["description"],
+            count=v["count"],
+            sample_rows=v["sample_rows"],
+        )
+        for v in sorted(grouped_map.values(), key=lambda x: -x["count"])
+    ]
+
     # Check for existing active batch
     existing = session.scalar(
         select(StockStatementBatch).where(
@@ -442,25 +547,38 @@ def parse_and_preview_stock_statement(
         )
     )
 
+    _cleanup_stale_preview_entries()
+
     can_confirm = len(errors) == 0 and len(parsed_lines) > 0
 
     token = str(uuid.uuid4())
-    if can_confirm:
-        _PREVIEW_STORE[token] = {
-            "month": selected_month,
-            "year": selected_year,
-            "date": statement_end,
-            "filename": filename,
-            "file_hash": file_hash,
-            "lines": parsed_lines,
-            "warnings_count": len(warnings),
-        }
+    all_issues = list(errors) + list(warnings)
+
+    _PREVIEW_STORE[token] = {
+        "month": selected_month,
+        "year": selected_year,
+        "date": statement_end,
+        "filename": filename,
+        "file_hash": file_hash,
+        "lines": parsed_lines,
+        "issues": all_issues,
+        "errors": list(errors),
+        "warnings": list(warnings),
+        "warnings_count": len(warnings),
+        "errors_count": len(errors),
+        "consumable_count": consumable_count,
+        "product_or_other_count": product_or_other_count,
+        "unknown_count": unknown_count,
+        "can_confirm": can_confirm,
+        "created_at": time.time(),
+    }
 
     preview_lines = [
         StockStatementLineResponse(
             id=f"preview-{p['source_row']}",
             item_id=p["item_id"],
             consumable_id=p["consumable_id"],
+            item_class=p["item_class"],
             item_description=p["item_description"],
             cust_part_no=p["cust_part_no"],
             unit=p["unit"],
@@ -492,9 +610,13 @@ def parse_and_preview_stock_statement(
         existing_batch_date=existing.uploaded_at if existing else None,
         errors=errors,
         warnings=warnings,
+        grouped_warnings=grouped_warnings,
         unknown_items=sorted(list(unknown_items)),
         total_rows=len(parsed_lines),
         warning_count=len(warnings),
+        consumable_count=consumable_count,
+        product_or_other_count=product_or_other_count,
+        unknown_count=unknown_count,
         lines_preview=preview_lines,
         can_confirm=can_confirm,
     )
@@ -502,122 +624,147 @@ def parse_and_preview_stock_statement(
 
 def confirm_stock_statement_import(
     session: Session,
-    request: StockStatementConfirmRequest,
-    current_user: CurrentUser,
+    payload: Optional[StockStatementConfirmRequest] = None,
+    user: Optional[CurrentUser] = None,
+    request: Optional[StockStatementConfirmRequest] = None,
+    current_user: Optional[CurrentUser] = None,
 ) -> StockStatementResponse:
     """Commit the parsed stock statement in one atomic transaction, marking existing batches superseded."""
-    token_data = _PREVIEW_STORE.get(request.file_token)
+    req = payload or request
+    usr = user or current_user
+    if not req or not usr:
+        raise ApplicationError("INVALID_REQUEST", "Missing confirmation payload or user.", 400)
+
+    token_data = _PREVIEW_STORE.get(req.file_token)
     if not token_data:
-        raise ApplicationError("EXPIRED_TOKEN", "Import session expired or invalid. Please re-upload the file.", 400)
+        raise ApplicationError("EXPIRED_TOKEN", "The preview session has expired or is invalid. Please re-upload the file.", 404)
+
+    # Check TTL expiry
+    if time.time() - token_data.get("created_at", 0) > PREVIEW_TTL_SECONDS:
+        _PREVIEW_STORE.pop(req.file_token, None)
+        raise ApplicationError("EXPIRED_TOKEN", "The preview session has expired. Please re-upload the file.", 404)
+
+    # Strictly block confirmation if there are any unresolved blocking errors
+    if not token_data.get("can_confirm", False):
+        raise ApplicationError(
+            "VALIDATION_FAILED",
+            "Cannot confirm stock statement import with unresolved blocking validation errors.",
+            422,
+        )
 
     if (
-        token_data["month"] != request.statement_month
-        or token_data["year"] != request.statement_year
+        token_data["month"] != req.statement_month
+        or token_data["year"] != req.statement_year
     ):
         raise ApplicationError("PERIOD_MISMATCH", "Token period does not match confirmed month/year.", 400)
 
-    # 1. Existing batch check
-    existing_batches = session.scalars(
-        select(StockStatementBatch).where(
-            StockStatementBatch.statement_month == request.statement_month,
-            StockStatementBatch.statement_year == request.statement_year,
-            StockStatementBatch.status == "active",
-        )
-    ).all()
+    try:
+        # 1. Existing batch check
+        existing_batches = session.scalars(
+            select(StockStatementBatch).where(
+                StockStatementBatch.statement_month == req.statement_month,
+                StockStatementBatch.statement_year == req.statement_year,
+                StockStatementBatch.status == "active",
+            )
+        ).all()
 
-    if existing_batches and not request.replace_confirmed:
-        raise ApplicationError(
-            "REPLACE_CONFIRMATION_REQUIRED",
-            f"An active stock statement already exists for {MONTH_NAMES[request.statement_month - 1]} {request.statement_year}. Confirmation required to replace.",
-            409,
-        )
+        if existing_batches and not req.replace_confirmed:
+            raise ApplicationError(
+                "REPLACE_CONFIRMATION_REQUIRED",
+                f"An active stock statement already exists for {MONTH_NAMES[req.statement_month - 1]} {req.statement_year}. Confirmation required to replace.",
+                409,
+            )
 
-    # Mark existing active batches as superseded
-    now_utc = datetime.now(timezone.utc)
-    for old_batch in existing_batches:
-        old_batch.status = "superseded"
-        old_batch.updated_at = now_utc
-        old_batch.updated_by = current_user.id
+        # Mark existing active batches as superseded
+        now_utc = datetime.now(timezone.utc)
+        for old_batch in existing_batches:
+            old_batch.status = "superseded"
+            old_batch.updated_at = now_utc
+            old_batch.updated_by = usr.id
+            log_audit_event(
+                session=session,
+                entity_type="StockStatementBatch",
+                entity_id=old_batch.id,
+                action="UPDATE",
+                actor_id=usr.id,
+                old_values={"status": "active"},
+                new_values={"status": "superseded"},
+                reason=f"Superseded by replacement upload '{token_data['filename']}' for period {req.statement_month}/{req.statement_year}.",
+            )
+
+        # 2. Insert new batch
+        new_batch = StockStatementBatch(
+            statement_month=req.statement_month,
+            statement_year=req.statement_year,
+            statement_date=token_data["date"],
+            source_filename=token_data["filename"],
+            file_hash=token_data["file_hash"],
+            status="active",
+            row_count=len(token_data["lines"]),
+            warning_count=token_data["warnings_count"],
+            uploaded_by=usr.id,
+            uploaded_at=now_utc,
+            created_by=usr.id,
+            created_at=now_utc,
+            updated_by=usr.id,
+            updated_at=now_utc,
+        )
+        session.add(new_batch)
+        session.flush()
+
+        # 3. Insert lines
+        line_objects: list[StockStatementLine] = []
+        for line in token_data["lines"]:
+            line_obj = StockStatementLine(
+                batch_id=new_batch.id,
+                item_id=line["item_id"],
+                consumable_id=uuid.UUID(line["consumable_id"]) if line["consumable_id"] else None,
+                item_class=line.get("item_class", "CONSUMABLE"),
+                item_description=line["item_description"],
+                cust_part_no=line["cust_part_no"],
+                unit=line["unit"],
+                opening_qty=line["opening_qty"],
+                opening_value=line["opening_value"],
+                receipt_qty=line["receipt_qty"],
+                receipt_value=line["receipt_value"],
+                issue_qty=line["issue_qty"],
+                issue_value=line["issue_value"],
+                closing_qty=line["closing_qty"],
+                closing_value=line["closing_value"],
+                source_row=line["source_row"],
+                warning_codes=line["warning_codes"],
+                created_at=now_utc,
+                updated_at=now_utc,
+            )
+            line_objects.append(line_obj)
+
+        session.add_all(line_objects)
+
         log_audit_event(
             session=session,
             entity_type="StockStatementBatch",
-            entity_id=old_batch.id,
-            action="UPDATE",
-            actor_id=current_user.id,
-            before_state={"status": "active"},
-            after_state={"status": "superseded"},
-            reason=f"Superseded by replacement upload '{token_data['filename']}' for period {request.statement_month}/{request.statement_year}.",
+            entity_id=new_batch.id,
+            action="CREATE",
+            actor_id=usr.id,
+            old_values=None,
+            new_values={
+                "period": f"{req.statement_month}/{req.statement_year}",
+                "filename": token_data["filename"],
+                "row_count": len(line_objects),
+                "warning_count": token_data["warnings_count"],
+            },
+            reason=f"Uploaded monthly stock statement for {MONTH_NAMES[req.statement_month - 1]} {req.statement_year}.",
         )
 
-    # 2. Insert new batch
-    new_batch = StockStatementBatch(
-        statement_month=request.statement_month,
-        statement_year=request.statement_year,
-        statement_date=token_data["date"],
-        source_filename=token_data["filename"],
-        file_hash=token_data["file_hash"],
-        status="active",
-        row_count=len(token_data["lines"]),
-        warning_count=token_data["warnings_count"],
-        uploaded_by=current_user.id,
-        uploaded_at=now_utc,
-        created_by=current_user.id,
-        created_at=now_utc,
-        updated_by=current_user.id,
-        updated_at=now_utc,
-    )
-    session.add(new_batch)
-    session.flush()
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        # Consume token so it cannot be re-used to submit duplicate batches
+        _PREVIEW_STORE.pop(req.file_token, None)
 
-    # 3. Insert lines
-    line_objects: list[StockStatementLine] = []
-    for line in token_data["lines"]:
-        line_obj = StockStatementLine(
-            batch_id=new_batch.id,
-            item_id=line["item_id"],
-            consumable_id=uuid.UUID(line["consumable_id"]) if line["consumable_id"] else None,
-            item_description=line["item_description"],
-            cust_part_no=line["cust_part_no"],
-            unit=line["unit"],
-            opening_qty=line["opening_qty"],
-            opening_value=line["opening_value"],
-            receipt_qty=line["receipt_qty"],
-            receipt_value=line["receipt_value"],
-            issue_qty=line["issue_qty"],
-            issue_value=line["issue_value"],
-            closing_qty=line["closing_qty"],
-            closing_value=line["closing_value"],
-            source_row=line["source_row"],
-            warning_codes=line["warning_codes"],
-            created_at=now_utc,
-            updated_at=now_utc,
-        )
-        line_objects.append(line_obj)
-
-    session.add_all(line_objects)
-
-    log_audit_event(
-        session=session,
-        entity_type="StockStatementBatch",
-        entity_id=new_batch.id,
-        action="CREATE",
-        actor_id=current_user.id,
-        before_state={},
-        after_state={
-            "period": f"{request.statement_month}/{request.statement_year}",
-            "filename": token_data["filename"],
-            "row_count": len(line_objects),
-            "warning_count": token_data["warnings_count"],
-        },
-        reason=f"Uploaded monthly stock statement for {MONTH_NAMES[request.statement_month - 1]} {request.statement_year}.",
-    )
-
-    session.commit()
-
-    # Cleanup preview store
-    _PREVIEW_STORE.pop(request.file_token, None)
-
-    return get_stock_statement(session, request.statement_month, request.statement_year)
+    return get_stock_statement(session, req.statement_month, req.statement_year)
 
 
 def get_stock_statement(
@@ -626,6 +773,7 @@ def get_stock_statement(
     year: int,
     search: Optional[str] = None,
     unit_filter: Optional[str] = None,
+    item_class_filter: Optional[str] = "CONSUMABLE",
     has_warnings_only: bool = False,
 ) -> StockStatementResponse:
     """Retrieve the active stock statement for the specified month and year."""
@@ -647,6 +795,9 @@ def get_stock_statement(
             statement_date=statement_end.isoformat(),
             row_count=0,
             warning_count=0,
+            consumable_count=0,
+            product_or_other_count=0,
+            unknown_count=0,
         )
         summary = StockStatementSummary()
         return StockStatementResponse(metadata=meta, summary=summary, records=[])
@@ -654,8 +805,22 @@ def get_stock_statement(
     creator = session.get(User, batch.created_by) if batch.created_by else None
     updater = session.get(User, batch.updated_by) if batch.updated_by else None
 
+    # Calculate class counts across the whole batch
+    class_count_rows = session.execute(
+        select(StockStatementLine.item_class, func.count(StockStatementLine.id))
+        .where(StockStatementLine.batch_id == batch.id)
+        .group_by(StockStatementLine.item_class)
+    ).all()
+    class_counts = {c: count for c, count in class_count_rows}
+    consumable_count = class_counts.get("CONSUMABLE", 0)
+    product_or_other_count = class_counts.get("PRODUCT_OR_OTHER", 0)
+    unknown_count = class_counts.get("UNKNOWN", 0)
+
     # Query lines
     stmt = select(StockStatementLine).where(StockStatementLine.batch_id == batch.id)
+    if item_class_filter and item_class_filter.upper() != "ALL":
+        stmt = stmt.where(StockStatementLine.item_class == item_class_filter.upper())
+
     if search and search.strip():
         term = f"%{search.strip()}%"
         stmt = stmt.where(
@@ -696,6 +861,7 @@ def get_stock_statement(
                 id=str(l.id),
                 item_id=l.item_id,
                 consumable_id=str(l.consumable_id) if l.consumable_id else None,
+                item_class=l.item_class,
                 item_description=l.item_description,
                 cust_part_no=l.cust_part_no,
                 unit=l.unit,
@@ -731,10 +897,16 @@ def get_stock_statement(
         updated_by_name=updater.full_name or updater.username if updater else None,
         row_count=batch.row_count,
         warning_count=batch.warning_count,
+        consumable_count=consumable_count,
+        product_or_other_count=product_or_other_count,
+        unknown_count=unknown_count,
     )
 
     summary = StockStatementSummary(
         item_count=int(totals[0]),
+        consumable_count=consumable_count,
+        product_or_other_count=product_or_other_count,
+        unknown_count=unknown_count,
         total_opening_value=Decimal(str(totals[1])),
         total_receipt_value=Decimal(str(totals[2])),
         total_issue_value=Decimal(str(totals[3])),
@@ -786,7 +958,7 @@ def export_stock_statement_excel(
     year: int,
 ) -> tuple[bytes, str]:
     """Export the active stock statement to an Excel workbook matching KNL columns."""
-    res = get_stock_statement(session, month, year)
+    res = get_stock_statement(session, month, year, item_class_filter="ALL")
     if not res.metadata.has_statement:
         raise ApplicationError("NOT_FOUND", f"No stock statement found for {MONTH_NAMES[month - 1]} {year}.", 404)
 
@@ -858,28 +1030,89 @@ def export_stock_statement_excel(
 
 
 def export_error_report_excel(issues: list[RowIssue], filename: str) -> tuple[bytes, str]:
-    """Generate an Excel error/warning report from validation issues."""
+    """Generate a cleanly formatted Excel error/warning report from validation issues."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Validation Issues"
 
-    headers = ["Excel Row", "Column", "Severity", "Description"]
+    headers = ["Excel Row", "Column", "Severity", "Code", "Item Id", "Item Class", "Description"]
     ws.append(headers)
-    for col_idx in range(1, 5):
-        cell = ws.cell(row=1, column=col_idx)
-        cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-        cell.fill = PatternFill(start_color="C00000", end_color="C00000", fill_type="solid")
-        cell.alignment = Alignment(horizontal="center")
 
-    for issue in issues:
-        ws.append([issue.row, issue.column, issue.severity, issue.description])
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+    header_align = Alignment(horizontal="center", vertical="center")
+
+    thin_border = Border(
+        left=Side(style="thin", color="D9D9D9"),
+        right=Side(style="thin", color="D9D9D9"),
+        top=Side(style="thin", color="D9D9D9"),
+        bottom=Side(style="thin", color="D9D9D9"),
+    )
+
+    for col_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = thin_border
+
+    error_fill = PatternFill(start_color="FFEBEE", end_color="FFEBEE", fill_type="solid")
+    warning_fill = PatternFill(start_color="FFFDE7", end_color="FFFDE7", fill_type="solid")
+    error_font = Font(name="Calibri", size=10, color="C62828", bold=True)
+    warning_font = Font(name="Calibri", size=10, color="F57F17", bold=True)
+    regular_font = Font(name="Calibri", size=10)
+
+    center_align = Alignment(horizontal="center", vertical="center")
+    left_align = Alignment(horizontal="left", vertical="center")
+
+    for idx, issue in enumerate(issues, start=2):
+        sev = str(issue.severity).upper()
+        code_val = getattr(issue, "code", "") or ""
+        item_id_val = getattr(issue, "item_id", "") or ""
+        item_class_val = getattr(issue, "item_class", "") or ""
+
+        ws.append([
+            issue.row,
+            issue.column,
+            sev,
+            code_val,
+            item_id_val,
+            item_class_val,
+            issue.description,
+        ])
+
+        row_fill = error_fill if sev == "ERROR" else (warning_fill if sev == "WARNING" else None)
+        sev_font = error_font if sev == "ERROR" else (warning_font if sev == "WARNING" else regular_font)
+
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=idx, column=col_idx)
+            cell.border = thin_border
+            if row_fill:
+                cell.fill = row_fill
+            if col_idx in (1, 3, 4, 6):
+                cell.alignment = center_align
+            else:
+                cell.alignment = left_align
+
+            if col_idx == 3:
+                cell.font = sev_font
+            else:
+                cell.font = regular_font
+
+    ws.row_dimensions[1].height = 24
+    for r in range(2, len(issues) + 2):
+        ws.row_dimensions[r].height = 20
 
     for col in ws.columns:
         max_len = max(len(str(cell.value or "")) for cell in col)
         col_letter = get_column_letter(col[0].column)
-        ws.column_dimensions[col_letter].width = max(max_len + 3, 15)
+        ws.column_dimensions[col_letter].width = max(max_len + 4, 15)
 
     buf = io.BytesIO()
     wb.save(buf)
-    return buf.getvalue(), f"Error_Report_{filename}.xlsx"
+
+    clean_name = filename[:-5] if filename.lower().endswith(".xlsx") else (
+        filename[:-4] if filename.lower().endswith(".xls") else filename
+    )
+    return buf.getvalue(), f"Error_Report_{clean_name}.xlsx"
 

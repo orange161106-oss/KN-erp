@@ -3,6 +3,7 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import io
 import re
+import time
 from typing import Any, Optional
 import uuid
 
@@ -34,6 +35,25 @@ from app.services.audit import log_audit_event
 
 
 _PARAM_PREVIEW_STORE: dict[str, dict[str, Any]] = {}
+PARAM_PREVIEW_TTL_SECONDS: int = 3600
+
+
+def _cleanup_stale_param_preview_entries() -> None:
+    now = time.time()
+    stale = [k for k, v in _PARAM_PREVIEW_STORE.items() if now - v.get("created_at", 0) > PARAM_PREVIEW_TTL_SECONDS]
+    for k in stale:
+        _PARAM_PREVIEW_STORE.pop(k, None)
+
+
+def normalize_item_id(val: Any) -> str:
+    if val is None:
+        return ""
+    return re.sub(r"[\s\u00a0\ufeff]+", " ", str(val)).strip()
+
+
+def normalize_item_id_key(val: Any) -> str:
+    return normalize_item_id(val).upper()
+
 
 EXPECTED_PARAMETER_COLUMNS = [
     "Item Id",
@@ -280,7 +300,11 @@ def parse_and_preview_stock_parameters(
     consumables = session.execute(
         select(Consumable.id, Consumable.code, Consumable.name, Consumable.category, Consumable.type_of_material)
     ).all()
-    consumable_by_code = {c.code.strip().upper(): c for c in consumables}
+    consumable_by_code = {
+        normalize_item_id_key(c.code): c
+        for c in consumables
+        if c.code
+    }
 
     # Fetch previous month parameters for comparison
     prev_month, prev_year = get_previous_month(selected_month, selected_year)
@@ -304,7 +328,8 @@ def parse_and_preview_stock_parameters(
 
     for r in range(header_row_idx + 1, sheet.max_row + 1):
         item_id_raw = sheet.cell(row=r, column=col_mapping.get("item_id", 1)).value
-        if item_id_raw is None or not str(item_id_raw).strip():
+        item_id_str = normalize_item_id(item_id_raw)
+        if not item_id_str:
             row_has_data = any(
                 sheet.cell(row=r, column=c).value is not None
                 and str(sheet.cell(row=r, column=c).value).strip() != ""
@@ -314,7 +339,6 @@ def parse_and_preview_stock_parameters(
                 errors.append(RowIssue(row=r, column="Item Id", description="Row has data but Item Id is empty.", severity="ERROR"))
             continue
 
-        item_id_str = str(item_id_raw).strip()
         item_id_upper = item_id_str.upper()
 
         if "TOTAL" in item_id_upper or "GRAND TOTAL" in item_id_upper:
@@ -454,18 +478,26 @@ def parse_and_preview_stock_parameters(
         )
     )
 
+    _cleanup_stale_param_preview_entries()
+
     can_confirm = len(errors) == 0 and len(parsed_lines) > 0
 
     token = str(uuid.uuid4())
-    if can_confirm:
-        _PARAM_PREVIEW_STORE[token] = {
-            "month": selected_month,
-            "year": selected_year,
-            "date": effective_date,
-            "filename": filename,
-            "file_hash": file_hash,
-            "lines": parsed_lines,
-        }
+    all_issues = list(errors) + list(warnings)
+
+    _PARAM_PREVIEW_STORE[token] = {
+        "month": selected_month,
+        "year": selected_year,
+        "date": effective_date,
+        "filename": filename,
+        "file_hash": file_hash,
+        "lines": parsed_lines,
+        "issues": all_issues,
+        "errors": list(errors),
+        "warnings": list(warnings),
+        "can_confirm": can_confirm,
+        "created_at": time.time(),
+    }
 
     preview_lines = [
         StockParameterRecord(
@@ -506,108 +538,131 @@ def parse_and_preview_stock_parameters(
 
 def confirm_stock_parameters_import(
     session: Session,
-    request: StockParameterConfirmRequest,
-    current_user: CurrentUser,
+    payload: Optional[StockParameterConfirmRequest] = None,
+    user: Optional[CurrentUser] = None,
+    request: Optional[StockParameterConfirmRequest] = None,
+    current_user: Optional[CurrentUser] = None,
 ) -> StockManagementResponse:
     """Commit stock parameters in one transaction, marking existing batches superseded."""
-    token_data = _PARAM_PREVIEW_STORE.get(request.file_token)
-    if not token_data:
-        raise ApplicationError("EXPIRED_TOKEN", "Import session expired or invalid. Please re-upload the file.", 400)
+    req = payload or request
+    usr = user or current_user
+    if not req or not usr:
+        raise ApplicationError("INVALID_REQUEST", "Missing confirmation payload or user.", 400)
 
-    if token_data["month"] != request.month or token_data["year"] != request.year:
+    token_data = _PARAM_PREVIEW_STORE.get(req.file_token)
+    if not token_data:
+        raise ApplicationError("EXPIRED_TOKEN", "The preview session has expired or is invalid. Please re-upload the file.", 404)
+
+    if time.time() - token_data.get("created_at", 0) > PARAM_PREVIEW_TTL_SECONDS:
+        _PARAM_PREVIEW_STORE.pop(req.file_token, None)
+        raise ApplicationError("EXPIRED_TOKEN", "The preview session has expired. Please re-upload the file.", 404)
+
+    if not token_data.get("can_confirm", False):
+        raise ApplicationError(
+            "VALIDATION_FAILED",
+            "Cannot confirm stock parameters import with unresolved blocking validation errors.",
+            422,
+        )
+
+    if token_data["month"] != req.month or token_data["year"] != req.year:
         raise ApplicationError("PERIOD_MISMATCH", "Token period does not match confirmed month/year.", 400)
 
-    existing_batches = session.scalars(
-        select(StockParameterBatch).where(
-            StockParameterBatch.month == request.month,
-            StockParameterBatch.year == request.year,
-            StockParameterBatch.status == "active",
-        )
-    ).all()
+    try:
+        existing_batches = session.scalars(
+            select(StockParameterBatch).where(
+                StockParameterBatch.month == req.month,
+                StockParameterBatch.year == req.year,
+                StockParameterBatch.status == "active",
+            )
+        ).all()
 
-    if existing_batches and not request.replace_confirmed:
-        raise ApplicationError(
-            "REPLACE_CONFIRMATION_REQUIRED",
-            f"Active stock management parameters already exist for {MONTH_NAMES[request.month - 1]} {request.year}. Confirmation required to replace.",
-            409,
-        )
+        if existing_batches and not req.replace_confirmed:
+            raise ApplicationError(
+                "REPLACE_CONFIRMATION_REQUIRED",
+                f"Active stock management parameters already exist for {MONTH_NAMES[req.month - 1]} {req.year}. Confirmation required to replace.",
+                409,
+            )
 
-    now_utc = datetime.now(timezone.utc)
-    for old_batch in existing_batches:
-        old_batch.status = "superseded"
-        old_batch.updated_at = now_utc
-        old_batch.updated_by = current_user.id
+        now_utc = datetime.now(timezone.utc)
+        for old_batch in existing_batches:
+            old_batch.status = "superseded"
+            old_batch.updated_at = now_utc
+            old_batch.updated_by = usr.id
+            log_audit_event(
+                session=session,
+                entity_type="StockParameterBatch",
+                entity_id=old_batch.id,
+                action="UPDATE",
+                actor_id=usr.id,
+                old_values={"status": "active"},
+                new_values={"status": "superseded"},
+                reason=f"Superseded by replacement upload '{token_data['filename']}' for {req.month}/{req.year}.",
+            )
+
+        new_batch = StockParameterBatch(
+            month=req.month,
+            year=req.year,
+            effective_date=token_data["date"],
+            source_filename=token_data["filename"],
+            file_hash=token_data["file_hash"],
+            status="active",
+            row_count=len(token_data["lines"]),
+            uploaded_by=usr.id,
+            uploaded_at=now_utc,
+            created_by=usr.id,
+            created_at=now_utc,
+            updated_by=usr.id,
+            updated_at=now_utc,
+        )
+        session.add(new_batch)
+        session.flush()
+
+        param_objects: list[StockParameter] = []
+        for line in token_data["lines"]:
+            param_obj = StockParameter(
+                batch_id=new_batch.id,
+                item_id=line["item_id"],
+                consumable_id=uuid.UUID(line["consumable_id"]) if line["consumable_id"] else None,
+                category=line["category"],
+                type_of_material=line["type_of_material"],
+                description=line["description"],
+                min_stock_level=line["min_stock_level"],
+                max_stock_level=line["max_stock_level"],
+                min_order_qty=line["min_order_qty"],
+                lead_time_days=line["lead_time_days"],
+                edited_after_import=False,
+                source_row=line["source_row"],
+                created_at=now_utc,
+                updated_at=now_utc,
+                updated_by=usr.id,
+            )
+            param_objects.append(param_obj)
+
+        session.add_all(param_objects)
+
         log_audit_event(
             session=session,
             entity_type="StockParameterBatch",
-            entity_id=old_batch.id,
-            action="UPDATE",
-            actor_id=current_user.id,
-            before_state={"status": "active"},
-            after_state={"status": "superseded"},
-            reason=f"Superseded by replacement upload '{token_data['filename']}' for {request.month}/{request.year}.",
+            entity_id=new_batch.id,
+            action="CREATE",
+            actor_id=usr.id,
+            old_values=None,
+            new_values={
+                "period": f"{req.month}/{req.year}",
+                "filename": token_data["filename"],
+                "row_count": len(param_objects),
+            },
+            reason=f"Uploaded stock control parameters for {MONTH_NAMES[req.month - 1]} {req.year}.",
         )
 
-    new_batch = StockParameterBatch(
-        month=request.month,
-        year=request.year,
-        effective_date=token_data["date"],
-        source_filename=token_data["filename"],
-        file_hash=token_data["file_hash"],
-        status="active",
-        row_count=len(token_data["lines"]),
-        uploaded_by=current_user.id,
-        uploaded_at=now_utc,
-        created_by=current_user.id,
-        created_at=now_utc,
-        updated_by=current_user.id,
-        updated_at=now_utc,
-    )
-    session.add(new_batch)
-    session.flush()
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        _PARAM_PREVIEW_STORE.pop(req.file_token, None)
 
-    param_objects: list[StockParameter] = []
-    for line in token_data["lines"]:
-        param_obj = StockParameter(
-            batch_id=new_batch.id,
-            item_id=line["item_id"],
-            consumable_id=uuid.UUID(line["consumable_id"]) if line["consumable_id"] else None,
-            category=line["category"],
-            type_of_material=line["type_of_material"],
-            description=line["description"],
-            min_stock_level=line["min_stock_level"],
-            max_stock_level=line["max_stock_level"],
-            min_order_qty=line["min_order_qty"],
-            lead_time_days=line["lead_time_days"],
-            edited_after_import=False,
-            source_row=line["source_row"],
-            created_at=now_utc,
-            updated_at=now_utc,
-            updated_by=current_user.id,
-        )
-        param_objects.append(param_obj)
-
-    session.add_all(param_objects)
-
-    log_audit_event(
-        session=session,
-        entity_type="StockParameterBatch",
-        entity_id=new_batch.id,
-        action="CREATE",
-        actor_id=current_user.id,
-        before_state={},
-        after_state={
-            "period": f"{request.month}/{request.year}",
-            "filename": token_data["filename"],
-            "row_count": len(param_objects),
-        },
-        reason=f"Uploaded stock control parameters for {MONTH_NAMES[request.month - 1]} {request.year}.",
-    )
-
-    session.commit()
-    _PARAM_PREVIEW_STORE.pop(request.file_token, None)
-
-    return get_stock_management(session, request.month, request.year)
+    return get_stock_management(session, req.month, req.year)
 
 
 def get_stock_management(
@@ -779,8 +834,8 @@ def batch_update_stock_parameters(
             entity_id=param.id,
             action="UPDATE",
             actor_id=current_user.id,
-            before_state=before,
-            after_state=after,
+            old_values=before,
+            new_values=after,
             reason=f"Edited stock control limits for {param.item_id} in {request.month}/{request.year}.",
         )
 

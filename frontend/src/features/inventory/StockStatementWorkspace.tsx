@@ -19,6 +19,7 @@ export interface StockStatementLine {
   id: string;
   item_id: string;
   consumable_id: string | null;
+  item_class?: string;
   item_description: string | null;
   cust_part_no: string | null;
   unit: string | null;
@@ -50,10 +51,16 @@ export interface StockStatementMetadata {
   updated_by_name: string | null;
   row_count: number;
   warning_count: number;
+  consumable_count?: number;
+  product_or_other_count?: number;
+  unknown_count?: number;
 }
 
 export interface StockStatementSummary {
   item_count: number;
+  consumable_count?: number;
+  product_or_other_count?: number;
+  unknown_count?: number;
   total_opening_value: number | string;
   total_receipt_value: number | string;
   total_issue_value: number | string;
@@ -72,6 +79,16 @@ export interface RowIssue {
   column: string;
   description: string;
   severity: 'ERROR' | 'WARNING';
+  code?: string;
+  item_id?: string;
+  item_class?: string;
+}
+
+export interface GroupedWarning {
+  code: string;
+  description: string;
+  count: number;
+  sample_rows: number[];
 }
 
 export interface StockStatementPreviewResponse {
@@ -86,9 +103,13 @@ export interface StockStatementPreviewResponse {
   existing_batch_date: string | null;
   errors: RowIssue[];
   warnings: RowIssue[];
+  grouped_warnings?: GroupedWarning[];
   unknown_items: string[];
   total_rows: number;
   warning_count: number;
+  consumable_count?: number;
+  product_or_other_count?: number;
+  unknown_count?: number;
   lines_preview: StockStatementLine[];
   can_confirm: boolean;
 }
@@ -149,6 +170,7 @@ export default function StockStatementWorkspace() {
   const [selectedYear, setSelectedYear] = useState<number>(initialYear);
   const [searchQuery, setSearchQuery] = useState('');
   const [warningsOnly, setWarningsOnly] = useState(false);
+  const [itemClassFilter, setItemClassFilter] = useState<'CONSUMABLE' | 'ALL'>('CONSUMABLE');
 
   const [records, setRecords] = useState<StockStatementLine[]>([]);
   const [metadata, setMetadata] = useState<StockStatementMetadata | null>(null);
@@ -176,7 +198,7 @@ export default function StockStatementWorkspace() {
     setErrorMsg(null);
     try {
       const res = await apiClient.get<StockStatementResponse>(
-        `/api/v1/inventory/statement?month=${selectedMonth}&year=${selectedYear}&has_warnings_only=${warningsOnly}${
+        `/api/v1/inventory/statement?month=${selectedMonth}&year=${selectedYear}&item_class=${itemClassFilter}&has_warnings_only=${warningsOnly}${
           searchQuery ? `&search=${encodeURIComponent(searchQuery)}` : ''
         }`
       );
@@ -192,7 +214,7 @@ export default function StockStatementWorkspace() {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedMonth, selectedYear, warningsOnly, searchQuery]);
+  }, [selectedMonth, selectedYear, itemClassFilter, warningsOnly, searchQuery]);
 
   useEffect(() => {
     loadData();
@@ -405,20 +427,48 @@ export default function StockStatementWorkspace() {
           </span>
         ),
       },
+      ...(itemClassFilter === 'ALL'
+        ? [
+            {
+              key: 'item_class' as keyof StockStatementLine,
+              label: 'Class',
+              width: 130,
+              align: 'center' as const,
+              render: (val: any) => {
+                const cls = String(val || 'CONSUMABLE');
+                const badgeColor =
+                  cls === 'CONSUMABLE'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : cls === 'PRODUCT_OR_OTHER'
+                    ? 'bg-blue-50 text-blue-700 border-blue-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200';
+                return (
+                  <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold border ${badgeColor}`}>
+                    {cls}
+                  </span>
+                );
+              },
+            },
+          ]
+        : []),
     ],
-    []
+    [itemClassFilter]
   );
 
   // Grouped Header Bands
   const headerGroups: HeaderGroupDef[] = useMemo(
     () => [
-      { label: 'IDENTIFICATION', colSpan: 4, className: 'bg-stone-100 text-stone-700' },
+      {
+        label: 'IDENTIFICATION',
+        colSpan: itemClassFilter === 'ALL' ? 5 : 4,
+        className: 'bg-stone-100 text-stone-700',
+      },
       { label: 'OPENING', colSpan: 2, className: 'bg-blue-50 text-blue-800' },
       { label: 'RECEIPTS', colSpan: 2, className: 'bg-emerald-50 text-emerald-800' },
       { label: 'ISSUES', colSpan: 2, className: 'bg-amber-50 text-amber-800' },
       { label: 'CLOSING', colSpan: 2, className: 'bg-purple-50 text-purple-800' },
     ],
-    []
+    [itemClassFilter]
   );
 
   return (
@@ -541,8 +591,34 @@ export default function StockStatementWorkspace() {
           </button>
         </div>
 
-        {/* Search & Warning Filters */}
-        <div className="flex items-center gap-2">
+        {/* Item Class Filter & Search & Warning Filters */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Item Class Toggle */}
+          <div className="flex items-center bg-stone-100 p-0.5 rounded-lg border border-stone-200 text-xs">
+            <button
+              type="button"
+              onClick={() => setItemClassFilter('CONSUMABLE')}
+              className={`px-2.5 py-1 rounded-md font-semibold transition-all ${
+                itemClassFilter === 'CONSUMABLE'
+                  ? 'bg-white text-stone-900 shadow-xs'
+                  : 'text-stone-500 hover:text-stone-700'
+              }`}
+            >
+              Consumables only ({metadata?.consumable_count ?? summary?.consumable_count ?? 0})
+            </button>
+            <button
+              type="button"
+              onClick={() => setItemClassFilter('ALL')}
+              className={`px-2.5 py-1 rounded-md font-semibold transition-all ${
+                itemClassFilter === 'ALL'
+                  ? 'bg-white text-stone-900 shadow-xs'
+                  : 'text-stone-500 hover:text-stone-700'
+              }`}
+            >
+              All items ({metadata?.row_count ?? 0})
+            </button>
+          </div>
+
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-stone-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
             <input
@@ -550,7 +626,7 @@ export default function StockStatementWorkspace() {
               placeholder="Search items..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              className="text-xs pl-8 pr-3 py-1.5 border border-stone-300 rounded-lg w-48 focus:outline-none focus:ring-1 focus:ring-erp-orange"
+              className="text-xs pl-8 pr-3 py-1.5 border border-stone-300 rounded-lg w-44 focus:outline-none focus:ring-1 focus:ring-erp-orange"
             />
           </div>
 
@@ -726,26 +802,32 @@ export default function StockStatementWorkspace() {
               {previewData && (
                 <div className="space-y-3 pt-2">
                   {/* Title / Row stats */}
-                  <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 text-xs space-y-1">
+                  <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 text-xs space-y-2">
                     <div className="flex justify-between">
                       <span className="text-stone-600">Detected Sheet Title:</span>
                       <span className="font-semibold text-stone-800">
                         {previewData.detected_title || 'Stock Statement'}
                       </span>
                     </div>
-                    <div className="flex justify-between">
+                    <div className="flex justify-between items-center">
                       <span className="text-stone-600">Total Rows Found:</span>
-                      <span className="font-semibold text-stone-800">{previewData.total_rows}</span>
+                      <span className="font-bold text-stone-800">{previewData.total_rows}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-stone-600">Validation Warnings:</span>
-                      <span
-                        className={`font-semibold ${
-                          previewData.warning_count > 0 ? 'text-amber-700' : 'text-emerald-700'
-                        }`}
-                      >
-                        {previewData.warning_count}
-                      </span>
+
+                    {/* Breakdown by item class */}
+                    <div className="grid grid-cols-3 gap-2 pt-1 border-t border-stone-200">
+                      <div className="bg-emerald-50/70 border border-emerald-200 rounded-lg p-2 text-center">
+                        <span className="text-[10px] font-semibold text-emerald-800 uppercase block">Consumables</span>
+                        <span className="text-sm font-bold text-emerald-700">{previewData.consumable_count ?? 0}</span>
+                      </div>
+                      <div className="bg-blue-50/70 border border-blue-200 rounded-lg p-2 text-center">
+                        <span className="text-[10px] font-semibold text-blue-800 uppercase block">Products / Other</span>
+                        <span className="text-sm font-bold text-blue-700">{previewData.product_or_other_count ?? 0}</span>
+                      </div>
+                      <div className="bg-amber-50/70 border border-amber-200 rounded-lg p-2 text-center">
+                        <span className="text-[10px] font-semibold text-amber-800 uppercase block">Unknown</span>
+                        <span className="text-sm font-bold text-amber-700">{previewData.unknown_count ?? 0}</span>
+                      </div>
                     </div>
                   </div>
 
@@ -780,16 +862,44 @@ export default function StockStatementWorkspace() {
                     </div>
                   )}
 
-                  {/* Warnings Display (non-blocking) */}
-                  {previewData.warnings.length > 0 && previewData.errors.length === 0 && (
-                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-1 text-xs text-amber-800">
-                      <span className="font-bold flex items-center gap-1.5">
-                        <AlertTriangle className="w-4 h-4" />
-                        {previewData.warnings.length} Non-blocking Arithmetic / Unit Warnings
-                      </span>
-                      <p className="text-[11px] text-amber-700">
-                        These will not block upload. The statement will be imported with audit flags.
-                      </p>
+                  {/* Grouped Warnings Display (non-blocking) */}
+                  {previewData.grouped_warnings && previewData.grouped_warnings.length > 0 && (
+                    <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl space-y-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-amber-900 flex items-center gap-1.5">
+                          <AlertTriangle className="w-4 h-4 text-amber-600" />
+                          Validation Warnings Summary ({previewData.warning_count} total)
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadErrorReport(previewData.file_token)}
+                          className="text-[11px] font-semibold text-amber-800 underline hover:text-amber-950"
+                        >
+                          Download Report (.xlsx)
+                        </button>
+                      </div>
+                      <div className="max-h-48 overflow-y-auto rounded border border-amber-200 bg-white">
+                        <table className="w-full text-left border-collapse text-[11px]">
+                          <thead>
+                            <tr className="bg-amber-100/60 text-amber-900 border-b border-amber-200">
+                              <th className="p-1.5 font-semibold">Warning Code</th>
+                              <th className="p-1.5 font-semibold text-right">Count</th>
+                              <th className="p-1.5 font-semibold">Sample Rows</th>
+                              <th className="p-1.5 font-semibold">Description</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-amber-100">
+                            {previewData.grouped_warnings.map((gw, idx) => (
+                              <tr key={idx} className="hover:bg-amber-50/50">
+                                <td className="p-1.5 font-mono font-semibold text-amber-800">{gw.code}</td>
+                                <td className="p-1.5 text-right font-bold text-stone-700">{gw.count}</td>
+                                <td className="p-1.5 text-stone-600 font-mono text-[10px]">{gw.sample_rows.slice(0, 5).join(', ')}</td>
+                                <td className="p-1.5 text-stone-600 max-w-xs truncate" title={gw.description}>{gw.description}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   )}
 

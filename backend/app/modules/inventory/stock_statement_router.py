@@ -1,4 +1,5 @@
 import io
+import time
 from typing import Annotated, Optional
 from urllib.parse import quote
 
@@ -6,6 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Respon
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.core.errors import ApplicationError
 from app.db.session import get_db
 from app.schemas.auth import CurrentUser
 from app.schemas.error import ErrorResponse
@@ -37,6 +39,7 @@ def get_statement(
     month: Annotated[int, Query(ge=1, le=12, description="Statement month (1-12)")],
     year: Annotated[int, Query(ge=2000, le=2100, description="Statement year (e.g. 2026)")],
     search: Optional[str] = Query(None, description="Search item id, name, or customer part no"),
+    item_class: Optional[str] = Query("CONSUMABLE", description="Filter by item class ('CONSUMABLE', 'PRODUCT_OR_OTHER', 'UNKNOWN', or 'ALL')"),
     has_warnings_only: bool = Query(False, description="Filter only records with validation warnings"),
 ) -> StockStatementResponse:
     """Retrieve the active monthly stock statement and aggregated totals."""
@@ -45,6 +48,7 @@ def get_statement(
         month=month,
         year=year,
         search=search,
+        item_class_filter=item_class,
         has_warnings_only=has_warnings_only,
     )
 
@@ -117,9 +121,17 @@ def export_errors(
     """Download an Excel report listing all validation errors and warnings for a previewed upload."""
     entry = service._PREVIEW_STORE.get(file_token)
     if not entry:
-        raise HTTPException(
-            status_code=404,
-            detail="The requested preview token has expired or is invalid. Please re-upload the file.",
+        raise ApplicationError(
+            "EXPIRED_TOKEN",
+            "The requested preview token has expired or is invalid. Please re-upload the file.",
+            404,
+        )
+    if time.time() - entry.get("created_at", 0) > service.PREVIEW_TTL_SECONDS:
+        service._PREVIEW_STORE.pop(file_token, None)
+        raise ApplicationError(
+            "EXPIRED_TOKEN",
+            "The requested preview token has expired. Please re-upload the file.",
+            404,
         )
     issues = entry.get("issues", [])
     filename = entry.get("filename", "upload")

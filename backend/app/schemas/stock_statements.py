@@ -13,6 +13,7 @@ class StockStatementLineResponse(BaseModel):
     id: str
     item_id: str
     consumable_id: Optional[str] = None
+    item_class: str = "CONSUMABLE"
     item_description: Optional[str] = None
     cust_part_no: Optional[str] = None
     unit: Optional[str] = None
@@ -32,6 +33,9 @@ class StockStatementLineResponse(BaseModel):
 
 class StockStatementSummary(BaseModel):
     item_count: int = 0
+    consumable_count: int = 0
+    product_or_other_count: int = 0
+    unknown_count: int = 0
     total_opening_value: Decimal = Decimal("0.0000")
     total_receipt_value: Decimal = Decimal("0.0000")
     total_issue_value: Decimal = Decimal("0.0000")
@@ -53,6 +57,9 @@ class StockStatementMetadata(BaseModel):
     updated_by_name: Optional[str] = None
     row_count: int = 0
     warning_count: int = 0
+    consumable_count: int = 0
+    product_or_other_count: int = 0
+    unknown_count: int = 0
 
 
 class StockStatementResponse(BaseModel):
@@ -66,6 +73,16 @@ class RowIssue(BaseModel):
     column: str
     description: str
     severity: str = "ERROR"  # ERROR or WARNING
+    code: Optional[str] = None
+    item_id: Optional[str] = None
+    item_class: Optional[str] = None
+
+
+class GroupedWarningResponse(BaseModel):
+    code: str
+    description: str
+    count: int
+    sample_rows: list[int] = Field(default_factory=list)
 
 
 class StockStatementPreviewResponse(BaseModel):
@@ -80,9 +97,13 @@ class StockStatementPreviewResponse(BaseModel):
     existing_batch_date: Optional[datetime] = None
     errors: list[RowIssue] = Field(default_factory=list)
     warnings: list[RowIssue] = Field(default_factory=list)
+    grouped_warnings: list[GroupedWarningResponse] = Field(default_factory=list)
     unknown_items: list[str] = Field(default_factory=list)
     total_rows: int = 0
     warning_count: int = 0
+    consumable_count: int = 0
+    product_or_other_count: int = 0
+    unknown_count: int = 0
     lines_preview: list[StockStatementLineResponse] = Field(default_factory=list)
     can_confirm: bool = False
 

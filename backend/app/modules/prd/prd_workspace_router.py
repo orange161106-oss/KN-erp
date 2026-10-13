@@ -1,8 +1,12 @@
+import logging
 from typing import Annotated, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.core.errors import ApplicationError
 from app.db.session import get_db
@@ -119,14 +123,37 @@ async def preview_sales_schedule(
     contents = await file.read(10 * 1024 * 1024 + 1)
     if len(contents) > 10 * 1024 * 1024:
         raise ApplicationError('SOURCE_TOO_LARGE', 'Use a workbook of at most 10 MB.', 422)
-    return service.preview_sales_schedule_upload(
-        session=session,
-        file_bytes=contents,
-        filename=file.filename or "sales_schedule.xlsx",
-        sheet_name=sheet_name,
-        target_period=target_period,
-        revision_label=revision_label,
-    )
+    try:
+        return service.preview_sales_schedule_upload(
+            session=session,
+            file_bytes=contents,
+            filename=file.filename or "sales_schedule.xlsx",
+            sheet_name=sheet_name,
+            target_period=target_period,
+            revision_label=revision_label,
+        )
+    except (OperationalError, DBAPIError) as exc:
+        logger.warning("Database connection dropped during preview, disposing engine and retrying once: %s", exc)
+        session.rollback()
+        bind = session.get_bind()
+        if bind is not None:
+            bind.dispose()
+        try:
+            return service.preview_sales_schedule_upload(
+                session=session,
+                file_bytes=contents,
+                filename=file.filename or "sales_schedule.xlsx",
+                sheet_name=sheet_name,
+                target_period=target_period,
+                revision_label=revision_label,
+            )
+        except (OperationalError, DBAPIError) as retry_exc:
+            logger.error("Database connection dropped on retry: %s", retry_exc)
+            raise ApplicationError(
+                "DATABASE_UNAVAILABLE",
+                "The database connection was lost. Please retry.",
+                503,
+            )
 
 
 @router.post("/import-confirm", response_model=PRDExcelImportResponse)
