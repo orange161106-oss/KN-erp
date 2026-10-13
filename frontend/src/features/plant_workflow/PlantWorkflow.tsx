@@ -325,6 +325,7 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
         </div>
 
         <PlanGrid
+          key={`${activeTab}-${currentPlantTabPlan?.id || 'none'}-${selectedMonth}-${selectedYear}`}
           plan={currentPlantTabPlan}
           items={currentPlantTabPlan?.line_items || []}
           loading={plansLoading}

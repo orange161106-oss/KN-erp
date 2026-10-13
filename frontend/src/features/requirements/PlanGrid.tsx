@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Upload,
   FileSpreadsheet,
@@ -56,6 +56,22 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isModalUploading, setIsModalUploading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+
+  const resetUploadModalState = () => {
+    setSelectedFile(null);
+    setIsModalUploading(false);
+    if (modalFileInputRef.current) {
+      modalFileInputRef.current.value = '';
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  // Explicitly reset upload state whenever plan ID or plant ID changes
+  useEffect(() => {
+    resetUploadModalState();
+  }, [plan?.id, plan?.plant_id]);
 
   // Inline editing state
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
@@ -132,12 +148,13 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
     try {
       await onUpload(selectedFile, uploadAllPlants);
       setIsUploadModalOpen(false);
-      setSelectedFile(null);
+      resetUploadModalState();
+    } catch (err) {
+      // In case of error, do not leave the upload button stuck in uploading state
+      setIsModalUploading(false);
+      throw err;
     } finally {
       setIsModalUploading(false);
-      if (modalFileInputRef.current) {
-        modalFileInputRef.current.value = '';
-      }
     }
   };
 
@@ -262,7 +279,10 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() => setIsUploadModalOpen(false)}
+                onClick={() => {
+                  setIsUploadModalOpen(false);
+                  resetUploadModalState();
+                }}
                 className="p-1 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 cursor-pointer"
               >
                 <X className="w-4 h-4" />
@@ -340,7 +360,7 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
                   type="button"
                   onClick={() => {
                     setIsUploadModalOpen(false);
-                    setSelectedFile(null);
+                    resetUploadModalState();
                   }}
                   className="px-3.5 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 cursor-pointer"
                 >

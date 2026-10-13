@@ -30,9 +30,9 @@ def create_db_engine(settings: Settings) -> Engine:
         settings.sqlalchemy_url,
         pool_pre_ping=True,
         pool_recycle=300,
-        pool_size=10,
-        max_overflow=20,
-        pool_timeout=settings.db_connect_timeout_seconds,
+        pool_size=5,
+        max_overflow=5,
+        pool_timeout=30,
         connect_args=connect_args,
         hide_parameters=True,
     )

@@ -1115,6 +1115,7 @@ def _parse_and_ingest_sheet(
     )
     existing_items = {it.consumable_id: it for it in db.execute(existing_items_stmt).scalars().all()}
     upserted_dict: dict[UUID, RequirementLineItem] = {}
+    consumable_cache: dict[str, Consumable] = {}
 
     start_row = (header_row_idx + 1) if header_row_idx is not None else 0
     total_processed_rows = 0
@@ -1162,27 +1163,33 @@ def _parse_and_ingest_sheet(
             else:
                 qty_val = 0.0
 
-            consumable = db.execute(
-                select(Consumable).where(
-                    or_(
-                        func.upper(Consumable.item_id) == raw_item.upper(),
-                        Consumable.item_id == raw_item,
+            clean_raw_item_key = raw_item.strip().upper()
+            if clean_raw_item_key in consumable_cache:
+                consumable = consumable_cache[clean_raw_item_key]
+            else:
+                consumable = db.execute(
+                    select(Consumable).where(
+                        or_(
+                            func.upper(Consumable.item_id) == raw_item.upper(),
+                            Consumable.item_id == raw_item,
+                        )
                     )
-                )
-            ).scalar_one_or_none()
+                ).scalar_one_or_none()
 
-            if not consumable:
-                if auto_create_consumables:
-                    consumable = auto_get_or_create_consumable(
-                        db=db,
-                        item_id_or_code=raw_item,
-                        name_or_desc=raw_desc,
-                        unit_str=raw_unit,
-                    )
-                else:
-                    row_num = r_idx + 1
-                    errors.append(f"Row {row_num}: Item ID '{raw_item}' not found in Product Master.")
-                    continue
+                if not consumable:
+                    if auto_create_consumables:
+                        consumable = auto_get_or_create_consumable(
+                            db=db,
+                            item_id_or_code=raw_item,
+                            name_or_desc=raw_desc,
+                            unit_str=raw_unit,
+                        )
+                    else:
+                        row_num = r_idx + 1
+                        errors.append(f"Row {row_num}: Item ID '{raw_item}' not found in Product Master.")
+                        continue
+                if consumable:
+                    consumable_cache[clean_raw_item_key] = consumable
 
             if consumable.id in existing_items:
                 item = existing_items[consumable.id]
@@ -1365,7 +1372,21 @@ def bulk_upsert_line_items(
         except Exception:
             pass
 
-        results = [_to_line_item_response(it) for it in all_upserted_items]
+        # Ensure all items have their consumable loaded via a clean scalar query to avoid lazy loading N+1 queries
+        upserted_ids = [it.id for it in all_upserted_items if it.id]
+        if upserted_ids:
+            loaded_items = db.execute(
+                select(RequirementLineItem)
+                .options(joinedload(RequirementLineItem.consumable))
+                .where(RequirementLineItem.id.in_(upserted_ids))
+            ).scalars().all()
+            # Preserve original order
+            item_map = {it.id: it for it in loaded_items}
+            final_items = [item_map.get(it.id, it) for it in all_upserted_items]
+        else:
+            final_items = all_upserted_items
+
+        results = [_to_line_item_response(it) for it in final_items]
         return BulkUploadResponse(
             total_rows=total_rows,
             upserted=len(results),
