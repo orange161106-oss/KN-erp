@@ -251,6 +251,17 @@ class StockParameter(Base):
     )
     source_row: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    resolution_applied: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default="NONE", server_default="NONE"
+    )
+    resolved_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    resolution_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -272,4 +283,5 @@ class StockParameter(Base):
     )
     consumable = relationship("Consumable", foreign_keys=[consumable_id])
     updater = relationship("User", foreign_keys=[updated_by])
+    resolver = relationship("User", foreign_keys=[resolved_by])
 

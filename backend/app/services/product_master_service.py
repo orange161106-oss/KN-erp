@@ -718,14 +718,21 @@ def upsert_single_assemble(db: Session, data: AssembleSingleCreate, actor_id: UU
 
 def bulk_upsert_assemble(db: Session, file_bytes: bytes, actor_id: UUID) -> dict:
     df = header_hunter(file_bytes, [
-        "consumable_item", "consumable item", "part_no_saleable_item",
-        "saleable part", "part no", "process"
+        "consumable_item", "consumable item", "consumable_description", "consumable description",
+        "part_no_saleable_item", "part_no_of_saleable_item", "part no of saleable item",
+        "saleable part", "part no", "process", "process_name", "process name",
     ])
 
     # Strip empty rows at bottom where consumable_item or part_no is missing
     def _is_valid_assemble_row(row: pd.Series) -> bool:
-        c = _extract_field(row, ["consumable_item", "consumable item", "consumable", "item id", "item_id"])
-        p = _extract_field(row, ["part_no_saleable_item", "saleable part no", "part no", "finished part no", "part_no"])
+        c = _extract_field(row, [
+            "consumable_description", "consumable description",
+            "consumable_item", "consumable item", "consumable", "item id", "item_id", "description"
+        ])
+        p = _extract_field(row, [
+            "part_no_of_saleable_item", "part no of saleable item",
+            "part_no_saleable_item", "saleable part no", "part no", "finished part no", "part_no"
+        ])
         c_valid = bool(c and c.lower() not in ("nan", "none", "null", "undefined"))
         p_valid = bool(p and p.lower() not in ("nan", "none", "null", "undefined"))
         return c_valid and p_valid
@@ -738,18 +745,37 @@ def bulk_upsert_assemble(db: Session, file_bytes: bytes, actor_id: UUID) -> dict
 
     try:
         for idx, row in df.iterrows():
-            consumable_item = _extract_field(row, ["consumable_item", "consumable item", "consumable", "item id", "item_id"])
-            part_no = _extract_field(row, ["part_no_saleable_item", "saleable part no", "part no", "finished part no", "part_no"])
+            consumable_item = _extract_field(row, [
+                "consumable_description", "consumable description",
+                "consumable_item", "consumable item", "consumable", "item id", "item_id", "description"
+            ])
+            part_no = _extract_field(row, [
+                "part_no_of_saleable_item", "part no of saleable item",
+                "part_no_saleable_item", "saleable part no", "part no", "finished part no", "part_no"
+            ])
             if not consumable_item or not part_no:
                 continue
 
             total_rows += 1
-            used_name = _extract_field(row, ["used_for_name_of_saleable_part", "saleable part name", "part name"])
-            prd_part = _extract_field(row, ["used_part_no_prd_order", "prd part no"])
-            proc_name = _extract_field(row, ["process_name", "process"]) or "ASSEMBLY"
-            thickness = _extract_field(row, ["material_thickness_in_mm_gsm", "thickness"])
-            raw_qty = _extract_field(row, ["no_of_process_per_part", "qty", "process count", "quantity"])
-            uom = _extract_field(row, ["output_unit", "unit", "uom"]) or "PCS"
+            used_name = _extract_field(row, [
+                "used_for_name_of_saleable_part", "used for – name of saleable part", "used for name of saleable part",
+                "saleable part name", "part name", "used for"
+            ])
+            prd_part = _extract_field(row, [
+                "used_part_no_prd_order", "used part no. (prd order)", "used part no (prd order)", "used part no prd order",
+                "prd part no"
+            ])
+            proc_name = _extract_field(row, ["process_name", "process name", "process"]) or "ASSEMBLY"
+            thickness = _extract_field(row, [
+                "material_thickness_in_mm_gsm", "material thickness in mm / gsm", "material thickness in mm gsm",
+                "thickness (mm/gsm)", "thickness"
+            ])
+            raw_qty = _extract_field(row, [
+                "no_of_processes_per_part", "no. of processes per part", "no of processes per part",
+                "no_of_process_per_part", "no of process per part",
+                "qty / part", "qty", "process count", "quantity"
+            ])
+            uom = _extract_field(row, ["output_unit", "output / unit", "output unit", "unit", "uom"]) or "PCS"
             raw_rate = _extract_field(row, ["rate", "cost", "unit rate", "price"])
 
             qty_val = _parse_decimal(raw_qty, default=Decimal("1.0000"))

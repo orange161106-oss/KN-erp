@@ -346,7 +346,7 @@ export default function Products() {
   const handleAssembleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!assembleForm.consumable_item.trim() || !assembleForm.part_no_saleable_item.trim()) {
-      setFeedback({ type: 'error', message: 'Consumable Item and Saleable Part No. are required.' });
+      setFeedback({ type: 'error', message: 'Consumable Description and Part No. of Saleable Item are required.' });
       return;
     }
     setSubmitting(true);
@@ -1310,7 +1310,7 @@ export default function Products() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
                   <div>
                     <label className="block text-[11px] font-semibold text-erp-chocolate mb-1">
-                      Consumable Item <span className="text-erp-orange">*</span>
+                      Consumable Description <span className="text-erp-orange">*</span>
                     </label>
                     <input
                       type="text"
@@ -1324,7 +1324,7 @@ export default function Products() {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-erp-chocolate mb-1">
-                      Saleable Part No. <span className="text-erp-orange">*</span>
+                      Part No. of Saleable Item <span className="text-erp-orange">*</span>
                     </label>
                     <input
                       type="text"
@@ -1338,7 +1338,7 @@ export default function Products() {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-erp-chocolate mb-1">
-                      Part Name
+                      Used for – Name of Saleable Part
                     </label>
                     <input
                       type="text"
@@ -1351,7 +1351,7 @@ export default function Products() {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-erp-chocolate mb-1">
-                      PRD Part No.
+                      Used Part No. (PRD Order)
                     </label>
                     <input
                       type="text"
@@ -1388,7 +1388,7 @@ export default function Products() {
 
                     <div>
                       <label className="block text-[11px] font-semibold text-erp-chocolate mb-1">
-                        Thickness (mm/gsm)
+                        Material Thickness in mm / GSM
                       </label>
                       <input
                         type="text"
@@ -1401,7 +1401,7 @@ export default function Products() {
 
                     <div>
                       <label className="block text-[11px] font-semibold text-erp-chocolate mb-1">
-                        Process Qty
+                        No. of Processes per Part
                       </label>
                       <input
                         type="number"
@@ -1424,7 +1424,7 @@ export default function Products() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                     <div>
                       <label className="block text-[11px] font-semibold text-erp-chocolate mb-1">
-                        Output Unit
+                        Output / Unit
                       </label>
                       <input
                         type="text"
@@ -1497,8 +1497,8 @@ export default function Products() {
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-erp-vanilla/35 text-erp-chocolate font-semibold border-b border-gray-200">
                   <tr>
-                    <th className="p-3 min-w-[130px]">
-                      <div>Consumable Item</div>
+                    <th className="p-3 min-w-[150px]">
+                      <div>Consumable Description</div>
                       <input
                         type="text"
                         placeholder="Search..."
@@ -1508,8 +1508,8 @@ export default function Products() {
                       />
                     </th>
 
-                    <th className="p-3 min-w-[130px]">
-                      <div>Saleable Part No.</div>
+                    <th className="p-3 min-w-[150px]">
+                      <div>Part No. of Saleable Item</div>
                       <input
                         type="text"
                         placeholder="Search..."
@@ -1520,7 +1520,7 @@ export default function Products() {
                     </th>
 
                     <th className="p-3 min-w-[180px]">
-                      <div>Saleable Part Name</div>
+                      <div>Used for – Name of Saleable Part</div>
                       <input
                         type="text"
                         placeholder="Search..."
@@ -1530,8 +1530,8 @@ export default function Products() {
                       />
                     </th>
 
-                    <th className="p-3 min-w-[120px]">
-                      <div>PRD Part No.</div>
+                    <th className="p-3 min-w-[150px]">
+                      <div>Used Part No. (PRD Order)</div>
                       <input
                         type="text"
                         placeholder="Search..."
@@ -1541,8 +1541,8 @@ export default function Products() {
                       />
                     </th>
 
-                    <th className="p-3 min-w-[110px]">
-                      <div>Process</div>
+                    <th className="p-3 min-w-[120px]">
+                      <div>Process Name</div>
                       <input
                         type="text"
                         placeholder="Search..."
@@ -1552,8 +1552,8 @@ export default function Products() {
                       />
                     </th>
 
-                    <th className="p-3 min-w-[100px]">
-                      <div>Thickness</div>
+                    <th className="p-3 min-w-[160px]">
+                      <div>Material Thickness in mm / GSM</div>
                       <input
                         type="text"
                         placeholder="Search..."
@@ -1563,8 +1563,8 @@ export default function Products() {
                       />
                     </th>
 
-                    <th className="p-3 min-w-[90px] text-right">
-                      <div>Qty / Part</div>
+                    <th className="p-3 min-w-[150px] text-right">
+                      <div>No. of Processes per Part</div>
                       <input
                         type="text"
                         placeholder="Qty"
@@ -1574,8 +1574,8 @@ export default function Products() {
                       />
                     </th>
 
-                    <th className="p-3 min-w-[80px] text-center">
-                      <div>Unit</div>
+                    <th className="p-3 min-w-[100px] text-center">
+                      <div>Output / Unit</div>
                       <input
                         type="text"
                         placeholder="UOM"
@@ -1586,7 +1586,7 @@ export default function Products() {
                     </th>
 
                     <th className="p-3 min-w-[90px] text-right">
-                      <div>Rate (₹)</div>
+                      <div>Rate</div>
                       <input
                         type="text"
                         placeholder="Rate"

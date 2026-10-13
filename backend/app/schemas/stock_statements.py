@@ -76,6 +76,14 @@ class RowIssue(BaseModel):
     code: Optional[str] = None
     item_id: Optional[str] = None
     item_class: Optional[str] = None
+    suggested_action: Optional[str] = None
+    row_content: Optional[dict[str, Any]] = None
+    conflicting_row: Optional[int] = None
+    conflicting_row_content: Optional[dict[str, Any]] = None
+    possible_matches: list[dict[str, Any]] = Field(default_factory=list)
+    resolvable: bool = False
+    allowed_actions: list[str] = Field(default_factory=list)
+    default_action: Optional[str] = None
 
 
 class GroupedWarningResponse(BaseModel):
@@ -131,6 +139,13 @@ class StockStatementHistoryItem(BaseModel):
 # ── Stock Management Schemas ──────────────────────────────────────────
 
 
+class RowResolutionInput(BaseModel):
+    row: int
+    action: str  # "SKIP_ROW", "SKIP_DUPLICATE", "KEEP_FIRST", "KEEP_SECOND", "KEEP_BOTH", "ASSIGN_ITEM_ID"
+    assigned_item_id: Optional[str] = None
+    note: Optional[str] = None
+
+
 class StockParameterRecord(BaseModel):
     id: str
     item_id: str
@@ -144,12 +159,22 @@ class StockParameterRecord(BaseModel):
     lead_time_days: Optional[int] = None
     edited_after_import: bool = False
     source_row: int = 0
+    resolution_applied: Optional[str] = "NONE"
+    resolved_by_name: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    resolution_note: Optional[str] = None
+    category_count: int = 1
+    has_conflicting_limits: bool = False
 
 
 class StockManagementSummary(BaseModel):
     item_count: int = 0
     missing_limits_count: int = 0
     min_exceeds_max_count: int = 0
+    multi_category_items_count: int = 0
+    ambiguous_limits_items_count: int = 0
+    skipped_rows_count: int = 0
+    resolved_rows_count: int = 0
 
 
 class StockManagementMetadata(BaseModel):
@@ -165,6 +190,8 @@ class StockManagementMetadata(BaseModel):
     updated_at: Optional[datetime] = None
     updated_by_name: Optional[str] = None
     row_count: int = 0
+    skipped_rows: list[dict[str, Any]] = Field(default_factory=list)
+    resolutions_applied: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class StockManagementResponse(BaseModel):
@@ -189,13 +216,17 @@ class StockParameterPreviewResponse(BaseModel):
     detected_title: Optional[str] = None
     source_filename: str
     file_token: str
+    uniqueness_mode: str = "ITEM_AND_CATEGORY"
     is_existing_batch: bool = False
     existing_batch_filename: Optional[str] = None
     errors: list[RowIssue] = Field(default_factory=list)
     warnings: list[RowIssue] = Field(default_factory=list)
+    issue_counts_by_code: dict[str, int] = Field(default_factory=dict)
     unknown_items: list[str] = Field(default_factory=list)
+    consumable_options: list[dict[str, Any]] = Field(default_factory=list)
     comparison: ComparisonSummary
     total_rows: int = 0
+    unresolved_blocking_count: int = 0
     lines_preview: list[StockParameterRecord] = Field(default_factory=list)
     can_confirm: bool = False
 
@@ -205,6 +236,7 @@ class StockParameterConfirmRequest(BaseModel):
     month: int
     year: int
     replace_confirmed: bool = False
+    resolutions: list[RowResolutionInput] = Field(default_factory=list)
 
 
 class StockParameterUpdateItem(BaseModel):
@@ -231,4 +263,5 @@ class StockParameterHistoryItem(BaseModel):
     row_count: int
     uploaded_at: datetime
     uploaded_by_name: Optional[str] = None
+
 
