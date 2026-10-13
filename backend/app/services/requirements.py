@@ -1395,8 +1395,16 @@ def bulk_upsert_line_items(
             plants_affected=list(set(plants_affected)),
         )
     except ApplicationError:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         raise
     except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         raise ApplicationError("PARSING_FAILED", f"Excel Parsing Failed: {str(exc)}", 400)
 
 

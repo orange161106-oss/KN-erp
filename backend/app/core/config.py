@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     def sqlalchemy_url(self) -> URL:
         return parse_database_url(self.database_url.get_secret_value())
 
+    @property
+    def alembic_sqlalchemy_url(self) -> URL:
+        url = self.sqlalchemy_url
+        if url.port == 6543:
+            return url.set(port=5432)
+        return url
+
 
 def load_settings() -> Settings:
     try:

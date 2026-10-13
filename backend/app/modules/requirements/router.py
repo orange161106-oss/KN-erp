@@ -189,8 +189,18 @@ async def handle_bulk_upload_items(
             upload_all_plants=upload_all_plants,
         )
     except HTTPException:
+        if session:
+            try:
+                session.rollback()
+            except Exception:
+                pass
         raise
     except Exception as e:
+        if session:
+            try:
+                session.rollback()
+            except Exception:
+                pass
         trace_str = traceback.format_exc()
         logger.error(
             "Bulk upload failed for plan_id=%s, file=%s: %s\n%s",
