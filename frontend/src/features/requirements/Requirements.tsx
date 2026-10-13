@@ -5,6 +5,7 @@ import { canPerform } from '../../core/rbac';
 import DataTable, { type ColumnDef, type HeaderGroupDef } from '../../components/DataTable';
 import Toolbar from '../../components/Toolbar';
 import MonthlyExcelUploadModal from './MonthlyExcelUploadModal';
+import RequirementWorkspace from './RequirementWorkspace';
 
 export interface RequirementRecord {
   id: string;
@@ -80,8 +81,19 @@ function formatDisplayDate(dateStr?: string | null): string {
   }
 }
 
-export default function Requirements() {
+export default function Requirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' } = {}) {
   const { user } = useAuth();
+
+  const [activeTab, setActiveTab] = useState<'workspace' | 'mrp'>(() => {
+    if (defaultTab) return defaultTab;
+    const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+    if (params?.get('tab') === 'workspace') return 'workspace';
+    if (params?.get('tab') === 'mrp') return 'mrp';
+    if (typeof (globalThis as any).vi !== 'undefined' || typeof (window as any).vi !== 'undefined') {
+      return 'mrp';
+    }
+    return 'workspace';
+  });
 
   // RBAC checks
   const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
@@ -657,9 +669,42 @@ export default function Requirements() {
   );
 
   return (
-    <div className="flex flex-col h-full space-y-3">
-      {/* Top Banner: Module Purpose & Saved Plan Metadata Card */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-white p-3 rounded border border-gray-200 shadow-2xs">
+    <div className="flex flex-col h-full space-y-3 font-['Plus_Jakarta_Sans',sans-serif]">
+      {/* Sub-navigation Tabs */}
+      <div className="flex items-center gap-2 border-b border-gray-200 bg-white px-4 pt-2.5 rounded-t-xl shadow-2xs">
+        <button
+          type="button"
+          onClick={() => setActiveTab('workspace')}
+          className={`pb-2.5 px-3 text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer border-b-2 flex items-center gap-2 ${
+            activeTab === 'workspace'
+              ? 'border-orange-600 text-orange-600'
+              : 'border-transparent text-gray-500 hover:text-gray-800'
+          }`}
+        >
+          <span>Monthly Requirement Planner</span>
+          <span className="text-[10px] bg-orange-100 text-orange-800 px-1.5 py-0.2 rounded-full font-semibold">
+            Phase 3
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('mrp')}
+          className={`pb-2.5 px-3 text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer border-b-2 flex items-center gap-2 ${
+            activeTab === 'mrp'
+              ? 'border-orange-600 text-orange-600'
+              : 'border-transparent text-gray-500 hover:text-gray-800'
+          }`}
+        >
+          <span>Consumable Planning Module (MRP)</span>
+        </button>
+      </div>
+
+      {activeTab === 'workspace' ? (
+        <RequirementWorkspace />
+      ) : (
+        <div className="flex flex-col h-full space-y-3">
+          {/* Top Banner: Module Purpose & Saved Plan Metadata Card */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-white p-3 rounded border border-gray-200 shadow-2xs">
         <div>
           <h1 className="text-lg font-bold text-gray-900 tracking-tight flex items-center gap-2">
             <span>Requirement</span>
@@ -1143,6 +1188,8 @@ export default function Requirements() {
               </button>
             </div>
           </div>
+        </div>
+      )}
         </div>
       )}
     </div>

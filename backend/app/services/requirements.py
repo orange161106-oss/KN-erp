@@ -545,19 +545,83 @@ def is_admin_user(user: CurrentUser) -> bool:
     return any(r in ("SUPER ADMIN", "SUPER_ADMIN", "ADMIN") for r in roles_normalized)
 
 
+def auto_get_or_create_consumable(
+    db: Session,
+    item_id_or_code: str,
+    name_or_desc: Optional[str] = None,
+    unit_str: Optional[str] = None,
+) -> Consumable:
+    """Finds existing consumable by item_id (case-insensitive) or auto-creates it."""
+    clean_code = item_id_or_code.strip()
+    existing = db.execute(
+        select(Consumable).where(
+            or_(
+                func.upper(Consumable.item_id) == clean_code.upper(),
+                Consumable.item_id == clean_code,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return existing
+
+    # Find or create a matching Unit
+    clean_unit = (unit_str or "NOS").strip().upper()
+    if not clean_unit or clean_unit.lower() == "nan":
+        clean_unit = "NOS"
+    unit_obj = db.execute(
+        select(Unit).where(
+            or_(
+                func.upper(Unit.code) == clean_unit,
+                func.upper(Unit.name) == clean_unit,
+            )
+        )
+    ).scalar_one_or_none()
+    if not unit_obj:
+        # Fallback to standard NOS
+        unit_obj = db.execute(select(Unit).where(func.upper(Unit.code) == "NOS")).scalar_one_or_none()
+        if not unit_obj:
+            unit_obj = Unit(code="NOS", name="Numbers")
+            db.add(unit_obj)
+            db.flush()
+
+    display_name = (name_or_desc or clean_code).strip()
+    new_consumable = Consumable(
+        item_id=clean_code,
+        name=display_name,
+        description=display_name,
+        output_unit=unit_str or unit_obj.code,
+        unit_id=unit_obj.id,
+    )
+    db.add(new_consumable)
+    db.flush()
+    return new_consumable
+
+
 def _to_line_item_response(item: RequirementLineItem) -> RequirementLineItemResponse:
     item_id = None
+    item_code = None
     consumable_name = None
+    unit = None
+    description = None
     if item.consumable:
         item_id = getattr(item.consumable, "item_id", None)
+        item_code = item_id
         consumable_name = getattr(item.consumable, "name", None)
+        unit = getattr(item.consumable, "output_unit", None)
+        description = getattr(item.consumable, "description", None) or consumable_name
+
     return RequirementLineItemResponse(
         id=item.id,
         plan_id=item.plan_id,
         consumable_id=item.consumable_id,
+        serial_no=item.serial_no,
+        part_no=item.part_no,
         requested_qty=item.requested_qty,
         item_id=item_id,
+        item_code=item_code,
         consumable_name=consumable_name,
+        unit=unit,
+        description=description,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
@@ -565,7 +629,10 @@ def _to_line_item_response(item: RequirementLineItem) -> RequirementLineItemResp
 
 def _to_plan_response(plan: MonthlyRequirementPlan) -> MonthlyRequirementPlanResponse:
     status_str = plan.status.value if hasattr(plan.status, "value") else str(plan.status)
-    items = [_to_line_item_response(it) for it in (plan.line_items or [])]
+    items = sorted(
+        [_to_line_item_response(it) for it in (plan.line_items or [])],
+        key=lambda x: (x.serial_no is None, x.serial_no or 0, str(x.item_id or ""))
+    )
     return MonthlyRequirementPlanResponse(
         id=plan.id,
         plant_id=plan.plant_id,
@@ -638,26 +705,57 @@ def upsert_single_line_item(
     if not plan:
         raise ApplicationError("NOT_FOUND", "Monthly requirement plan not found.", 404)
 
-    consumable = db.get(Consumable, payload.consumable_id)
+    # Resolve or create Consumable
+    consumable = None
+    if payload.consumable_id:
+        consumable = db.get(Consumable, payload.consumable_id)
+
+    raw_item_code = (payload.item_code or payload.item_id or "").strip()
+    if not consumable and raw_item_code:
+        consumable = auto_get_or_create_consumable(
+            db=db,
+            item_id_or_code=raw_item_code,
+            name_or_desc=payload.item_description,
+            unit_str=payload.unit,
+        )
+
     if not consumable:
-        raise ApplicationError("NOT_FOUND", "Consumable not found in Product Master.", 404)
+        raise ApplicationError("NOT_FOUND", "Consumable not found and no valid item_code provided.", 400)
+
+    # If payload provided part_no, update consumable if not set
+    if payload.part_no and hasattr(consumable, "part_number") and not consumable.part_number:
+        consumable.part_number = payload.part_no
 
     existing = db.execute(
         select(RequirementLineItem)
         .options(joinedload(RequirementLineItem.consumable))
         .where(
             RequirementLineItem.plan_id == plan_id,
-            RequirementLineItem.consumable_id == payload.consumable_id,
+            RequirementLineItem.consumable_id == consumable.id,
         )
     ).scalar_one_or_none()
 
     if existing:
         existing.requested_qty = payload.requested_qty
+        if payload.serial_no is not None:
+            existing.serial_no = payload.serial_no
+        if payload.part_no is not None:
+            existing.part_no = payload.part_no
         item = existing
     else:
+        # Determine serial_no if not provided
+        serial_no = payload.serial_no
+        if serial_no is None:
+            max_sno = db.execute(
+                select(func.max(RequirementLineItem.serial_no)).where(RequirementLineItem.plan_id == plan_id)
+            ).scalar() or 0
+            serial_no = max_sno + 1
+
         item = RequirementLineItem(
             plan_id=plan_id,
-            consumable_id=payload.consumable_id,
+            consumable_id=consumable.id,
+            serial_no=serial_no,
+            part_no=payload.part_no,
             requested_qty=payload.requested_qty,
         )
         db.add(item)
@@ -669,12 +767,249 @@ def upsert_single_line_item(
     return _to_line_item_response(item)
 
 
+def update_single_line_item(
+    db: Session,
+    plan_id: UUID,
+    item_id: UUID,
+    payload: Any,  # RequirementLineItemUpdate
+    user: CurrentUser,
+) -> RequirementLineItemResponse:
+    plan = db.get(MonthlyRequirementPlan, plan_id)
+    if not plan:
+        raise ApplicationError("NOT_FOUND", "Monthly requirement plan not found.", 404)
+
+    item = db.execute(
+        select(RequirementLineItem)
+        .options(joinedload(RequirementLineItem.consumable))
+        .where(
+            RequirementLineItem.id == item_id,
+            RequirementLineItem.plan_id == plan_id,
+        )
+    ).scalar_one_or_none()
+
+    if not item:
+        raise ApplicationError("NOT_FOUND", "Requirement line item not found in this plan.", 404)
+
+    if payload.requested_qty is not None:
+        item.requested_qty = payload.requested_qty
+    if payload.serial_no is not None:
+        item.serial_no = payload.serial_no
+    if payload.part_no is not None:
+        item.part_no = payload.part_no
+
+    if item.consumable:
+        if payload.unit is not None:
+            item.consumable.output_unit = payload.unit
+        if payload.item_description is not None:
+            item.consumable.description = payload.item_description
+            if not item.consumable.name:
+                item.consumable.name = payload.item_description
+
+    db.commit()
+    db.refresh(item)
+    return _to_line_item_response(item)
+
+
+def delete_single_line_item(
+    db: Session,
+    plan_id: UUID,
+    item_id: UUID,
+    user: CurrentUser,
+) -> dict[str, Any]:
+    plan = db.get(MonthlyRequirementPlan, plan_id)
+    if not plan:
+        raise ApplicationError("NOT_FOUND", "Monthly requirement plan not found.", 404)
+
+    item = db.execute(
+        select(RequirementLineItem).where(
+            RequirementLineItem.id == item_id,
+            RequirementLineItem.plan_id == plan_id,
+        )
+    ).scalar_one_or_none()
+
+    if not item:
+        raise ApplicationError("NOT_FOUND", "Requirement line item not found in this plan.", 404)
+
+    db.delete(item)
+    db.commit()
+    return {"message": "Line item deleted successfully", "id": str(item_id)}
+
+
+def _normalize_plant_key(name: str) -> Optional[str]:
+    """Map plant sheet name variations (e.g. 'Plant 1', 'PLANT I', 'Plant-1') to standard ID."""
+    clean = name.strip().upper().replace(" ", "").replace("_", "").replace("-", "")
+    mapping = {
+        "PLANT1": "PLANT_I",
+        "PLANTI": "PLANT_I",
+        "PLANT2": "PLANT_II",
+        "PLANTII": "PLANT_II",
+        "PLANT3": "PLANT_III",
+        "PLANTIII": "PLANT_III",
+        "PLANT4": "PLANT_IV",
+        "PLANTIV": "PLANT_IV",
+        "PLANT5": "PLANT_V",
+        "PLANTV": "PLANT_V",
+    }
+    return mapping.get(clean)
+
+
+def _parse_and_ingest_sheet(
+    db: Session,
+    target_plan: MonthlyRequirementPlan,
+    df_raw: pd.DataFrame,
+    errors: list[str],
+    auto_create_consumables: bool = False,
+) -> tuple[list[RequirementLineItem], int]:
+    if df_raw.empty:
+        return [], 0
+
+    # Look for the header row containing item id / item code / part
+    header_row_idx = None
+    for r_idx in range(min(15, len(df_raw))):
+        row_vals = [str(v).strip().lower().replace(" ", "").replace(".", "") for v in df_raw.iloc[r_idx].dropna()]
+        if any(c in row_vals for c in ["itemid", "itemcode", "partno", "itemdescription", "sno"]):
+            header_row_idx = r_idx
+            break
+
+    if header_row_idx is not None:
+        df = df_raw.iloc[header_row_idx + 1:].copy()
+        df.columns = [str(c).strip() for c in df_raw.iloc[header_row_idx]]
+    else:
+        df = df_raw.copy()
+        df.columns = [str(c).strip() for c in df.columns]
+
+    norm_cols = {
+        str(c).strip().lower().replace(" ", "").replace("_", "").replace("-", "").replace(".", ""): c
+        for c in df.columns
+    }
+
+    sno_candidates = ["sno", "serialno", "slno", "sno.", "srno"]
+    item_candidates = ["itemid", "itemcode", "consumableid", "consumablecode", "partnumber", "item", "code"]
+    desc_candidates = ["itemdescription", "description", "itemname", "name", "desc"]
+    part_candidates = ["partno", "partnum", "partnumber"]
+    unit_candidates = ["unit", "uom", "outputunit"]
+    qty_candidates = ["qty", "quantity", "requestedqty", "reqqty", "planqty", "orderqty", "monthlyqty"]
+
+    sno_col = next((norm_cols[c] for c in sno_candidates if c in norm_cols), None)
+    item_col = next((norm_cols[c] for c in item_candidates if c in norm_cols), None)
+    desc_col = next((norm_cols[c] for c in desc_candidates if c in norm_cols), None)
+    part_col = next((norm_cols[c] for c in part_candidates if c in norm_cols), None)
+    unit_col = next((norm_cols[c] for c in unit_candidates if c in norm_cols), None)
+    qty_col = next((norm_cols[c] for c in qty_candidates if c in norm_cols), None)
+
+    # If no generic QTY column, check for month header match (e.g. 'Oct', 'Oct 26', '10')
+    if not qty_col:
+        target_month_name = date(2000, target_plan.month, 1).strftime("%b").lower()
+        for c in df.columns:
+            c_clean = str(c).strip().lower().replace(" ", "").replace("'", "")
+            if target_month_name in c_clean or f"m{target_plan.month}" in c_clean:
+                qty_col = c
+                break
+
+    if not item_col or not qty_col:
+        errors.append(f"Sheet for plant '{target_plan.plant_id}' is missing required columns (Item ID and QTY). Found: {list(df.columns)}")
+        return [], len(df)
+
+    # Fetch existing items for this plan
+    existing_items_stmt = (
+        select(RequirementLineItem)
+        .options(joinedload(RequirementLineItem.consumable))
+        .where(RequirementLineItem.plan_id == target_plan.id)
+    )
+    existing_items = {it.consumable_id: it for it in db.execute(existing_items_stmt).scalars().all()}
+    upserted_dict: dict[UUID, RequirementLineItem] = {}
+
+    for idx, row in df.iterrows():
+        raw_item = str(row[item_col]).strip() if pd.notna(row[item_col]) else ""
+        if not raw_item or raw_item.lower() in ("nan", "none", "total", "subtotal"):
+            continue
+
+        raw_desc = str(row[desc_col]).strip() if desc_col and pd.notna(row[desc_col]) else None
+        raw_part = str(row[part_col]).strip() if part_col and pd.notna(row[part_col]) else None
+        raw_unit = str(row[unit_col]).strip() if unit_col and pd.notna(row[unit_col]) else "NOS"
+
+        sno_val = None
+        if sno_col and pd.notna(row[sno_col]):
+            try:
+                sno_val = int(float(row[sno_col]))
+            except Exception:
+                sno_val = None
+
+        raw_qty = row[qty_col]
+        try:
+            if pd.isna(raw_qty) or str(raw_qty).strip() in ("-", "", "nan"):
+                qty_val = 0.0
+            else:
+                qty_val = float(raw_qty)
+            if qty_val < 0:
+                qty_val = 0.0
+        except Exception:
+            qty_val = 0.0
+
+        consumable = db.execute(
+            select(Consumable).where(
+                or_(
+                    func.upper(Consumable.item_id) == raw_item.upper(),
+                    Consumable.item_id == raw_item,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if not consumable:
+            if auto_create_consumables:
+                consumable = auto_get_or_create_consumable(
+                    db=db,
+                    item_id_or_code=raw_item,
+                    name_or_desc=raw_desc,
+                    unit_str=raw_unit,
+                )
+            else:
+                row_num = idx + 2
+                errors.append(f"Row {row_num}: Item ID '{raw_item}' not found in Product Master.")
+                continue
+
+        if consumable.id in existing_items:
+            item = existing_items[consumable.id]
+            item.requested_qty = qty_val
+            if sno_val is not None:
+                item.serial_no = sno_val
+            if raw_part is not None:
+                item.part_no = raw_part
+            item.consumable = consumable
+            upserted_dict[consumable.id] = item
+        elif consumable.id in upserted_dict:
+            item = upserted_dict[consumable.id]
+            item.requested_qty = qty_val
+            if sno_val is not None:
+                item.serial_no = sno_val
+            if raw_part is not None:
+                item.part_no = raw_part
+            item.consumable = consumable
+        else:
+            new_item = RequirementLineItem(
+                plan_id=target_plan.id,
+                consumable_id=consumable.id,
+                serial_no=sno_val or (len(upserted_dict) + 1),
+                part_no=raw_part,
+                requested_qty=qty_val,
+            )
+            new_item.consumable = consumable
+            db.add(new_item)
+            existing_items[consumable.id] = new_item
+            upserted_dict[consumable.id] = new_item
+
+    db.flush()
+    return list(upserted_dict.values()), len(df)
+
+
 def bulk_upsert_line_items(
     db: Session,
     plan_id: UUID,
     file_bytes: bytes,
     filename: str,
     user: CurrentUser,
+    upload_all_plants: bool = False,
+    auto_create_consumables: bool = False,
 ) -> BulkUploadResponse:
     plan = db.get(MonthlyRequirementPlan, plan_id)
     if not plan:
@@ -684,121 +1019,91 @@ def bulk_upsert_line_items(
         raise ApplicationError("INVALID_FILE", "Uploaded file is empty.", 400)
 
     filename_lower = filename.lower()
-    if filename_lower.endswith((".xlsx", ".xls")):
+    is_excel = filename_lower.endswith((".xlsx", ".xls"))
+
+    errors: list[str] = []
+    total_rows = 0
+    all_upserted_items: list[RequirementLineItem] = []
+    plants_affected = [plan.plant_id]
+
+    if is_excel:
         try:
-            df = pd.read_excel(io.BytesIO(file_bytes))
+            excel_file = pd.ExcelFile(io.BytesIO(file_bytes))
+            sheet_names = excel_file.sheet_names
         except Exception as exc:
-            raise ApplicationError("INVALID_FILE", f"Failed to parse Excel file: {str(exc)}", 400)
+            raise ApplicationError("INVALID_FILE", f"Failed to parse Excel workbook: {str(exc)}", 400)
+
+        # Multi-plant mode or multiple plant sheets detected
+        recognized_sheets = {}
+        for s in sheet_names:
+            pkey = _normalize_plant_key(s)
+            if pkey:
+                recognized_sheets[pkey] = s
+
+        if upload_all_plants and is_admin_user(user) and recognized_sheets:
+            plants_affected = []
+            for pkey, sname in recognized_sheets.items():
+                df_sheet = pd.read_excel(excel_file, sheet_name=sname, header=None)
+                # Get or create plan for this plant
+                p_plan = db.execute(
+                    select(MonthlyRequirementPlan).where(
+                        MonthlyRequirementPlan.plant_id == pkey,
+                        MonthlyRequirementPlan.month == plan.month,
+                        MonthlyRequirementPlan.year == plan.year,
+                    )
+                ).scalar_one_or_none()
+
+                if not p_plan:
+                    p_plan = MonthlyRequirementPlan(
+                        plant_id=pkey,
+                        month=plan.month,
+                        year=plan.year,
+                        status=RequirementStatus.DRAFT,
+                    )
+                    db.add(p_plan)
+                    db.flush()
+
+                items, sheet_rows = _parse_and_ingest_sheet(db, p_plan, df_sheet, errors, auto_create_consumables=True)
+                total_rows += sheet_rows
+                all_upserted_items.extend(items)
+                plants_affected.append(pkey)
+        else:
+            # Single plant mode: check if there's a sheet specifically matching current plant
+            matched_sheet = None
+            for s in sheet_names:
+                if _normalize_plant_key(s) == plan.plant_id:
+                    matched_sheet = s
+                    break
+            if not matched_sheet:
+                matched_sheet = sheet_names[0]
+
+            df_sheet = pd.read_excel(excel_file, sheet_name=matched_sheet, header=None)
+            items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_sheet, errors, auto_create_consumables=auto_create_consumables)
+            total_rows += sheet_rows
+            all_upserted_items.extend(items)
     else:
+        # CSV parsing
         try:
-            df = pd.read_csv(io.BytesIO(file_bytes))
+            df_csv = pd.read_csv(io.BytesIO(file_bytes), header=None)
         except Exception:
             try:
-                df = pd.read_excel(io.BytesIO(file_bytes))
+                df_csv = pd.read_excel(io.BytesIO(file_bytes), header=None)
             except Exception as exc:
                 raise ApplicationError("INVALID_FILE", f"Failed to parse CSV/Excel file: {str(exc)}", 400)
 
-    if df is None or df.empty:
-        raise ApplicationError("EMPTY_FILE", "The uploaded file contains no data.", 400)
-
-    # Clean and match column headers
-    norm_cols = {str(c).strip().lower().replace(" ", "").replace("_", "").replace("-", ""): c for c in df.columns}
-
-    item_candidates = ["itemid", "itemcode", "consumableid", "consumablecode", "partnumber", "item", "code"]
-    qty_candidates = ["qty", "quantity", "requestedqty", "reqqty", "planqty", "orderqty", "monthlyqty"]
-
-    item_col = next((norm_cols[cand] for cand in item_candidates if cand in norm_cols), None)
-    qty_col = next((norm_cols[cand] for cand in qty_candidates if cand in norm_cols), None)
-
-    if not item_col or not qty_col:
-        raise ApplicationError(
-            "INVALID_COLUMNS",
-            f"Uploaded file missing required columns. Must contain 'Item ID' and 'QTY'. Found columns: {list(df.columns)}",
-
-            400,
-        )
-
-    # Collect unique item ID values
-    raw_identifiers = [
-        str(v).strip() for v in df[item_col].dropna().unique()
-        if str(v).strip() and str(v).strip().lower() != "nan"
-    ]
-
-    stmt = select(Consumable).where(
-        or_(
-            func.upper(Consumable.item_id).in_([c.upper() for c in raw_identifiers]),
-            Consumable.item_id.in_(raw_identifiers),
-        )
-    )
-    consumables_list = db.execute(stmt).scalars().all()
-    consumables_by_code = {c.item_id.strip().upper(): c for c in consumables_list}
-    consumables_by_id = {str(c.id): c for c in consumables_list}
-
-    # Fetch existing line items for plan
-    existing_items_stmt = (
-        select(RequirementLineItem)
-        .options(joinedload(RequirementLineItem.consumable))
-        .where(RequirementLineItem.plan_id == plan_id)
-    )
-    existing_items = {it.consumable_id: it for it in db.execute(existing_items_stmt).scalars().all()}
-
-    errors: list[str] = []
-    upserted_dict: dict[UUID, RequirementLineItem] = {}
-
-    for idx, row in df.iterrows():
-        row_num = idx + 2
-        raw_item = str(row[item_col]).strip() if pd.notna(row[item_col]) else ""
-        if not raw_item or raw_item.lower() == "nan":
-            continue
-
-        consumable = consumables_by_code.get(raw_item.upper()) or consumables_by_id.get(raw_item)
-        if not consumable:
-            try:
-                consumable = db.get(Consumable, UUID(raw_item))
-            except Exception:
-                consumable = None
-
-        if not consumable:
-            errors.append(f"Row {row_num}: Item ID '{raw_item}' not found in Product Master.")
-            continue
-
-        raw_qty = row[qty_col]
-        try:
-            qty_val = float(raw_qty)
-            if pd.isna(qty_val) or qty_val < 0:
-                errors.append(f"Row {row_num}: Quantity for Item '{raw_item}' must be non-negative.")
-                continue
-        except Exception:
-            errors.append(f"Row {row_num}: Invalid quantity '{raw_qty}' for Item '{raw_item}'.")
-            continue
-
-        if consumable.id in existing_items:
-            item = existing_items[consumable.id]
-            item.requested_qty = qty_val
-            item.consumable = consumable
-            upserted_dict[consumable.id] = item
-        elif consumable.id in upserted_dict:
-            item = upserted_dict[consumable.id]
-            item.requested_qty = qty_val
-            item.consumable = consumable
-        else:
-            new_item = RequirementLineItem(
-                plan_id=plan_id,
-                consumable_id=consumable.id,
-                requested_qty=qty_val,
-            )
-            new_item.consumable = consumable
-            db.add(new_item)
-            existing_items[consumable.id] = new_item
-            upserted_dict[consumable.id] = new_item
+        items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_csv, errors, auto_create_consumables=auto_create_consumables)
+        total_rows += sheet_rows
+        all_upserted_items.extend(items)
 
     db.commit()
 
-    results = [_to_line_item_response(it) for it in upserted_dict.values()]
+    results = [_to_line_item_response(it) for it in all_upserted_items]
     return BulkUploadResponse(
-        total_rows=len(df),
+        total_rows=total_rows,
         upserted=len(results),
         errors=errors,
         items=results,
+        plants_affected=list(set(plants_affected)),
     )
+
 

@@ -3,6 +3,7 @@ import type { UserPermissionFlags } from '../../api/users';
 
 export interface CurrentUser extends Partial<UserPermissionFlags> {
   plant_ids?: string[];
+  assigned_plant?: string | null;
   id: string;
   username: string;
   roles: string[];

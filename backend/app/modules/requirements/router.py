@@ -9,6 +9,7 @@ from app.db.session import get_db
 from app.models.requirements import MonthlyRequirementPlan, RequirementStatus
 from app.schemas.auth import CurrentUser
 from app.schemas.requirements import (
+    AggregatedRequirementResponse,
     AggregationRunResponse,
     BulkUploadResponse,
     CalculatedRevisionApprovalResponse,
@@ -22,7 +23,7 @@ from app.schemas.requirements import (
     RequirementLineItemResponse,
 )
 from app.security.dependencies import get_current_user
-from app.services.mrp_calculator import run_monthly_aggregation
+from app.services.mrp_calculator import get_aggregated_requirements, run_monthly_aggregation
 from app.services.requirements import (
     _to_plan_response,
     bulk_upsert_line_items,
@@ -126,13 +127,50 @@ def handle_upsert_single_item(
     return upsert_single_line_item(session, plan_id, payload, current_user)
 
 
+from app.schemas.requirements import RequirementLineItemUpdate
+from app.services.requirements import (
+    _to_plan_response,
+    bulk_upsert_line_items,
+    calculate_planning_version_requirements,
+    create_monthly_plan,
+    delete_single_line_item,
+    get_calculated_requirements,
+    get_calculation_errors,
+    get_monthly_plans,
+    update_single_line_item,
+    upsert_single_line_item,
+)
+
+
+def handle_update_line_item(
+    plan_id: UUID,
+    item_id: UUID,
+    payload: RequirementLineItemUpdate,
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> RequirementLineItemResponse:
+    """Update an existing line item in the plan."""
+    return update_single_line_item(session, plan_id, item_id, payload, current_user)
+
+
+def handle_delete_line_item(
+    plan_id: UUID,
+    item_id: UUID,
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> dict:
+    """Delete a line item from the plan."""
+    return delete_single_line_item(session, plan_id, item_id, current_user)
+
+
 async def handle_bulk_upload_items(
     plan_id: UUID,
     file: UploadFile = File(...),
+    upload_all_plants: bool = Query(False),
     session: Annotated[Session, Depends(get_db)] = None,
     current_user: Annotated[CurrentUser, Depends(get_current_user)] = None,
 ) -> BulkUploadResponse:
-    """Accept a CSV or Excel file, extract Item ID and QTY, and bulk upsert records."""
+    """Accept a CSV or Excel file, extract Item ID and QTY, and bulk upsert records. Supports upload_all_plants."""
     content = await file.read()
     return bulk_upsert_line_items(
         session,
@@ -140,6 +178,7 @@ async def handle_bulk_upload_items(
         file_bytes=content,
         filename=file.filename or "",
         user=current_user,
+        upload_all_plants=upload_all_plants,
     )
 
 
@@ -221,22 +260,40 @@ def handle_run_aggregation(
     return run_monthly_aggregation(session, month=month, year=year)
 
 
+def handle_get_aggregated_requirements(
+    month: int,
+    year: int,
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> list[AggregatedRequirementResponse]:
+    """Query company-wide aggregated consumable requirements for a month and year.
+    Requires Admin or Planner role."""
+    require_admin_or_planner_role(current_user)
+    return get_aggregated_requirements(session, month=month, year=year)
+
+
 # Register endpoints on /requirements/plans and /requirements/aggregate
 router.add_api_route("/plans", handle_get_plans, methods=["GET"], response_model=list[MonthlyRequirementPlanResponse])
 router.add_api_route("/plans", handle_create_plan, methods=["POST"], response_model=MonthlyRequirementPlanResponse, status_code=status.HTTP_201_CREATED)
 router.add_api_route("/plans/{plan_id}/items/single", handle_upsert_single_item, methods=["POST"], response_model=RequirementLineItemResponse)
+router.add_api_route("/plans/{plan_id}/items/{item_id}", handle_update_line_item, methods=["PUT"], response_model=RequirementLineItemResponse)
+router.add_api_route("/plans/{plan_id}/items/{item_id}", handle_delete_line_item, methods=["DELETE"])
 router.add_api_route("/plans/{plan_id}/items/bulk", handle_bulk_upload_items, methods=["POST"], response_model=BulkUploadResponse)
 router.add_api_route("/plans/{plan_id}/submit", handle_submit_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
 router.add_api_route("/plans/{plan_id}/approve", handle_approve_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
+router.add_api_route("/aggregate/{month}/{year}", handle_get_aggregated_requirements, methods=["GET"], response_model=list[AggregatedRequirementResponse])
 router.add_api_route("/aggregate/{month}/{year}", handle_run_aggregation, methods=["POST"], response_model=AggregationRunResponse)
 
 # Register endpoints on /plans directly
 plans_router.add_api_route("", handle_get_plans, methods=["GET"], response_model=list[MonthlyRequirementPlanResponse])
 plans_router.add_api_route("", handle_create_plan, methods=["POST"], response_model=MonthlyRequirementPlanResponse, status_code=status.HTTP_201_CREATED)
 plans_router.add_api_route("/{plan_id}/items/single", handle_upsert_single_item, methods=["POST"], response_model=RequirementLineItemResponse)
+plans_router.add_api_route("/{plan_id}/items/{item_id}", handle_update_line_item, methods=["PUT"], response_model=RequirementLineItemResponse)
+plans_router.add_api_route("/{plan_id}/items/{item_id}", handle_delete_line_item, methods=["DELETE"])
 plans_router.add_api_route("/{plan_id}/items/bulk", handle_bulk_upload_items, methods=["POST"], response_model=BulkUploadResponse)
 plans_router.add_api_route("/{plan_id}/submit", handle_submit_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
 plans_router.add_api_route("/{plan_id}/approve", handle_approve_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
+plans_router.add_api_route("/aggregate/{month}/{year}", handle_get_aggregated_requirements, methods=["GET"], response_model=list[AggregatedRequirementResponse])
 plans_router.add_api_route("/aggregate/{month}/{year}", handle_run_aggregation, methods=["POST"], response_model=AggregationRunResponse)
 
 

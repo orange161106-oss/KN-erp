@@ -11,10 +11,18 @@ from app.schemas.requirements import AggregatedRequirementResponse, AggregationR
 
 def _to_aggregated_response(record: AggregatedRequirement) -> AggregatedRequirementResponse:
     item_id = None
+    item_code = None
     consumable_name = None
+    item_description = None
+    part_no = None
+    unit = None
     if record.consumable:
         item_id = getattr(record.consumable, "item_id", None)
+        item_code = item_id
         consumable_name = getattr(record.consumable, "name", None)
+        item_description = getattr(record.consumable, "description", None) or consumable_name
+        part_no = getattr(record.consumable, "part_number", None) or getattr(record.consumable, "item_id", None)
+        unit = getattr(record.consumable, "output_unit", None) or "Nos"
     return AggregatedRequirementResponse(
         id=record.id,
         month=record.month,
@@ -24,9 +32,27 @@ def _to_aggregated_response(record: AggregatedRequirement) -> AggregatedRequirem
         net_purchase_qty=record.net_purchase_qty,
         consumable_name=consumable_name,
         item_id=item_id,
+        item_code=item_code,
+        item_description=item_description,
+        part_no=part_no,
+        unit=unit,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
+
+
+def get_aggregated_requirements(db: Session, month: int, year: int) -> list[AggregatedRequirementResponse]:
+    """Query the AggregatedRequirement table for the specified month and year joined with Consumable."""
+    records = db.execute(
+        select(AggregatedRequirement)
+        .options(joinedload(AggregatedRequirement.consumable))
+        .where(
+            AggregatedRequirement.month == month,
+            AggregatedRequirement.year == year,
+        )
+        .order_by(AggregatedRequirement.total_gross_qty.desc())
+    ).scalars().all()
+    return [_to_aggregated_response(r) for r in records]
 
 
 def run_monthly_aggregation(db: Session, month: int, year: int) -> AggregationRunResponse:

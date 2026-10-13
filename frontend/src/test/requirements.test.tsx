@@ -81,7 +81,7 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
-function renderRequirements() {
+function renderRequirements(defaultTab: 'workspace' | 'mrp' = 'mrp') {
   return render(
     <AuthContext.Provider
       value={{
@@ -95,7 +95,7 @@ function renderRequirements() {
         logout: vi.fn(),
       }}
     >
-      <Requirements />
+      <Requirements defaultTab={defaultTab} />
     </AuthContext.Provider>
   );
 }

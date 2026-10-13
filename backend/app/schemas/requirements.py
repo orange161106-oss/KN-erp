@@ -98,8 +98,22 @@ class MonthlyRequirementPlanCreate(BaseModel):
 
 
 class RequirementLineItemCreate(BaseModel):
-    consumable_id: UUID
+    consumable_id: Optional[UUID] = None
+    item_id: Optional[str] = None
+    item_code: Optional[str] = None
+    item_description: Optional[str] = None
+    part_no: Optional[str] = None
+    unit: Optional[str] = None
+    serial_no: Optional[int] = None
     requested_qty: float = Field(ge=0)
+
+
+class RequirementLineItemUpdate(BaseModel):
+    requested_qty: Optional[float] = Field(default=None, ge=0)
+    serial_no: Optional[int] = None
+    part_no: Optional[str] = None
+    unit: Optional[str] = None
+    item_description: Optional[str] = None
 
 
 class RequirementLineItemResponse(BaseModel):
@@ -108,9 +122,14 @@ class RequirementLineItemResponse(BaseModel):
     id: UUID
     plan_id: UUID
     consumable_id: UUID
+    serial_no: Optional[int] = None
+    part_no: Optional[str] = None
     requested_qty: float
     item_id: Optional[str] = None
+    item_code: Optional[str] = None
     consumable_name: Optional[str] = None
+    unit: Optional[str] = None
+    description: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -133,6 +152,7 @@ class BulkUploadResponse(BaseModel):
     upserted: int
     errors: list[str] = []
     items: list[RequirementLineItemResponse] = []
+    plants_affected: list[str] = []
 
 
 class AggregatedRequirementResponse(BaseModel):
@@ -146,6 +166,10 @@ class AggregatedRequirementResponse(BaseModel):
     net_purchase_qty: float
     consumable_name: Optional[str] = None
     item_id: Optional[str] = None
+    item_code: Optional[str] = None
+    item_description: Optional[str] = None
+    part_no: Optional[str] = None
+    unit: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

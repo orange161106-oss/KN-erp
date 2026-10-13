@@ -345,3 +345,131 @@ def test_aggregation_fails_when_no_approved_plans(client, test_data):
     assert res.status_code == 400
     assert "no approved" in res.text.lower()
 
+
+def test_get_aggregated_requirements_endpoint(client, test_data):
+    c1 = test_data["c1"]
+
+    # Create & approve plan for 11/2026
+    res_plan = client.post("/api/v1/plans", json={"plant_id": "PLANT_I", "month": 11, "year": 2026}, headers=test_data["admin_headers"])
+    plan_id = res_plan.json()["id"]
+    client.post(f"/api/v1/plans/{plan_id}/items/single", json={"consumable_id": str(c1.id), "requested_qty": 450.0}, headers=test_data["admin_headers"])
+    client.patch(f"/api/v1/plans/{plan_id}/submit", headers=test_data["plant_1_headers"])
+    client.patch(f"/api/v1/plans/{plan_id}/approve", headers=test_data["admin_headers"])
+
+    # Run aggregation
+    client.post("/api/v1/aggregate/11/2026", headers=test_data["admin_headers"])
+
+    # 1. Unauthenticated / Standard user access fails with 403
+    get_unauth = client.get("/api/v1/aggregate/11/2026", headers=test_data["plant_1_headers"])
+    assert get_unauth.status_code == 403
+
+    # 2. Admin retrieves aggregated requirements
+    get_res = client.get("/api/v1/aggregate/11/2026", headers=test_data["admin_headers"])
+    assert get_res.status_code == 200, get_res.text
+    records = get_res.json()
+    assert isinstance(records, list)
+    assert len(records) >= 1
+
+    rec = next(r for r in records if r["consumable_id"] == str(c1.id))
+    assert rec["total_gross_qty"] == 450.0
+    assert rec["net_purchase_qty"] == 450.0
+    assert rec["item_code"] == c1.item_id
+    assert rec["item_description"] is not None
+    assert rec["part_no"] is not None
+    assert rec["unit"] is not None
+
+
+def test_phase4_single_intake_crud_and_auto_consumable(client, test_data):
+    # 1. Create plan
+    res_plan = client.post("/api/v1/plans", json={"plant_id": "PLANT_II", "month": 8, "year": 2026}, headers=test_data["admin_headers"])
+    plan_id = res_plan.json()["id"]
+
+    # 2. Add item with non-existing consumable code -> auto creates consumable & serial_no
+    single_res = client.post(
+        f"/api/v1/plans/{plan_id}/items/single",
+        json={
+            "item_code": "AUTO-CONSUMABLE-01",
+            "item_description": "Auto Created High-Grade Grease",
+            "part_no": "PART-GREASE-X",
+            "unit": "KGS",
+            "serial_no": 1,
+            "requested_qty": 75.5,
+        },
+        headers=test_data["admin_headers"],
+    )
+    assert single_res.status_code == 200, single_res.text
+    item_data = single_res.json()
+    item_id = item_data["id"]
+    assert item_data["item_code"] == "AUTO-CONSUMABLE-01"
+    assert item_data["description"] == "Auto Created High-Grade Grease"
+    assert item_data["part_no"] == "PART-GREASE-X"
+    assert item_data["unit"] == "KGS"
+    assert item_data["serial_no"] == 1
+    assert item_data["requested_qty"] == 75.5
+
+    # 3. Update line item (PUT)
+    put_res = client.put(
+        f"/api/v1/plans/{plan_id}/items/{item_id}",
+        json={"requested_qty": 120.0, "part_no": "PART-GREASE-MODIFIED"},
+        headers=test_data["admin_headers"],
+    )
+    assert put_res.status_code == 200, put_res.text
+    updated = put_res.json()
+    assert updated["requested_qty"] == 120.0
+    assert updated["part_no"] == "PART-GREASE-MODIFIED"
+
+    # 4. Delete line item (DELETE)
+    del_res = client.delete(
+        f"/api/v1/plans/{plan_id}/items/{item_id}",
+        headers=test_data["admin_headers"],
+    )
+    assert del_res.status_code == 200
+
+    # Verify deleted
+    get_plans = client.get("/api/v1/plans", headers=test_data["admin_headers"])
+    plan_obj = next(p for p in get_plans.json() if p["id"] == plan_id)
+    assert len(plan_obj["line_items"]) == 0
+
+
+def test_phase4_multi_sheet_all_plants_bulk_upload(client, test_data):
+    # Create an initial plan for plant 1
+    res_plan = client.post("/api/v1/plans", json={"plant_id": "PLANT_I", "month": 10, "year": 2026}, headers=test_data["admin_headers"])
+    plan_id = res_plan.json()["id"]
+
+    # Build Excel workbook with Plant 1 and Plant 2 sheets
+    excel_buffer = io.BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+        df1 = pd.DataFrame([
+            {"S.no.": 1, "Item Id.": "SHEET-ITEM-P1", "Item Description": "P1 Oil", "Part No.": "P1-OIL", "Unit": "L", "Oct'26": 55.0}
+        ])
+        df1.to_excel(writer, sheet_name="Plant I", index=False)
+
+        df2 = pd.DataFrame([
+            {"S.no.": 1, "Item Id.": "SHEET-ITEM-P2", "Item Description": "P2 Grease", "Part No.": "P2-GRS", "Unit": "KG", "Oct'26": 88.0}
+        ])
+        df2.to_excel(writer, sheet_name="Plant II", index=False)
+
+    excel_buffer.seek(0)
+
+    files = {"file": ("all_plants.xlsx", excel_buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    upload_res = client.post(
+        f"/api/v1/plans/{plan_id}/items/bulk?upload_all_plants=true",
+        files=files,
+        headers=test_data["admin_headers"],
+    )
+    assert upload_res.status_code == 200, upload_res.text
+    data = upload_res.json()
+    assert data["upserted"] >= 2
+    assert "PLANT_I" in data["plants_affected"]
+    assert "PLANT_II" in data["plants_affected"]
+
+    # Verify both plans exist and contain line items
+    plans_res = client.get("/api/v1/plans", headers=test_data["admin_headers"])
+    plans_by_plant = {p["plant_id"]: p for p in plans_res.json() if p["month"] == 10 and p["year"] == 2026}
+    assert "PLANT_I" in plans_by_plant
+    assert "PLANT_II" in plans_by_plant
+    assert len(plans_by_plant["PLANT_I"]["line_items"]) >= 1
+    assert len(plans_by_plant["PLANT_II"]["line_items"]) >= 1
+
+
+

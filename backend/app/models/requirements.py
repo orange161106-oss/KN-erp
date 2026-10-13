@@ -228,12 +228,14 @@ class RequirementLineItem(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    serial_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     plan_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("monthly_requirement_plans.id", ondelete="CASCADE"), nullable=False, index=True
     )
     consumable_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("consumables.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    part_no: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     requested_qty: Mapped[float] = mapped_column(Float, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
