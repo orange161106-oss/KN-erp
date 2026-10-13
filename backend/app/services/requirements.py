@@ -919,7 +919,50 @@ def _normalize_plant_key(name: str) -> Optional[str]:
         "PLANT5": "PLANT_V",
         "PLANTV": "PLANT_V",
     }
-    return mapping.get(clean)
+    if clean in mapping:
+        return mapping[clean]
+    # Check if string contains plant variations
+    for plant_num, std_id in [
+        ("1", "PLANT_I"),
+        ("I", "PLANT_I"),
+        ("2", "PLANT_II"),
+        ("II", "PLANT_II"),
+        ("3", "PLANT_III"),
+        ("III", "PLANT_III"),
+        ("4", "PLANT_IV"),
+        ("IV", "PLANT_IV"),
+        ("5", "PLANT_V"),
+        ("V", "PLANT_V"),
+    ]:
+        if f"PLANT{plant_num}" in clean or f"PLANT-{plant_num}" in clean:
+            return std_id
+    return None
+
+
+def _find_matching_sheet_name(sheet_names: list[str], target_plant_id: str) -> Optional[str]:
+    """Find sheet name matching target_plant_id from sheet_names."""
+    # Direct candidate matching
+    plant_candidates_map = {
+        "PLANT_I": ["Plant 1", "Plant I", "PLANT_I", "Plant-1", "PLANT1", "PLANTI", "Plant1", "PlantI"],
+        "PLANT_II": ["Plant 2", "Plant II", "PLANT_II", "Plant-2", "PLANT2", "PLANTII", "Plant2", "PlantII"],
+        "PLANT_III": ["Plant 3", "Plant III", "PLANT_III", "Plant-3", "PLANT3", "PLANTIII", "Plant3", "PlantIII"],
+        "PLANT_IV": ["Plant 4", "Plant IV", "PLANT_IV", "Plant-4", "PLANT4", "PLANTIV", "Plant4", "PlantIV"],
+        "PLANT_V": ["Plant 5", "Plant V", "PLANT_V", "Plant-5", "PLANT5", "PLANTV", "Plant5", "PlantV"],
+    }
+    candidates = plant_candidates_map.get(target_plant_id, [target_plant_id])
+    for s in sheet_names:
+        s_clean = s.strip()
+        for cand in candidates:
+            if s_clean.lower() == cand.lower():
+                return s
+
+    # Normalized comparison fallback
+    for s in sheet_names:
+        norm = _normalize_plant_key(s)
+        if norm == target_plant_id:
+            return s
+
+    return None
 
 
 def _parse_and_ingest_sheet(
@@ -932,54 +975,136 @@ def _parse_and_ingest_sheet(
     if df_raw.empty:
         return [], 0
 
-    # Look for the header row containing item id / item code / part
-    header_row_idx = None
-    for r_idx in range(min(15, len(df_raw))):
-        row_vals = [str(v).strip().lower().replace(" ", "").replace(".", "") for v in df_raw.iloc[r_idx].dropna()]
-        if any(c in row_vals for c in ["itemid", "itemcode", "partno", "itemdescription", "sno"]):
-            header_row_idx = r_idx
-            break
+    num_rows = len(df_raw)
+    num_cols = len(df_raw.columns)
+    scan_limit = min(10, num_rows)
 
-    if header_row_idx is not None:
-        df = df_raw.iloc[header_row_idx + 1:].copy()
-        df.columns = [str(c).strip() for c in df_raw.iloc[header_row_idx]]
-    else:
-        df = df_raw.copy()
-        df.columns = [str(c).strip() for c in df.columns]
+    # 1. Dynamic Header & Month Row Detection in the first 10 rows
+    header_row_idx: Optional[int] = None
+    month_row_idx: Optional[int] = None
 
-    norm_cols = {
-        str(c).strip().lower().replace(" ", "").replace("_", "").replace("-", "").replace(".", ""): c
-        for c in df.columns
-    }
+    for r_idx in range(scan_limit):
+        row_raw_vals = [str(v).strip() for v in df_raw.iloc[r_idx] if pd.notna(v)]
+        row_clean_vals = [
+            str(v).strip().lower().replace(" ", "").replace(".", "").replace("_", "").replace("-", "")
+            for v in df_raw.iloc[r_idx]
+            if pd.notna(v)
+        ]
 
-    sno_candidates = ["sno", "serialno", "slno", "sno.", "srno"]
-    item_candidates = ["itemid", "itemcode", "consumableid", "consumablecode", "partnumber", "item", "code"]
-    desc_candidates = ["itemdescription", "description", "itemname", "name", "desc"]
-    part_candidates = ["partno", "partnum", "partnumber"]
-    unit_candidates = ["unit", "uom", "outputunit"]
-    qty_candidates = ["qty", "quantity", "requestedqty", "reqqty", "planqty", "orderqty", "monthlyqty"]
+        # Check for header row containing 'Item Id.' or 'Item Code'
+        if header_row_idx is None:
+            if any(term in row_clean_vals for term in ["itemid", "itemcode", "consumableid", "itemdescription", "sno", "serialno"]):
+                header_row_idx = r_idx
 
-    sno_col = next((norm_cols[c] for c in sno_candidates if c in norm_cols), None)
-    item_col = next((norm_cols[c] for c in item_candidates if c in norm_cols), None)
-    desc_col = next((norm_cols[c] for c in desc_candidates if c in norm_cols), None)
-    part_col = next((norm_cols[c] for c in part_candidates if c in norm_cols), None)
-    unit_col = next((norm_cols[c] for c in unit_candidates if c in norm_cols), None)
-    qty_col = next((norm_cols[c] for c in qty_candidates if c in norm_cols), None)
+        # Check for month row containing 'Month'
+        if month_row_idx is None:
+            if any("month" in term for term in row_clean_vals):
+                month_row_idx = r_idx
 
-    # If no generic QTY column, check for month header match (e.g. 'Oct', 'Oct 26', '10')
-    if not qty_col:
-        target_month_name = date(2000, target_plan.month, 1).strftime("%b").lower()
-        for c in df.columns:
-            c_clean = str(c).strip().lower().replace(" ", "").replace("'", "")
-            if target_month_name in c_clean or f"m{target_plan.month}" in c_clean:
-                qty_col = c
+    # If header_row_idx not found, fallback to row 0 if it has content, or find row with most non-nulls
+    if header_row_idx is None:
+        header_row_idx = 0
+
+    # 2. Dynamic QTY Column Detection
+    target_month_num = target_plan.month
+    try:
+        month_abbr = date(2000, target_month_num, 1).strftime("%b").lower()  # e.g., 'oct'
+        month_full = date(2000, target_month_num, 1).strftime("%B").lower()  # e.g., 'october'
+    except Exception:
+        month_abbr = "oct"
+        month_full = "october"
+
+    qty_col_idx: Optional[int] = None
+
+    # Search month_row_idx if present
+    if month_row_idx is not None:
+        for c_idx in range(num_cols):
+            val = str(df_raw.iat[month_row_idx, c_idx]).strip().lower() if pd.notna(df_raw.iat[month_row_idx, c_idx]) else ""
+            val_clean = val.replace(" ", "").replace("'", "")
+            if month_abbr in val_clean or month_full in val_clean or f"m{target_month_num}" in val_clean:
+                qty_col_idx = c_idx
                 break
 
-    if not item_col or not qty_col:
-        errors.append(f"Sheet for plant '{target_plan.plant_id}' is missing required columns (Item ID and QTY). Found: {list(df.columns)}")
-        return [], len(df)
+    # If no match in month_row_idx, search header_row_idx for month-specific label
+    if qty_col_idx is None and header_row_idx is not None:
+        for c_idx in range(num_cols):
+            val = str(df_raw.iat[header_row_idx, c_idx]).strip().lower() if pd.notna(df_raw.iat[header_row_idx, c_idx]) else ""
+            val_clean = val.replace(" ", "").replace("'", "")
+            if month_abbr in val_clean or month_full in val_clean:
+                qty_col_idx = c_idx
+                break
 
-    # Fetch existing items for this plan
+    # Fallback to the first column containing 'QTY' or 'Qty'
+    if qty_col_idx is None:
+        # Check header_row_idx first
+        if header_row_idx is not None:
+            for c_idx in range(num_cols):
+                val = str(df_raw.iat[header_row_idx, c_idx]).strip().lower() if pd.notna(df_raw.iat[header_row_idx, c_idx]) else ""
+                val_clean = val.replace(" ", "").replace(".", "")
+                if "qty" in val_clean or "quantity" in val_clean or "requestedqty" in val_clean:
+                    qty_col_idx = c_idx
+                    break
+
+        # Check across the entire scan range if still not found
+        if qty_col_idx is None:
+            for r_idx in range(scan_limit):
+                for c_idx in range(num_cols):
+                    val = str(df_raw.iat[r_idx, c_idx]).strip().lower() if pd.notna(df_raw.iat[r_idx, c_idx]) else ""
+                    val_clean = val.replace(" ", "").replace(".", "")
+                    if "qty" in val_clean or "quantity" in val_clean:
+                        qty_col_idx = c_idx
+                        break
+                if qty_col_idx is not None:
+                    break
+
+    # 3. Detect column indices for serial_no, item_code, item_description, part_no, unit
+    sno_col_idx: Optional[int] = None
+    item_col_idx: Optional[int] = None
+    desc_col_idx: Optional[int] = None
+    part_col_idx: Optional[int] = None
+    unit_col_idx: Optional[int] = None
+
+    if header_row_idx is not None:
+        for c_idx in range(num_cols):
+            val = str(df_raw.iat[header_row_idx, c_idx]).strip().lower().replace(" ", "").replace(".", "").replace("_", "").replace("-", "") if pd.notna(df_raw.iat[header_row_idx, c_idx]) else ""
+            if not val:
+                continue
+            if sno_col_idx is None and any(cand in val for cand in ["sno", "serialno", "slno", "srno"]):
+                sno_col_idx = c_idx
+            elif item_col_idx is None and any(cand in val for cand in ["itemid", "itemcode", "consumableid", "consumablecode", "partnumber", "item", "code"]):
+                item_col_idx = c_idx
+            elif desc_col_idx is None and any(cand in val for cand in ["itemdescription", "description", "itemname", "name", "desc"]):
+                desc_col_idx = c_idx
+            elif part_col_idx is None and any(cand in val for cand in ["partno", "partnum", "partnumber"]):
+                part_col_idx = c_idx
+            elif unit_col_idx is None and any(cand in val for cand in ["unit", "uom", "outputunit"]):
+                unit_col_idx = c_idx
+
+    # Positional fallback if named detection didn't match:
+    # Factory standard: Col 0/1: S.no., Col 1/2: Item Id., Col 2/3: Description, Col 3/4: Part No., Col 4/5: Unit
+    if item_col_idx is None:
+        if num_cols >= 2:
+            item_col_idx = 1
+        else:
+            item_col_idx = 0
+
+    if sno_col_idx is None and item_col_idx > 0:
+        sno_col_idx = 0
+    if desc_col_idx is None and item_col_idx + 1 < num_cols:
+        desc_col_idx = item_col_idx + 1
+    if part_col_idx is None and item_col_idx + 2 < num_cols:
+        part_col_idx = item_col_idx + 2
+    if unit_col_idx is None and item_col_idx + 3 < num_cols:
+        unit_col_idx = item_col_idx + 3
+
+    if qty_col_idx is None:
+        raise ApplicationError(
+            "PARSING_FAILED",
+            f"Excel Parsing Failed: Could not identify QTY column for Month {target_plan.month} in sheet for plant '{target_plan.plant_id}'.",
+            400,
+        )
+
+    # 4. Data Extraction from header_row_idx + 1 to the end
     existing_items_stmt = (
         select(RequirementLineItem)
         .options(joinedload(RequirementLineItem.consumable))
@@ -988,25 +1113,39 @@ def _parse_and_ingest_sheet(
     existing_items = {it.consumable_id: it for it in db.execute(existing_items_stmt).scalars().all()}
     upserted_dict: dict[UUID, RequirementLineItem] = {}
 
-    for idx, row in df.iterrows():
-        raw_item = str(row[item_col]).strip() if pd.notna(row[item_col]) else ""
-        if not raw_item or raw_item.lower() in ("nan", "none", "total", "subtotal"):
+    start_row = (header_row_idx + 1) if header_row_idx is not None else 0
+    total_processed_rows = 0
+
+    for r_idx in range(start_row, num_rows):
+        total_processed_rows += 1
+        raw_item_val = df_raw.iat[r_idx, item_col_idx] if item_col_idx < num_cols else None
+        if pd.isna(raw_item_val):
+            continue
+        raw_item = str(raw_item_val).strip()
+        if not raw_item or raw_item.lower() in ("nan", "none", "total", "subtotal", "item id.", "item id", "item code"):
             continue
 
-        raw_desc = str(row[desc_col]).strip() if desc_col and pd.notna(row[desc_col]) else None
-        raw_part = str(row[part_col]).strip() if part_col and pd.notna(row[part_col]) else None
-        raw_unit = str(row[unit_col]).strip() if unit_col and pd.notna(row[unit_col]) else "NOS"
+        raw_desc_val = df_raw.iat[r_idx, desc_col_idx] if desc_col_idx is not None and desc_col_idx < num_cols else None
+        raw_desc = str(raw_desc_val).strip() if pd.notna(raw_desc_val) and str(raw_desc_val).strip().lower() not in ("nan", "none") else None
+
+        raw_part_val = df_raw.iat[r_idx, part_col_idx] if part_col_idx is not None and part_col_idx < num_cols else None
+        raw_part = str(raw_part_val).strip() if pd.notna(raw_part_val) and str(raw_part_val).strip().lower() not in ("nan", "none") else None
+
+        raw_unit_val = df_raw.iat[r_idx, unit_col_idx] if unit_col_idx is not None and unit_col_idx < num_cols else None
+        raw_unit = str(raw_unit_val).strip() if pd.notna(raw_unit_val) and str(raw_unit_val).strip().lower() not in ("nan", "none") else "NOS"
 
         sno_val = None
-        if sno_col and pd.notna(row[sno_col]):
-            try:
-                sno_val = int(float(row[sno_col]))
-            except Exception:
-                sno_val = None
+        if sno_col_idx is not None and sno_col_idx < num_cols:
+            raw_sno = df_raw.iat[r_idx, sno_col_idx]
+            if pd.notna(raw_sno):
+                try:
+                    sno_val = int(float(raw_sno))
+                except Exception:
+                    sno_val = None
 
-        raw_qty = row[qty_col]
+        raw_qty = df_raw.iat[r_idx, qty_col_idx] if qty_col_idx < num_cols else None
         try:
-            if pd.isna(raw_qty) or str(raw_qty).strip() in ("-", "", "nan"):
+            if pd.isna(raw_qty) or str(raw_qty).strip() in ("-", "", "nan", "none"):
                 qty_val = 0.0
             else:
                 qty_val = float(raw_qty)
@@ -1033,7 +1172,7 @@ def _parse_and_ingest_sheet(
                     unit_str=raw_unit,
                 )
             else:
-                row_num = idx + 2
+                row_num = r_idx + 1
                 errors.append(f"Row {row_num}: Item ID '{raw_item}' not found in Product Master.")
                 continue
 
@@ -1068,7 +1207,7 @@ def _parse_and_ingest_sheet(
             upserted_dict[consumable.id] = new_item
 
     db.flush()
-    return list(upserted_dict.values()), len(df)
+    return list(upserted_dict.values()), total_processed_rows
 
 
 def bulk_upsert_line_items(
@@ -1095,91 +1234,87 @@ def bulk_upsert_line_items(
     all_upserted_items: list[RequirementLineItem] = []
     plants_affected = [plan.plant_id]
 
-    if is_excel:
-        try:
-            excel_file = pd.ExcelFile(io.BytesIO(file_bytes))
-            sheet_names = excel_file.sheet_names
-        except Exception as exc:
-            raise ApplicationError("INVALID_FILE", f"Failed to parse Excel workbook: {str(exc)}", 400)
+    try:
+        if is_excel:
+            # Safe Sheet Matching using header=None
+            sheets_dict = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None, header=None)
+            sheet_names = list(sheets_dict.keys())
 
-        # Multi-plant mode or multiple plant sheets detected
-        recognized_sheets = {}
-        for s in sheet_names:
-            pkey = _normalize_plant_key(s)
-            if pkey:
-                recognized_sheets[pkey] = s
+            recognized_sheets: dict[str, str] = {}
+            for s in sheet_names:
+                pkey = _normalize_plant_key(s)
+                if pkey:
+                    recognized_sheets[pkey] = s
 
-        if upload_all_plants and is_admin_user(user) and recognized_sheets:
-            plants_affected = []
-            for pkey, sname in recognized_sheets.items():
-                df_sheet = pd.read_excel(excel_file, sheet_name=sname, header=None)
-                # Get or create plan for this plant
-                p_plan = db.execute(
-                    select(MonthlyRequirementPlan).where(
-                        MonthlyRequirementPlan.plant_id == pkey,
-                        MonthlyRequirementPlan.month == plan.month,
-                        MonthlyRequirementPlan.year == plan.year,
-                    )
-                ).scalar_one_or_none()
+            if upload_all_plants and is_admin_user(user) and recognized_sheets:
+                plants_affected = []
+                for pkey, sname in recognized_sheets.items():
+                    df_sheet = sheets_dict[sname]
+                    # Get or create plan for this plant
+                    p_plan = db.execute(
+                        select(MonthlyRequirementPlan).where(
+                            MonthlyRequirementPlan.plant_id == pkey,
+                            MonthlyRequirementPlan.month == plan.month,
+                            MonthlyRequirementPlan.year == plan.year,
+                        )
+                    ).scalar_one_or_none()
 
-                if not p_plan:
-                    p_plan = MonthlyRequirementPlan(
-                        plant_id=pkey,
-                        month=plan.month,
-                        year=plan.year,
-                        status=RequirementStatus.DRAFT,
-                    )
-                    db.add(p_plan)
-                    db.flush()
+                    if not p_plan:
+                        p_plan = MonthlyRequirementPlan(
+                            plant_id=pkey,
+                            month=plan.month,
+                            year=plan.year,
+                            status=RequirementStatus.DRAFT,
+                        )
+                        db.add(p_plan)
+                        db.flush()
 
-                items, sheet_rows = _parse_and_ingest_sheet(db, p_plan, df_sheet, errors, auto_create_consumables=True)
+                    items, sheet_rows = _parse_and_ingest_sheet(db, p_plan, df_sheet, errors, auto_create_consumables=True)
+                    total_rows += sheet_rows
+                    all_upserted_items.extend(items)
+                    plants_affected.append(pkey)
+            else:
+                # Single plant mode: find matching sheet for target plan
+                matched_sheet = _find_matching_sheet_name(sheet_names, plan.plant_id)
+                if not matched_sheet:
+                    matched_sheet = sheet_names[0]
+
+                df_sheet = sheets_dict[matched_sheet]
+                items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_sheet, errors, auto_create_consumables=auto_create_consumables)
                 total_rows += sheet_rows
                 all_upserted_items.extend(items)
-                plants_affected.append(pkey)
         else:
-            # Single plant mode: check if there's a sheet specifically matching current plant
-            matched_sheet = None
-            for s in sheet_names:
-                if _normalize_plant_key(s) == plan.plant_id:
-                    matched_sheet = s
-                    break
-            if not matched_sheet:
-                matched_sheet = sheet_names[0]
+            # CSV parsing
+            try:
+                df_csv = pd.read_csv(io.BytesIO(file_bytes), header=None)
+            except Exception:
+                df_csv = pd.read_excel(io.BytesIO(file_bytes), header=None)
 
-            df_sheet = pd.read_excel(excel_file, sheet_name=matched_sheet, header=None)
-            items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_sheet, errors, auto_create_consumables=auto_create_consumables)
+            items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_csv, errors, auto_create_consumables=auto_create_consumables)
             total_rows += sheet_rows
             all_upserted_items.extend(items)
-    else:
-        # CSV parsing
+
+        db.commit()
+
+        # Automatic background aggregation
         try:
-            df_csv = pd.read_csv(io.BytesIO(file_bytes), header=None)
+            from app.services.mrp_calculator import run_monthly_aggregation
+            run_monthly_aggregation(db, plan.month, plan.year)
         except Exception:
-            try:
-                df_csv = pd.read_excel(io.BytesIO(file_bytes), header=None)
-            except Exception as exc:
-                raise ApplicationError("INVALID_FILE", f"Failed to parse CSV/Excel file: {str(exc)}", 400)
+            pass
 
-        items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_csv, errors, auto_create_consumables=auto_create_consumables)
-        total_rows += sheet_rows
-        all_upserted_items.extend(items)
+        results = [_to_line_item_response(it) for it in all_upserted_items]
+        return BulkUploadResponse(
+            total_rows=total_rows,
+            upserted=len(results),
+            errors=errors,
+            items=results,
+            plants_affected=list(set(plants_affected)),
+        )
+    except ApplicationError:
+        raise
+    except Exception as exc:
+        raise ApplicationError("PARSING_FAILED", f"Excel Parsing Failed: {str(exc)}", 400)
 
-    db.commit()
-
-    # Automatic background aggregation
-    try:
-        from app.services.mrp_calculator import run_monthly_aggregation
-        run_monthly_aggregation(db, plan.month, plan.year)
-    except Exception:
-        pass
-
-    results = [_to_line_item_response(it) for it in all_upserted_items]
-    return BulkUploadResponse(
-        total_rows=total_rows,
-        upserted=len(results),
-        errors=errors,
-        items=results,
-        plants_affected=list(set(plants_affected)),
-    )
 
 

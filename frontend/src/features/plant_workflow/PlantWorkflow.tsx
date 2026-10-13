@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import axios from 'axios';
 import {
   Calendar,
   CheckCircle2,
@@ -138,8 +139,17 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
       setIsBulkModalOpen(false);
       await loadAllPlans();
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Bulk upload failed.';
+      let msg = 'Bulk upload failed.';
+      if (axios.isAxiosError(e)) {
+        msg = e.response?.data?.detail || e.response?.data?.message || e.message || msg;
+      } else if (e instanceof Error) {
+        msg = e.message;
+      }
       showToast(msg, 'error');
+    } finally {
+      if (modalFileInputRef.current) {
+        modalFileInputRef.current.value = '';
+      }
     }
   };
 
@@ -377,8 +387,20 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
           uploading={false}
           onUpload={async (f: File) => {
             if (currentPlantTabPlan) {
-              await bulkUploadItems(currentPlantTabPlan.id, f, false);
-              await loadAllPlans();
+              try {
+                const res = await bulkUploadItems(currentPlantTabPlan.id, f, false);
+                showToast(`Successfully uploaded ${res.upserted} items into ${currentPlantTabPlan.plant_id}.`, 'success');
+                await loadAllPlans();
+              } catch (e: unknown) {
+                let msg = 'Bulk upload failed.';
+                if (axios.isAxiosError(e)) {
+                  msg = e.response?.data?.detail || e.response?.data?.message || e.message || msg;
+                } else if (e instanceof Error) {
+                  msg = e.message;
+                }
+                showToast(msg, 'error');
+                throw e;
+              }
             }
           }}
           onAddItem={() => setIsAddModalOpen(true)}

@@ -174,15 +174,23 @@ async def handle_bulk_upload_items(
     current_user: Annotated[CurrentUser, Depends(get_current_user)] = None,
 ) -> BulkUploadResponse:
     """Accept a CSV or Excel file, extract Item ID and QTY, and bulk upsert records. Supports upload_all_plants."""
-    content = await file.read()
-    return bulk_upsert_line_items(
-        session,
-        plan_id=plan_id,
-        file_bytes=content,
-        filename=file.filename or "",
-        user=current_user,
-        upload_all_plants=upload_all_plants,
-    )
+    try:
+        content = await file.read()
+        return bulk_upsert_line_items(
+            session,
+            plan_id=plan_id,
+            file_bytes=content,
+            filename=file.filename or "",
+            user=current_user,
+            upload_all_plants=upload_all_plants,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Excel Parsing Failed: {str(e)}",
+        )
 
 
 def require_admin_or_planner_role(user: CurrentUser) -> CurrentUser:

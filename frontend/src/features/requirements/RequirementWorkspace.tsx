@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import axios from 'axios';
 import {
   Calendar,
   Building2,
@@ -205,10 +206,18 @@ export const RequirementWorkspace: React.FC = () => {
       setIsBulkModalOpen(false);
       await loadPlans();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Bulk upload failed';
+      let msg = 'Bulk upload failed';
+      if (axios.isAxiosError(err)) {
+        msg = err.response?.data?.detail || err.response?.data?.message || err.message || msg;
+      } else if (err instanceof Error) {
+        msg = err.message;
+      }
       showToast(msg, 'error');
     } finally {
       setUploading(false);
+      if (modalFileInputRef.current) {
+        modalFileInputRef.current.value = '';
+      }
     }
   };
 

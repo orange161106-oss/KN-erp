@@ -541,4 +541,49 @@ def test_phase4_multi_sheet_all_plants_bulk_upload(client, test_data):
     assert len(plans_by_plant["PLANT_II"]["line_items"]) >= 1
 
 
+def test_complex_factory_double_header_excel_upload(client, test_data):
+    # Tests parsing of double-header row (Row with 'Month', Row with 'Item Id.'),
+    # non-standard sheet name 'Plant 1', and multiple QTY / month columns
+    res_plan = client.post("/api/v1/plans", json={"plant_id": "PLANT_I", "month": 10, "year": 2026}, headers=test_data["admin_headers"])
+    plan_id = res_plan.json()["id"]
+
+    # Build simulated factory excel with double header
+    # Row 0: Title banner / empty
+    # Row 1: Month row: ['', '', '', '', '', "Oct'26", "Nov'26"]
+    # Row 2: Header row: ['S.no.', 'Item Id.', 'Item Description', 'Part No.', 'Unit', 'QTY', 'QTY']
+    # Row 3: Data row: [1, 'COMPLEX-ITEM-01', 'High Temp Grease', 'HTG-100', 'KGS', 125.0, 200.0]
+    # Row 4: Data row: [2, 'COMPLEX-ITEM-02', 'Gear Lubricant', 'GL-320', 'LTR', 75.0, 50.0]
+    raw_data = [
+        ["Factory Consumable Plan", None, None, None, None, None, None],
+        ["Month", None, None, None, None, "Oct' 26", "Nov' 26"],
+        ["S.no.", "Item Id.", "Item Description", "Part No.", "Unit", "QTY", "QTY"],
+        [1, "CON-001", "High Temp Grease", "HTG-100", "KGS", 125.0, 200.0],
+        [2, "CON-002", "Gear Lubricant", "GL-320", "LTR", 75.0, 50.0],
+    ]
+    df_complex = pd.DataFrame(raw_data)
+
+    excel_buffer = io.BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+        df_complex.to_excel(writer, sheet_name="Plant 1", header=False, index=False)
+    excel_buffer.seek(0)
+
+    files = {"file": ("1.Consumable plan- Oct '26.xlsx", excel_buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    upload_res = client.post(
+        f"/api/v1/plans/{plan_id}/items/bulk",
+        files=files,
+        headers=test_data["admin_headers"],
+    )
+    assert upload_res.status_code == 200, upload_res.text
+    data = upload_res.json()
+    assert data["upserted"] == 2
+
+    # Check imported quantities match Oct'26 column (125.0, 75.0) rather than Nov'26 (200.0, 50.0)
+    items_by_code = {it["item_code"]: it for it in data["items"]}
+    assert items_by_code["CON-001"]["requested_qty"] == 125.0
+    assert items_by_code["CON-002"]["requested_qty"] == 75.0
+    assert items_by_code["CON-001"]["serial_no"] == 1
+    assert items_by_code["CON-002"]["serial_no"] == 2
+
+
+
 
