@@ -330,24 +330,36 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
           loading={plansLoading}
           uploading={false}
           onUpload={async (f: File, uploadAll?: boolean) => {
-            if (currentPlantTabPlan) {
+            let targetPlan = currentPlantTabPlan;
+            const targetPlantId = activeTab.startsWith('PLANT_') ? activeTab : 'PLANT_I';
+            if (!targetPlan) {
               try {
-                const res = await bulkUploadItems(currentPlantTabPlan.id, f, Boolean(uploadAll));
-                const plantLabel = uploadAll
-                  ? res.plants_affected?.join(', ') || 'All Plants'
-                  : currentPlantTabPlan.plant_id;
-                showToast(`Successfully uploaded ${res.upserted} items into ${plantLabel}.`, 'success');
-                await loadAllPlans();
-              } catch (e: unknown) {
-                let msg = 'Bulk upload failed.';
-                if (axios.isAxiosError(e)) {
-                  msg = e.response?.data?.detail || e.response?.data?.message || e.message || msg;
-                } else if (e instanceof Error) {
-                  msg = e.message;
-                }
-                showToast(msg, 'error');
-                throw e;
+                targetPlan = await createPlan(targetPlantId, selectedMonth, selectedYear);
+              } catch (err) {
+                console.error('[BULK UPLOAD] Failed to auto-create plan:', err);
               }
+            }
+            if (!targetPlan) {
+              showToast('No active plan found or could be created for this plant', 'error');
+              return;
+            }
+            try {
+              console.log('[BULK UPLOAD] Triggered with planId:', targetPlan.id, 'file:', f.name, 'uploadAllPlants:', Boolean(uploadAll));
+              const res = await bulkUploadItems(targetPlan.id, f, Boolean(uploadAll));
+              const plantLabel = uploadAll
+                ? res.plants_affected?.join(', ') || 'All Plants'
+                : targetPlan.plant_id;
+              showToast(`Items uploaded successfully! Processed ${res.upserted} items into ${plantLabel}.`, 'success');
+              await loadAllPlans();
+            } catch (e: unknown) {
+              let msg = 'Bulk upload failed.';
+              if (axios.isAxiosError(e)) {
+                msg = e.response?.data?.detail || e.response?.data?.message || e.message || msg;
+              } else if (e instanceof Error) {
+                msg = e.message;
+              }
+              showToast(msg, 'error');
+              throw e;
             }
           }}
           onAddItem={() => setIsAddModalOpen(true)}

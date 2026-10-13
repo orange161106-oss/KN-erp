@@ -53,6 +53,8 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
   const modalFileInputRef = useRef<HTMLInputElement>(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [uploadAllPlants, setUploadAllPlants] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isModalUploading, setIsModalUploading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Inline editing state
@@ -112,6 +114,29 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
     } finally {
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleConfirmModalUpload = async () => {
+    if (!selectedFile) return;
+    console.log(
+      '[BULK UPLOAD] Triggered with planId:',
+      plan?.id,
+      'file:',
+      selectedFile.name,
+      'uploadAllPlants:',
+      uploadAllPlants
+    );
+    setIsModalUploading(true);
+    try {
+      await onUpload(selectedFile, uploadAllPlants);
+      setIsUploadModalOpen(false);
+      setSelectedFile(null);
+    } finally {
+      setIsModalUploading(false);
+      if (modalFileInputRef.current) {
+        modalFileInputRef.current.value = '';
       }
     }
   };
@@ -271,16 +296,10 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
                 type="file"
                 ref={modalFileInputRef}
                 accept=".xlsx,.xls,.csv"
-                onChange={async (e) => {
+                onChange={(e) => {
                   const file = e.target.files?.[0];
-                  if (!file) return;
-                  try {
-                    await onUpload(file, uploadAllPlants);
-                    setIsUploadModalOpen(false);
-                  } finally {
-                    if (modalFileInputRef.current) {
-                      modalFileInputRef.current.value = '';
-                    }
+                  if (file) {
+                    setSelectedFile(file);
                   }
                 }}
                 className="hidden"
@@ -288,24 +307,63 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
 
               <div
                 onClick={() => modalFileInputRef.current?.click()}
-                className="border-2 border-dashed border-gray-300 hover:border-orange-500 rounded-xl p-8 text-center cursor-pointer transition-colors bg-gray-50/50 hover:bg-orange-50/20"
+                className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors ${
+                  selectedFile
+                    ? 'border-orange-500 bg-orange-50/30'
+                    : 'border-gray-300 hover:border-orange-500 bg-gray-50/50 hover:bg-orange-50/20'
+                }`}
               >
                 <Upload className="w-8 h-8 text-orange-500 mx-auto mb-2" />
-                <p className="text-xs font-semibold text-gray-800">
-                  Click to select Excel/CSV file to upload
-                </p>
-                <p className="text-[11px] text-gray-400 mt-1">
-                  Supports .xlsx, .xls, .csv with plant item records
-                </p>
+                {selectedFile ? (
+                  <div>
+                    <p className="text-xs font-bold text-gray-900">
+                      Selected: <span className="text-orange-600">{selectedFile.name}</span>
+                    </p>
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      {(selectedFile.size / 1024).toFixed(1)} KB • Click to change file
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-xs font-semibold text-gray-800">
+                      Click to select Excel/CSV file to upload
+                    </p>
+                    <p className="text-[11px] text-gray-400 mt-1">
+                      Supports .xlsx, .xls, .csv with plant item records
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setIsUploadModalOpen(false)}
+                  onClick={() => {
+                    setIsUploadModalOpen(false);
+                    setSelectedFile(null);
+                  }}
                   className="px-3.5 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 cursor-pointer"
                 >
                   Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmModalUpload}
+                  disabled={!selectedFile || isModalUploading}
+                  className={`inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer ${
+                    !selectedFile || isModalUploading
+                      ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'
+                      : 'bg-orange-600 hover:bg-orange-700 text-white'
+                  }`}
+                >
+                  {isModalUploading ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Uploading...</span>
+                    </>
+                  ) : (
+                    <span>Upload File</span>
+                  )}
                 </button>
               </div>
             </div>
