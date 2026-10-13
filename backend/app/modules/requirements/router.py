@@ -187,9 +187,10 @@ async def handle_bulk_upload_items(
     except HTTPException:
         raise
     except Exception as e:
+        detail_msg = getattr(e, "message", None) or str(e)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Excel Parsing Failed: {str(e)}",
+            detail=detail_msg if ("Failed parsing" in detail_msg or "Excel Parsing Failed" in detail_msg) else f"Excel Parsing Failed: {detail_msg}",
         )
 
 

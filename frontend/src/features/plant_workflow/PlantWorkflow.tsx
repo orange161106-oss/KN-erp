@@ -80,10 +80,6 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
   const [newItemUnit, setNewItemUnit] = useState('NOS');
   const [newItemQty, setNewItemQty] = useState<number | string>('');
 
-  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
-  const [bulkUploadAllPlants, setBulkUploadAllPlants] = useState(true);
-  const modalFileInputRef = React.useRef<HTMLInputElement>(null);
-
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ type, message });
     setTimeout(() => {
@@ -115,41 +111,6 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Failed to approve plan.';
       showToast(msg, 'error');
-    }
-  };
-
-  const handleBulkUploadFromReview = async (file: File) => {
-    try {
-      // Find or create plan for current plant or first plant
-      const targetPlantId = activeTab.startsWith('PLANT_') ? activeTab : 'PLANT_I';
-      let targetPlan = allPlans.find(
-        (p) =>
-          p.plant_id.toUpperCase() === targetPlantId.toUpperCase() &&
-          p.month === selectedMonth &&
-          p.year === selectedYear
-      );
-      if (!targetPlan) {
-        targetPlan = await createPlan(targetPlantId, selectedMonth, selectedYear);
-      }
-      const res = await bulkUploadItems(targetPlan.id, file, bulkUploadAllPlants);
-      showToast(
-        `Bulk upload processed: ${res.upserted} items across ${res.plants_affected?.join(', ') || targetPlan.plant_id}.`,
-        'success'
-      );
-      setIsBulkModalOpen(false);
-      await loadAllPlans();
-    } catch (e: unknown) {
-      let msg = 'Bulk upload failed.';
-      if (axios.isAxiosError(e)) {
-        msg = e.response?.data?.detail || e.response?.data?.message || e.message || msg;
-      } else if (e instanceof Error) {
-        msg = e.message;
-      }
-      showToast(msg, 'error');
-    } finally {
-      if (modalFileInputRef.current) {
-        modalFileInputRef.current.value = '';
-      }
     }
   };
 
@@ -268,13 +229,6 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
             >
               <span>+ Add Item</span>
             </button>
-            <button
-              type="button"
-              onClick={() => setIsBulkModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-gray-800 shadow-2xs cursor-pointer"
-            >
-              <span>Bulk Upload Workbook (All Plants)</span>
-            </button>
           </div>
         </div>
 
@@ -385,11 +339,14 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
           items={currentPlantTabPlan?.line_items || []}
           loading={plansLoading}
           uploading={false}
-          onUpload={async (f: File) => {
+          onUpload={async (f: File, uploadAll?: boolean) => {
             if (currentPlantTabPlan) {
               try {
-                const res = await bulkUploadItems(currentPlantTabPlan.id, f, false);
-                showToast(`Successfully uploaded ${res.upserted} items into ${currentPlantTabPlan.plant_id}.`, 'success');
+                const res = await bulkUploadItems(currentPlantTabPlan.id, f, Boolean(uploadAll));
+                const plantLabel = uploadAll
+                  ? res.plants_affected?.join(', ') || 'All Plants'
+                  : currentPlantTabPlan.plant_id;
+                showToast(`Successfully uploaded ${res.upserted} items into ${plantLabel}.`, 'success');
                 await loadAllPlans();
               } catch (e: unknown) {
                 let msg = 'Bulk upload failed.';
@@ -512,76 +469,6 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* Bulk Upload Modal */}
-      {isBulkModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-150">
-            <div className="p-5 border-b border-gray-200 flex items-center justify-between">
-              <h3 className="text-sm font-bold text-gray-900">Bulk Upload Workbook (All Plants)</h3>
-              <button
-                onClick={() => setIsBulkModalOpen(false)}
-                className="p-1 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-5 space-y-4">
-              <div className="p-3 bg-gray-50 rounded-xl border border-gray-200">
-                <label className="flex items-start gap-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={bulkUploadAllPlants}
-                    onChange={(e) => setBulkUploadAllPlants(e.target.checked)}
-                    className="mt-0.5 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
-                  />
-                  <div className="text-xs">
-                    <span className="font-semibold text-gray-800">
-                      Import All 5 Plants (Multi-Sheet Workbook)
-                    </span>
-                    <p className="text-gray-500 mt-0.5">
-                      Ingests sheets for Plant I, Plant II, Plant III, Plant IV, and Plant V.
-                    </p>
-                  </div>
-                </label>
-              </div>
-
-              <input
-                type="file"
-                ref={modalFileInputRef}
-                accept=".xlsx,.xls,.csv"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleBulkUploadFromReview(f);
-                }}
-                className="hidden"
-              />
-
-              <div
-                onClick={() => modalFileInputRef.current?.click()}
-                className="border-2 border-dashed border-gray-300 hover:border-orange-500 rounded-xl p-8 text-center cursor-pointer transition-colors bg-gray-50/50 hover:bg-orange-50/20"
-              >
-                <p className="text-xs font-semibold text-gray-800">
-                  Click to select Excel/CSV file to upload
-                </p>
-                <p className="text-[11px] text-gray-400 mt-1">
-                  Supports multi-sheet workbooks with plant sheets
-                </p>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsBulkModalOpen(false)}
-                  className="px-3.5 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       )}

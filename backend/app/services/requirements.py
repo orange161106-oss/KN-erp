@@ -1246,9 +1246,17 @@ def bulk_upsert_line_items(
                 if pkey:
                     recognized_sheets[pkey] = s
 
-            if upload_all_plants and is_admin_user(user) and recognized_sheets:
+            CANONICAL_PLANTS = ["PLANT_I", "PLANT_II", "PLANT_III", "PLANT_IV", "PLANT_V"]
+
+            if upload_all_plants and is_admin_user(user):
                 plants_affected = []
-                for pkey, sname in recognized_sheets.items():
+                for pkey in CANONICAL_PLANTS:
+                    sname = _find_matching_sheet_name(sheet_names, pkey)
+                    if not sname and pkey in recognized_sheets:
+                        sname = recognized_sheets[pkey]
+                    if not sname:
+                        continue
+
                     df_sheet = sheets_dict[sname]
                     # Get or create plan for this plant
                     p_plan = db.execute(
@@ -1269,10 +1277,13 @@ def bulk_upsert_line_items(
                         db.add(p_plan)
                         db.flush()
 
-                    items, sheet_rows = _parse_and_ingest_sheet(db, p_plan, df_sheet, errors, auto_create_consumables=True)
-                    total_rows += sheet_rows
-                    all_upserted_items.extend(items)
-                    plants_affected.append(pkey)
+                    try:
+                        items, sheet_rows = _parse_and_ingest_sheet(db, p_plan, df_sheet, errors, auto_create_consumables=True)
+                        total_rows += sheet_rows
+                        all_upserted_items.extend(items)
+                        plants_affected.append(pkey)
+                    except Exception as sheet_err:
+                        raise ApplicationError("PARSING_FAILED", f"Failed parsing {sname}: {str(sheet_err)}", 400)
             else:
                 # Single plant mode: find matching sheet for target plan
                 matched_sheet = _find_matching_sheet_name(sheet_names, plan.plant_id)
@@ -1280,9 +1291,12 @@ def bulk_upsert_line_items(
                     matched_sheet = sheet_names[0]
 
                 df_sheet = sheets_dict[matched_sheet]
-                items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_sheet, errors, auto_create_consumables=auto_create_consumables)
-                total_rows += sheet_rows
-                all_upserted_items.extend(items)
+                try:
+                    items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_sheet, errors, auto_create_consumables=auto_create_consumables)
+                    total_rows += sheet_rows
+                    all_upserted_items.extend(items)
+                except Exception as sheet_err:
+                    raise ApplicationError("PARSING_FAILED", f"Failed parsing {matched_sheet}: {str(sheet_err)}", 400)
         else:
             # CSV parsing
             try:
@@ -1290,9 +1304,12 @@ def bulk_upsert_line_items(
             except Exception:
                 df_csv = pd.read_excel(io.BytesIO(file_bytes), header=None)
 
-            items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_csv, errors, auto_create_consumables=auto_create_consumables)
-            total_rows += sheet_rows
-            all_upserted_items.extend(items)
+            try:
+                items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_csv, errors, auto_create_consumables=auto_create_consumables)
+                total_rows += sheet_rows
+                all_upserted_items.extend(items)
+            except Exception as sheet_err:
+                raise ApplicationError("PARSING_FAILED", f"Failed parsing {filename}: {str(sheet_err)}", 400)
 
         db.commit()
 

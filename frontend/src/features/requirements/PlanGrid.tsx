@@ -11,6 +11,7 @@ import {
   Check,
   X,
 } from 'lucide-react';
+import { useAuth } from '../auth/context';
 import type { MonthlyRequirementPlan, RequirementLineItem, UpdateLineItemPayload } from './api';
 
 interface PlanGridProps {
@@ -18,7 +19,7 @@ interface PlanGridProps {
   items: RequirementLineItem[];
   loading?: boolean;
   uploading?: boolean;
-  onUpload: (file: File) => Promise<void>;
+  onUpload: (file: File, uploadAllPlants?: boolean) => Promise<void>;
   onAddItem?: () => void;
   onUpdateItem?: (itemId: string, data: UpdateLineItemPayload) => Promise<void>;
   onDeleteItem?: (itemId: string) => Promise<void>;
@@ -38,7 +39,20 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
   canUpload = true,
   canEdit = true,
 }) => {
+  const { user } = useAuth();
+  const isAdminOrPlanner = Boolean(
+    user?.is_super_admin ||
+    user?.is_superuser ||
+    user?.roles?.includes('ADMIN') ||
+    user?.roles?.includes('PLANNER') ||
+    user?.role === 'ADMIN' ||
+    user?.role === 'PLANNER'
+  );
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const modalFileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [uploadAllPlants, setUploadAllPlants] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Inline editing state
@@ -150,7 +164,7 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
             />
           </div>
 
-          {/* Hidden File Input */}
+          {/* Hidden File Input (direct test/legacy trigger) */}
           <input
             type="file"
             ref={fileInputRef}
@@ -180,7 +194,7 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
           {/* Action: Bulk Upload Button */}
           <button
             type="button"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => setIsUploadModalOpen(true)}
             disabled={!plan || !canUpload || uploading || loading}
             title={
               !plan
@@ -209,6 +223,95 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Bulk Upload Modal */}
+      {isUploadModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="p-5 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-gray-900">Upload Requirement Plan</h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Target: {plan?.plant_id || 'Current Plant'} ({plan?.month}/{plan?.year})
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsUploadModalOpen(false)}
+                className="p-1 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Only show Multi-Sheet Checkbox to Admin/Planner */}
+              {isAdminOrPlanner && (
+                <div className="p-3 bg-gray-50 rounded-xl border border-gray-200">
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={uploadAllPlants}
+                      onChange={(e) => setUploadAllPlants(e.target.checked)}
+                      className="mt-0.5 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                    />
+                    <div className="text-xs">
+                      <span className="font-semibold text-gray-800">
+                        Import All 5 Plants (Multi-Sheet Workbook)
+                      </span>
+                      <p className="text-gray-500 mt-0.5">
+                        Reads sheets for Plant 1–5 and bulk upserts into each respective plant plan.
+                      </p>
+                    </div>
+                  </label>
+                </div>
+              )}
+
+              <input
+                type="file"
+                ref={modalFileInputRef}
+                accept=".xlsx,.xls,.csv"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    await onUpload(file, uploadAllPlants);
+                    setIsUploadModalOpen(false);
+                  } finally {
+                    if (modalFileInputRef.current) {
+                      modalFileInputRef.current.value = '';
+                    }
+                  }
+                }}
+                className="hidden"
+              />
+
+              <div
+                onClick={() => modalFileInputRef.current?.click()}
+                className="border-2 border-dashed border-gray-300 hover:border-orange-500 rounded-xl p-8 text-center cursor-pointer transition-colors bg-gray-50/50 hover:bg-orange-50/20"
+              >
+                <Upload className="w-8 h-8 text-orange-500 mx-auto mb-2" />
+                <p className="text-xs font-semibold text-gray-800">
+                  Click to select Excel/CSV file to upload
+                </p>
+                <p className="text-[11px] text-gray-400 mt-1">
+                  Supports .xlsx, .xls, .csv with plant item records
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsUploadModalOpen(false)}
+                  className="px-3.5 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Grid Table */}
       <div className="overflow-x-auto min-h-[320px]">
