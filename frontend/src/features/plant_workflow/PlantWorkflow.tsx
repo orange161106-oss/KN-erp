@@ -220,16 +220,6 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
               Review monthly plant demands across all 5 facilities, manage line items, and approve requirements.
             </p>
           </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setIsAddModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-gray-800 shadow-2xs cursor-pointer"
-            >
-              <span>+ Add Item</span>
-            </button>
-          </div>
         </div>
 
         {/* Control Bar: Month, Year Selectors */}

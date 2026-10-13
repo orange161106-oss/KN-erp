@@ -585,5 +585,46 @@ def test_complex_factory_double_header_excel_upload(client, test_data):
     assert items_by_code["CON-002"]["serial_no"] == 2
 
 
+def test_five_column_catalog_without_qty_defaults_to_zero(client, test_data):
+    # Simulates plant1.xlsx / Sheet1 with 5 columns: S.no., Item Id., Item Description, Part No., Unit
+    # No QTY column present -> requested_qty defaults to 0.0
+    res_plan = client.post("/api/v1/plans", json={"plant_id": "PLANT_I", "month": 10, "year": 2026}, headers=test_data["admin_headers"])
+    plan_id = res_plan.json()["id"]
+
+    catalog_data = [
+        ["S.no.", "Item Id.", "Item Description", "Part No.", "Unit"],
+        [1, "CAT-ITEM-001", "Welding Rod E6013", "WR-6013", "NOS"],
+        [2, "CAT-ITEM-002", "Cutting Disc 4 inch", "CD-4IN", "NOS"],
+        [3, "CAT-ITEM-003", "Cotton Waste White", None, "KGS"],
+    ]
+    df_catalog = pd.DataFrame(catalog_data)
+
+    excel_buffer = io.BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+        df_catalog.to_excel(writer, sheet_name="Sheet1", header=False, index=False)
+    excel_buffer.seek(0)
+
+    files = {"file": ("plant1.xlsx", excel_buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    upload_res = client.post(
+        f"/api/v1/plans/{plan_id}/items/bulk",
+        files=files,
+        headers=test_data["admin_headers"],
+    )
+    assert upload_res.status_code == 200, upload_res.text
+    data = upload_res.json()
+    assert data["upserted"] == 3
+
+    items_by_code = {it["item_code"]: it for it in data["items"]}
+    assert items_by_code["CAT-ITEM-001"]["requested_qty"] == 0.0
+    assert items_by_code["CAT-ITEM-002"]["requested_qty"] == 0.0
+    assert items_by_code["CAT-ITEM-003"]["requested_qty"] == 0.0
+    assert items_by_code["CAT-ITEM-001"]["serial_no"] == 1
+    assert items_by_code["CAT-ITEM-002"]["serial_no"] == 2
+    assert items_by_code["CAT-ITEM-003"]["serial_no"] == 3
+    assert items_by_code["CAT-ITEM-001"]["description"] == "Welding Rod E6013"
+    assert items_by_code["CAT-ITEM-003"]["unit"] == "KGS"
+
+
+
 
 

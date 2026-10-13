@@ -5,9 +5,13 @@ from typing import Optional
 from uuid import UUID
 
 import io
+import logging
+import traceback
 import pandas as pd
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
+
+logger = logging.getLogger("app.modules.requirements")
 
 from app.core.errors import ApplicationError
 from app.domain.rules import (
@@ -971,6 +975,7 @@ def _parse_and_ingest_sheet(
     df_raw: pd.DataFrame,
     errors: list[str],
     auto_create_consumables: bool = False,
+    sheet_name: str = "Sheet",
 ) -> tuple[list[RequirementLineItem], int]:
     if df_raw.empty:
         return [], 0
@@ -1005,57 +1010,58 @@ def _parse_and_ingest_sheet(
     if header_row_idx is None:
         header_row_idx = 0
 
-    # 2. Dynamic QTY Column Detection
-    target_month_num = target_plan.month
-    try:
-        month_abbr = date(2000, target_month_num, 1).strftime("%b").lower()  # e.g., 'oct'
-        month_full = date(2000, target_month_num, 1).strftime("%B").lower()  # e.g., 'october'
-    except Exception:
-        month_abbr = "oct"
-        month_full = "october"
+    # 2. Dynamic QTY Column Detection using Month Translation Dictionary
+    month_keywords = {
+        1: ["jan"], 2: ["feb"], 3: ["mar"], 4: ["apr"],
+        5: ["may"], 6: ["jun"], 7: ["jul"], 8: ["aug"],
+        9: ["sep"], 10: ["oct"], 11: ["nov"], 12: ["dec"]
+    }
+    target_keywords = month_keywords.get(target_plan.month, [])
 
     qty_col_idx: Optional[int] = None
 
-    # Search month_row_idx if present
+    # Step 2A: If month_row_idx was found, search for target month keywords
     if month_row_idx is not None:
         for c_idx in range(num_cols):
-            val = str(df_raw.iat[month_row_idx, c_idx]).strip().lower() if pd.notna(df_raw.iat[month_row_idx, c_idx]) else ""
-            val_clean = val.replace(" ", "").replace("'", "")
-            if month_abbr in val_clean or month_full in val_clean or f"m{target_month_num}" in val_clean:
-                qty_col_idx = c_idx
-                break
-
-    # If no match in month_row_idx, search header_row_idx for month-specific label
-    if qty_col_idx is None and header_row_idx is not None:
-        for c_idx in range(num_cols):
-            val = str(df_raw.iat[header_row_idx, c_idx]).strip().lower() if pd.notna(df_raw.iat[header_row_idx, c_idx]) else ""
-            val_clean = val.replace(" ", "").replace("'", "")
-            if month_abbr in val_clean or month_full in val_clean:
-                qty_col_idx = c_idx
-                break
-
-    # Fallback to the first column containing 'QTY' or 'Qty'
-    if qty_col_idx is None:
-        # Check header_row_idx first
-        if header_row_idx is not None:
-            for c_idx in range(num_cols):
-                val = str(df_raw.iat[header_row_idx, c_idx]).strip().lower() if pd.notna(df_raw.iat[header_row_idx, c_idx]) else ""
-                val_clean = val.replace(" ", "").replace(".", "")
-                if "qty" in val_clean or "quantity" in val_clean or "requestedqty" in val_clean:
+            val = df_raw.iat[month_row_idx, c_idx]
+            if pd.notna(val):
+                cell_str = str(val).strip().lower()
+                if any(kw in cell_str for kw in target_keywords):
                     qty_col_idx = c_idx
                     break
 
-        # Check across the entire scan range if still not found
-        if qty_col_idx is None:
-            for r_idx in range(scan_limit):
-                for c_idx in range(num_cols):
-                    val = str(df_raw.iat[r_idx, c_idx]).strip().lower() if pd.notna(df_raw.iat[r_idx, c_idx]) else ""
-                    val_clean = val.replace(" ", "").replace(".", "")
-                    if "qty" in val_clean or "quantity" in val_clean:
+    # Step 2B: Search header_row_idx for month-specific label if not found in month_row_idx
+    if qty_col_idx is None and header_row_idx is not None:
+        for c_idx in range(num_cols):
+            val = df_raw.iat[header_row_idx, c_idx]
+            if pd.notna(val):
+                cell_str = str(val).strip().lower()
+                if any(kw in cell_str for kw in target_keywords):
+                    qty_col_idx = c_idx
+                    break
+
+    # Step 2C: Fallback: search header_row_idx for exact/contained 'qty'
+    if qty_col_idx is None and header_row_idx is not None:
+        for c_idx in range(num_cols):
+            val = df_raw.iat[header_row_idx, c_idx]
+            if pd.notna(val):
+                cell_str = str(val).strip().lower().replace(" ", "").replace(".", "").replace("_", "")
+                if cell_str == "qty" or "qty" in cell_str or "quantity" in cell_str or "requestedqty" in cell_str:
+                    qty_col_idx = c_idx
+                    break
+
+    # Step 2D: Fallback: scan first scan_limit rows for 'qty' column header
+    if qty_col_idx is None:
+        for r_idx in range(scan_limit):
+            for c_idx in range(num_cols):
+                val = df_raw.iat[r_idx, c_idx]
+                if pd.notna(val):
+                    cell_str = str(val).strip().lower().replace(" ", "").replace(".", "").replace("_", "")
+                    if cell_str == "qty" or "qty" in cell_str or "quantity" in cell_str:
                         qty_col_idx = c_idx
                         break
-                if qty_col_idx is not None:
-                    break
+            if qty_col_idx is not None:
+                break
 
     # 3. Detect column indices for serial_no, item_code, item_description, part_no, unit
     sno_col_idx: Optional[int] = None
@@ -1097,12 +1103,9 @@ def _parse_and_ingest_sheet(
     if unit_col_idx is None and item_col_idx + 3 < num_cols:
         unit_col_idx = item_col_idx + 3
 
+    # Fallback: If no QTY column found anywhere, make it optional and default to 0.0
     if qty_col_idx is None:
-        raise ApplicationError(
-            "PARSING_FAILED",
-            f"Excel Parsing Failed: Could not identify QTY column for Month {target_plan.month} in sheet for plant '{target_plan.plant_id}'.",
-            400,
-        )
+        logger.info("No QTY column found in sheet '%s'. Defaulting requested_qty to 0.0 for all line items.", sheet_name)
 
     # 4. Data Extraction from header_row_idx + 1 to the end
     existing_items_stmt = (
@@ -1118,93 +1121,119 @@ def _parse_and_ingest_sheet(
 
     for r_idx in range(start_row, num_rows):
         total_processed_rows += 1
-        raw_item_val = df_raw.iat[r_idx, item_col_idx] if item_col_idx < num_cols else None
-        if pd.isna(raw_item_val):
-            continue
-        raw_item = str(raw_item_val).strip()
-        if not raw_item or raw_item.lower() in ("nan", "none", "total", "subtotal", "item id.", "item id", "item code"):
-            continue
-
-        raw_desc_val = df_raw.iat[r_idx, desc_col_idx] if desc_col_idx is not None and desc_col_idx < num_cols else None
-        raw_desc = str(raw_desc_val).strip() if pd.notna(raw_desc_val) and str(raw_desc_val).strip().lower() not in ("nan", "none") else None
-
-        raw_part_val = df_raw.iat[r_idx, part_col_idx] if part_col_idx is not None and part_col_idx < num_cols else None
-        raw_part = str(raw_part_val).strip() if pd.notna(raw_part_val) and str(raw_part_val).strip().lower() not in ("nan", "none") else None
-
-        raw_unit_val = df_raw.iat[r_idx, unit_col_idx] if unit_col_idx is not None and unit_col_idx < num_cols else None
-        raw_unit = str(raw_unit_val).strip() if pd.notna(raw_unit_val) and str(raw_unit_val).strip().lower() not in ("nan", "none") else "NOS"
-
-        sno_val = None
-        if sno_col_idx is not None and sno_col_idx < num_cols:
-            raw_sno = df_raw.iat[r_idx, sno_col_idx]
-            if pd.notna(raw_sno):
-                try:
-                    sno_val = int(float(raw_sno))
-                except Exception:
-                    sno_val = None
-
-        raw_qty = df_raw.iat[r_idx, qty_col_idx] if qty_col_idx < num_cols else None
+        current_row_index = r_idx + 1  # 1-indexed for human readability
         try:
-            if pd.isna(raw_qty) or str(raw_qty).strip() in ("-", "", "nan", "none"):
-                qty_val = 0.0
-            else:
-                qty_val = float(raw_qty)
-            if qty_val < 0:
-                qty_val = 0.0
-        except Exception:
-            qty_val = 0.0
-
-        consumable = db.execute(
-            select(Consumable).where(
-                or_(
-                    func.upper(Consumable.item_id) == raw_item.upper(),
-                    Consumable.item_id == raw_item,
-                )
-            )
-        ).scalar_one_or_none()
-
-        if not consumable:
-            if auto_create_consumables:
-                consumable = auto_get_or_create_consumable(
-                    db=db,
-                    item_id_or_code=raw_item,
-                    name_or_desc=raw_desc,
-                    unit_str=raw_unit,
-                )
-            else:
-                row_num = r_idx + 1
-                errors.append(f"Row {row_num}: Item ID '{raw_item}' not found in Product Master.")
+            raw_item_val = df_raw.iat[r_idx, item_col_idx] if item_col_idx < num_cols else None
+            if pd.isna(raw_item_val):
+                continue
+            raw_item = str(raw_item_val).strip()
+            if not raw_item or raw_item.lower() in ("nan", "none", "total", "subtotal", "item id.", "item id", "item code"):
                 continue
 
-        if consumable.id in existing_items:
-            item = existing_items[consumable.id]
-            item.requested_qty = qty_val
-            if sno_val is not None:
-                item.serial_no = sno_val
-            if raw_part is not None:
-                item.part_no = raw_part
-            item.consumable = consumable
-            upserted_dict[consumable.id] = item
-        elif consumable.id in upserted_dict:
-            item = upserted_dict[consumable.id]
-            item.requested_qty = qty_val
-            if sno_val is not None:
-                item.serial_no = sno_val
-            if raw_part is not None:
-                item.part_no = raw_part
-            item.consumable = consumable
-        else:
-            new_item = RequirementLineItem(
-                plan_id=target_plan.id,
-                consumable_id=consumable.id,
-                serial_no=sno_val or (len(upserted_dict) + 1),
-                part_no=raw_part,
-                requested_qty=qty_val,
+            raw_desc_val = df_raw.iat[r_idx, desc_col_idx] if desc_col_idx is not None and desc_col_idx < num_cols else None
+            raw_desc = str(raw_desc_val).strip() if pd.notna(raw_desc_val) and str(raw_desc_val).strip().lower() not in ("nan", "none") else None
+
+            raw_part_val = df_raw.iat[r_idx, part_col_idx] if part_col_idx is not None and part_col_idx < num_cols else None
+            raw_part = str(raw_part_val).strip() if pd.notna(raw_part_val) and str(raw_part_val).strip().lower() not in ("nan", "none") else None
+
+            raw_unit_val = df_raw.iat[r_idx, unit_col_idx] if unit_col_idx is not None and unit_col_idx < num_cols else None
+            raw_unit = str(raw_unit_val).strip() if pd.notna(raw_unit_val) and str(raw_unit_val).strip().lower() not in ("nan", "none") else "NOS"
+
+            sno_val = None
+            if sno_col_idx is not None and sno_col_idx < num_cols:
+                raw_sno = df_raw.iat[r_idx, sno_col_idx]
+                if pd.notna(raw_sno):
+                    try:
+                        sno_val = int(float(raw_sno))
+                    except Exception:
+                        sno_val = None
+
+            if qty_col_idx is not None and qty_col_idx < num_cols:
+                raw_qty = df_raw.iat[r_idx, qty_col_idx]
+                try:
+                    if pd.isna(raw_qty) or str(raw_qty).strip() in ("-", "", "nan", "none"):
+                        qty_val = 0.0
+                    else:
+                        qty_val = float(raw_qty)
+                    if qty_val < 0:
+                        qty_val = 0.0
+                except Exception:
+                    qty_val = 0.0
+            else:
+                qty_val = 0.0
+
+            consumable = db.execute(
+                select(Consumable).where(
+                    or_(
+                        func.upper(Consumable.item_id) == raw_item.upper(),
+                        Consumable.item_id == raw_item,
+                    )
+                )
+            ).scalar_one_or_none()
+
+            if not consumable:
+                if auto_create_consumables:
+                    consumable = auto_get_or_create_consumable(
+                        db=db,
+                        item_id_or_code=raw_item,
+                        name_or_desc=raw_desc,
+                        unit_str=raw_unit,
+                    )
+                else:
+                    row_num = r_idx + 1
+                    errors.append(f"Row {row_num}: Item ID '{raw_item}' not found in Product Master.")
+                    continue
+
+            if consumable.id in existing_items:
+                item = existing_items[consumable.id]
+                item.requested_qty = qty_val
+                if sno_val is not None:
+                    item.serial_no = sno_val
+                if raw_part is not None:
+                    item.part_no = raw_part
+                item.consumable = consumable
+                upserted_dict[consumable.id] = item
+            elif consumable.id in upserted_dict:
+                item = upserted_dict[consumable.id]
+                item.requested_qty = qty_val
+                if sno_val is not None:
+                    item.serial_no = sno_val
+                if raw_part is not None:
+                    item.part_no = raw_part
+                item.consumable = consumable
+            else:
+                new_item = RequirementLineItem(
+                    plan_id=target_plan.id,
+                    consumable_id=consumable.id,
+                    serial_no=sno_val or (len(upserted_dict) + 1),
+                    part_no=raw_part,
+                    requested_qty=qty_val,
+                )
+                new_item.consumable = consumable
+                db.add(new_item)
+                existing_items[consumable.id] = new_item
+                upserted_dict[consumable.id] = new_item
+        except Exception as e:
+            trace_str = traceback.format_exc()
+            logger.error(
+                "Sheet '%s' failed at row %s. header_row_idx=%s, qty_col_idx=%s, err=%s\nTrace:\n%s",
+                sheet_name,
+                current_row_index,
+                header_row_idx,
+                qty_col_idx,
+                str(e),
+                trace_str,
             )
-            new_item.consumable = consumable
-            db.add(new_item)
-            existing_items[consumable.id] = new_item
-            upserted_dict[consumable.id] = new_item
+            print(
+                f"[BULK UPLOAD ERROR] Sheet '{sheet_name}' failed at row {current_row_index}: "
+                f"header_row_idx={header_row_idx}, qty_col_idx={qty_col_idx}, error={str(e)}\n{trace_str}",
+                flush=True,
+            )
+            raise ApplicationError(
+                "PARSING_FAILED",
+                f"Sheet '{sheet_name}' failed at row {current_row_index}: {str(e)} | Trace: {trace_str}",
+                400,
+            )
 
     db.flush()
     return list(upserted_dict.values()), total_processed_rows
@@ -1278,25 +1307,37 @@ def bulk_upsert_line_items(
                         db.flush()
 
                     try:
-                        items, sheet_rows = _parse_and_ingest_sheet(db, p_plan, df_sheet, errors, auto_create_consumables=True)
+                        items, sheet_rows = _parse_and_ingest_sheet(db, p_plan, df_sheet, errors, auto_create_consumables=True, sheet_name=sname)
                         total_rows += sheet_rows
                         all_upserted_items.extend(items)
                         plants_affected.append(pkey)
+                    except ApplicationError:
+                        raise
                     except Exception as sheet_err:
-                        raise ApplicationError("PARSING_FAILED", f"Failed parsing {sname}: {str(sheet_err)}", 400)
+                        trace_str = traceback.format_exc()
+                        logger.error("Failed parsing %s: %s\n%s", sname, str(sheet_err), trace_str)
+                        raise ApplicationError("PARSING_FAILED", f"Failed parsing {sname}: {str(sheet_err)} | Trace: {trace_str}", 400)
             else:
                 # Single plant mode: find matching sheet for target plan
-                matched_sheet = _find_matching_sheet_name(sheet_names, plan.plant_id)
-                if not matched_sheet:
+                # If the workbook has only 1 sheet (even if named 'Sheet1'), use that sheet directly
+                if len(sheet_names) == 1:
                     matched_sheet = sheet_names[0]
+                else:
+                    matched_sheet = _find_matching_sheet_name(sheet_names, plan.plant_id)
+                    if not matched_sheet:
+                        matched_sheet = sheet_names[0]
 
                 df_sheet = sheets_dict[matched_sheet]
                 try:
-                    items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_sheet, errors, auto_create_consumables=auto_create_consumables)
+                    items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_sheet, errors, auto_create_consumables=True, sheet_name=matched_sheet)
                     total_rows += sheet_rows
                     all_upserted_items.extend(items)
+                except ApplicationError:
+                    raise
                 except Exception as sheet_err:
-                    raise ApplicationError("PARSING_FAILED", f"Failed parsing {matched_sheet}: {str(sheet_err)}", 400)
+                    trace_str = traceback.format_exc()
+                    logger.error("Failed parsing %s: %s\n%s", matched_sheet, str(sheet_err), trace_str)
+                    raise ApplicationError("PARSING_FAILED", f"Failed parsing {matched_sheet}: {str(sheet_err)} | Trace: {trace_str}", 400)
         else:
             # CSV parsing
             try:
@@ -1305,11 +1346,15 @@ def bulk_upsert_line_items(
                 df_csv = pd.read_excel(io.BytesIO(file_bytes), header=None)
 
             try:
-                items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_csv, errors, auto_create_consumables=auto_create_consumables)
+                items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_csv, errors, auto_create_consumables=auto_create_consumables, sheet_name=filename)
                 total_rows += sheet_rows
                 all_upserted_items.extend(items)
+            except ApplicationError:
+                raise
             except Exception as sheet_err:
-                raise ApplicationError("PARSING_FAILED", f"Failed parsing {filename}: {str(sheet_err)}", 400)
+                trace_str = traceback.format_exc()
+                logger.error("Failed parsing %s: %s\n%s", filename, str(sheet_err), trace_str)
+                raise ApplicationError("PARSING_FAILED", f"Failed parsing {filename}: {str(sheet_err)} | Trace: {trace_str}", 400)
 
         db.commit()
 

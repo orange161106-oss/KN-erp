@@ -1,9 +1,13 @@
+import logging
+import traceback
 from app.security.permissions import require_permissions
 from typing import Annotated, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger("app.modules.requirements.router")
 
 from app.db.session import get_db
 from app.models.requirements import MonthlyRequirementPlan, RequirementStatus
@@ -187,10 +191,24 @@ async def handle_bulk_upload_items(
     except HTTPException:
         raise
     except Exception as e:
+        trace_str = traceback.format_exc()
+        logger.error(
+            "Bulk upload failed for plan_id=%s, file=%s: %s\n%s",
+            plan_id,
+            getattr(file, "filename", "unknown"),
+            str(e),
+            trace_str,
+        )
+        print(
+            f"[BULK UPLOAD ERROR] plan_id={plan_id}, file={getattr(file, 'filename', 'unknown')}: {str(e)}\n{trace_str}",
+            flush=True,
+        )
         detail_msg = getattr(e, "message", None) or str(e)
+        if "Trace:" not in detail_msg:
+            detail_msg = f"{detail_msg} | Trace: {trace_str}"
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=detail_msg if ("Failed parsing" in detail_msg or "Excel Parsing Failed" in detail_msg) else f"Excel Parsing Failed: {detail_msg}",
+            detail=detail_msg,
         )
 
 
