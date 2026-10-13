@@ -36,6 +36,10 @@ def check_permissions(user: CurrentUser, required: frozenset[str]) -> None:
             any(getattr(user, f"purchase_{op}", False) for op in ("read", "create", "update", "delete"))
         ):
             return
+        if ("inventory." in code or "inventory" in code) and any(
+            getattr(user, f"inventory_{op}", False) for op in ("read", "create", "update", "delete")
+        ):
+            return
         if code in user.permissions:
             return
 

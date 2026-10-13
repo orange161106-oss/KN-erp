@@ -9,14 +9,31 @@ from app.core.config import Settings
 
 
 def create_db_engine(settings: Settings) -> Engine:
+    is_sqlite = "sqlite" in str(settings.sqlalchemy_url).lower()
+    if is_sqlite:
+        return create_engine(
+            settings.sqlalchemy_url,
+            pool_pre_ping=True,
+            hide_parameters=True,
+        )
+
+    connect_args = {
+        "connect_timeout": settings.db_connect_timeout_seconds,
+        "options": "-c timezone=UTC",
+        "keepalives": 1,
+        "keepalives_idle": 60,
+        "keepalives_interval": 10,
+        "keepalives_count": 5,
+    }
+
     return create_engine(
         settings.sqlalchemy_url,
         pool_pre_ping=True,
+        pool_recycle=300,
+        pool_size=10,
+        max_overflow=20,
         pool_timeout=settings.db_connect_timeout_seconds,
-        connect_args={
-            "connect_timeout": settings.db_connect_timeout_seconds,
-            "options": "-c timezone=UTC",
-        },
+        connect_args=connect_args,
         hide_parameters=True,
     )
 

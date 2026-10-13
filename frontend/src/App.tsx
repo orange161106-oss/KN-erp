@@ -10,6 +10,8 @@ import ProductionMappings from './features/mappings/ProductionMappings';
 import ConsumptionNorms from './features/rules/ConsumptionNorms';
 import PlantWorkflow from './features/plant_workflow/PlantWorkflow';
 import Inventory from './features/inventory/Inventory';
+import StockStatementWorkspace from './features/inventory/StockStatementWorkspace';
+import StockManagementWorkspace from './features/inventory/StockManagementWorkspace';
 import AlertsCenter from './features/alerts/AlertsCenter';
 import PurchaseApprovals from './features/purchasing/PurchaseApprovals';
 import PurchaseOrders from './features/purchasing/PurchaseOrders';
@@ -43,7 +45,9 @@ function getPageTitle(pathname: string): string {
   if (pathname.startsWith('/mappings')) return 'Production mapping';
   if (pathname.startsWith('/requirements')) return 'Requirement';
   if (pathname.startsWith('/plant-workflow')) return 'Plant review';
-  if (pathname.startsWith('/inventory')) return 'Inventory';
+  if (pathname.startsWith('/inventory/statement')) return 'Stock statement';
+  if (pathname.startsWith('/inventory/management')) return 'Stock management';
+  if (pathname.startsWith('/inventory')) return 'Stock history';
   if (pathname.startsWith('/purchase-orders')) return 'Purchase order';
   if (pathname.startsWith('/purchase')) return 'Purchase';
   if (pathname.startsWith('/grns')) return 'Goods receipts';
@@ -135,6 +139,12 @@ function Application() {
           
           <Route path="/inventory" element={
             <ProtectedRoute isAllowed={canInventory}><Inventory /></ProtectedRoute>
+          } />
+          <Route path="/inventory/statement" element={
+            <ProtectedRoute isAllowed={canInventory}><StockStatementWorkspace /></ProtectedRoute>
+          } />
+          <Route path="/inventory/management" element={
+            <ProtectedRoute isAllowed={canInventory}><StockManagementWorkspace /></ProtectedRoute>
           } />
           
           <Route path="/purchase/*" element={

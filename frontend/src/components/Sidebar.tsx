@@ -23,6 +23,8 @@ import {
   Shield,
   Activity,
   LogOut,
+  FileSpreadsheet,
+  History,
 } from 'lucide-react';
 
 export interface SidebarProps {
@@ -44,6 +46,7 @@ export default function Sidebar({
 
   const isActive = (path: string) => {
     if (path === '/') return location.pathname === '/' || location.pathname === '/dashboard';
+    if (path === '/inventory') return location.pathname === '/inventory';
     return location.pathname.startsWith(path);
   };
 
@@ -78,7 +81,10 @@ export default function Sidebar({
   const showMappings = canOpen(user, '/mappings');
   const showRequirements = canOpen(user, '/requirements');
   const showPlantWorkflow = canOpen(user, '/plant-workflow');
-  const showInventory = canOpen(user, '/inventory');
+  const showStockHistory = canOpen(user, '/inventory');
+  const showStockStatement = canOpen(user, '/inventory/statement');
+  const showStockManagement = canOpen(user, '/inventory/management');
+  const showInventory = showStockHistory || showStockStatement || showStockManagement;
   const showPurchase = canOpen(user, '/purchase');
   const showPurchaseOrders = canOpen(user, '/purchase-orders');
   const showGoodsReceipts = canOpen(user, '/grns');
@@ -101,6 +107,15 @@ export default function Sidebar({
       setIsMasterDataOpen(true);
     }
   }, [isMasterDataActive]);
+
+  const isInventoryActive = location.pathname.startsWith('/inventory');
+  const [isInventoryOpen, setIsInventoryOpen] = useState(true);
+
+  useEffect(() => {
+    if (isInventoryActive) {
+      setIsInventoryOpen(true);
+    }
+  }, [isInventoryActive]);
 
   return (
     <aside
@@ -272,15 +287,80 @@ export default function Sidebar({
 
         {/* 6. Inventory */}
         {showInventory && (
-          <Link
-            to="/inventory"
-            className={navItemClass('/inventory')}
-            title="Inventory"
-            aria-label="Inventory"
-          >
-            <Warehouse className={iconClass(isActive('/inventory'))} />
-            <span className={isCollapsed ? 'sr-only' : 'truncate'}>Inventory</span>
-          </Link>
+          <div className="flex flex-col space-y-0.5">
+            <button
+              type="button"
+              onClick={() => setIsInventoryOpen(open => !open)}
+              className={`group flex items-center ${
+                isCollapsed ? 'justify-center px-2 py-2.5' : 'justify-between px-3 py-2'
+              } rounded-lg text-xs font-medium transition-colors select-none w-full text-left ${
+                isInventoryActive
+                  ? 'bg-erp-vanilla/80 text-erp-chocolate font-semibold border-l-2 border-erp-orange'
+                  : 'text-erp-chocolate/80 hover:text-erp-chocolate hover:bg-erp-vanilla/50'
+              }`}
+              title="Inventory"
+              aria-label="Inventory"
+            >
+              <div className={`flex items-center ${isCollapsed ? '' : 'space-x-3'}`}>
+                <Warehouse className={iconClass(isInventoryActive)} />
+                <span className={isCollapsed ? 'sr-only' : 'truncate'}>Inventory</span>
+              </div>
+              {!isCollapsed && (
+                isInventoryOpen ? (
+                  <ChevronDown className="w-3.5 h-3.5 text-erp-orange" />
+                ) : (
+                  <ChevronRight className="w-3.5 h-3.5 text-erp-chocolate/40" />
+                )
+              )}
+            </button>
+
+            {isInventoryOpen && (
+              <div
+                className={`flex flex-col space-y-0.5 mt-0.5 ${
+                  isCollapsed ? '' : 'pl-1 border-l border-erp-dark-vanilla/30 ml-2'
+                }`}
+              >
+                {/* Stock history */}
+                {showStockHistory && (
+                  <Link
+                    to="/inventory"
+                    className={subNavItemClass('/inventory')}
+                    title="Stock history"
+                    aria-label="Stock history"
+                  >
+                    <History className={iconClass(isActive('/inventory'))} />
+                    <span className={isCollapsed ? 'sr-only' : 'truncate'}>Stock history</span>
+                  </Link>
+                )}
+
+                {/* Stock statement */}
+                {showStockStatement && (
+                  <Link
+                    to="/inventory/statement"
+                    className={subNavItemClass('/inventory/statement')}
+                    title="Stock statement"
+                    aria-label="Stock statement"
+                  >
+                    <FileSpreadsheet className={iconClass(isActive('/inventory/statement'))} />
+                    <span className={isCollapsed ? 'sr-only' : 'truncate'}>Stock statement</span>
+                  </Link>
+                )}
+
+                {/* Stock management */}
+                {showStockManagement && (
+                  <Link
+                    to="/inventory/management"
+                    className={subNavItemClass('/inventory/management')}
+                    title="Stock management"
+                    aria-label="Stock management"
+                  >
+                    <Sliders className={iconClass(isActive('/inventory/management'))} />
+                    <span className={isCollapsed ? 'sr-only' : 'truncate'}>Stock management</span>
+                  </Link>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         {/* 7. Purchase */}

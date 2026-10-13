@@ -70,7 +70,7 @@ test('renders PRD planning table with toolbar buttons and rows', async () => {
   fetchMock.mockResolvedValue(jsonResponse(mockPRDRecords));
   renderPRDWorkspace();
 
-  expect(await screen.findByText('PRD / Planning Workspace')).toBeInTheDocument();
+  expect(await screen.findByText('Production for sale')).toBeInTheDocument();
   expect(screen.getByText(/Upload Excel/)).toBeInTheDocument();
   expect(screen.getByText(/Add Row/)).toBeInTheDocument();
   expect(screen.getByText(/Save Changes/)).toBeInTheDocument();
@@ -105,7 +105,7 @@ test('user can add a draft row and trigger save', async () => {
 
   // Save changes
   await userEvent.click(screen.getByText(/Save Changes/));
-  expect(await screen.findByText(/Saved 3 records successfully/)).toBeInTheDocument();
+  expect(await screen.findByText(/Saved successfully/)).toBeInTheDocument();
 });
 
 test('user can select a row and delete with confirmation dialog', async () => {

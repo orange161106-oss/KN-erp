@@ -133,80 +133,119 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
     }
   };
 
+  const [showDetails, setShowDetails] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('knl_purchase_show_details');
+      return stored !== null ? JSON.parse(stored) : false; // default compact
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleDetails = () => {
+    setShowDetails(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('knl_purchase_show_details', JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
   if (!canRead) {
     return <p role="alert" className="text-red-700">You do not have permission to view purchase approvals.</p>;
   }
 
   return (
-    <div className="flex flex-col h-full space-y-4">
-      {/* Header */}
-      <div className="bg-white p-3 rounded border border-gray-200 shadow-2xs flex-shrink-0">
-        <h1 className="text-lg font-bold text-gray-900 tracking-tight flex items-center gap-2">
-          <span>Purchase Planning & Approvals</span>
-          <span className="text-xs font-normal text-gray-500 bg-gray-100 px-2 py-0.5 rounded border border-gray-300">
-            Purchasing Module
-          </span>
-        </h1>
-        <p className="text-xs text-gray-500 mt-0.5">
-          Build monthly purchase recommendations, then review approved demand before Purchase Order creation.
-        </p>
+    <div className="flex flex-col h-full space-y-2">
+      {/* Compact Unified Header Bar (Section 9A) */}
+      <div className="bg-white px-3 py-2 rounded-lg border border-gray-200 shadow-2xs flex-shrink-0 flex flex-col gap-1.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-3">
+            <h1 className="text-base font-bold text-gray-900 tracking-tight flex items-center gap-2">
+              <span>Purchase Planning & Approvals</span>
+              <span className="text-[11px] font-normal text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded border border-gray-300">
+                Purchasing
+              </span>
+            </h1>
+
+            {/* Navigation Tabs */}
+            <nav className="flex gap-1 ml-2 border-l border-gray-200 pl-3">
+              <button
+                type="button"
+                onClick={() => setActiveTab('workspace')}
+                className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors ${
+                  activeTab === 'workspace'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200 font-bold'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                Purchase Plan
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('queue')}
+                className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors ${
+                  activeTab === 'queue'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200 font-bold'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                Approval Queue
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('handoff')}
+                className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors ${
+                  activeTab === 'handoff'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200 font-bold'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                Approved Handoff (PO Ready)
+              </button>
+            </nav>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {activeTab === 'queue' && (
+              <div className="flex items-center gap-1.5 mr-2">
+                <label className="text-xs text-gray-600 font-medium">Status:</label>
+                <select
+                  className="border rounded px-2 py-0.5 text-xs bg-white"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as ApprovalStatus | '')}
+                >
+                  <option value="">All</option>
+                  <option value="PENDING">Pending</option>
+                  <option value="APPROVED">Approved</option>
+                  <option value="MODIFIED">Modified</option>
+                  <option value="REJECTED">Rejected</option>
+                </select>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={toggleDetails}
+              className="px-2.5 py-0.5 bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-300 rounded text-[11px] font-medium transition-colors"
+            >
+              {showDetails ? 'Hide details ▴' : 'Show details ▾'}
+            </button>
+          </div>
+        </div>
+
+        {showDetails && (
+          <p className="text-xs text-gray-500 pt-1 border-t border-gray-100">
+            Build monthly purchase recommendations based on requirement calculations, review approved demand, and hand off PO-ready quantities.
+          </p>
+        )}
       </div>
 
       {error && <AlertBox message={error} type="error" />}
       {success && <AlertBox message={success} type="success" />}
-
-      {/* Tabs & Filters */}
-      <div className="flex flex-wrap items-center justify-between border-b pb-2 gap-4 flex-shrink-0">
-        <nav className="flex gap-2">
-          <button
-            onClick={() => setActiveTab('workspace')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-t-md transition-colors ${
-              activeTab === 'workspace'
-                ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600 font-bold'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            Purchase Plan
-          </button>
-          <button
-            onClick={() => setActiveTab('queue')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-t-md transition-colors ${
-              activeTab === 'queue'
-                ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600 font-bold'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            Approval Queue
-          </button>
-          <button
-            onClick={() => setActiveTab('handoff')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-t-md transition-colors ${
-              activeTab === 'handoff'
-                ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600 font-bold'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            Approved Handoff (PO Ready)
-          </button>
-        </nav>
-
-        {activeTab === 'queue' && (
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-gray-600 font-medium">Filter Status:</label>
-            <select
-              className="border rounded px-2.5 py-1 text-xs"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as ApprovalStatus | '')}
-            >
-              <option value="">All Statuses</option>
-              <option value="PENDING">Pending</option>
-              <option value="APPROVED">Approved</option>
-              <option value="MODIFIED">Modified</option>
-              <option value="REJECTED">Rejected</option>
-            </select>
-          </div>
-        )}
-      </div>
 
       {/* Content Area */}
       <div className="flex-1 min-h-0 flex flex-col">

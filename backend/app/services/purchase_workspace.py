@@ -16,6 +16,12 @@ from app.models.inventory_masters import Consumable, Supplier, SupplierConsumabl
 from app.models.prd import PlanningVersion
 from app.models.purchase_approval import PurchaseApproval
 from app.models.requirements import MonthlyRequirementRecord
+from app.models.stock_statements import (
+    StockParameter,
+    StockParameterBatch,
+    StockStatementBatch,
+    StockStatementLine,
+)
 from app.schemas.auth import CurrentUser
 from app.schemas.purchase_approval import SubmitPurchaseApprovalRequest
 from app.schemas.purchase_workspace import (
@@ -108,6 +114,43 @@ def list_purchase_workspace(
         )
     ).all()
 
+    # Look up previous month's stock statement and current month's stock parameters
+    prev_month = 12 if month == 1 else month - 1
+    prev_year = year - 1 if month == 1 else year
+
+    prev_statement_batch = session.scalar(
+        select(StockStatementBatch).where(
+            StockStatementBatch.statement_month == prev_month,
+            StockStatementBatch.statement_year == prev_year,
+            StockStatementBatch.status == "active",
+        )
+    )
+    stmt_lines_map: dict[str, StockStatementLine] = {}
+    if prev_statement_batch:
+        lines = session.scalars(
+            select(StockStatementLine).where(
+                StockStatementLine.batch_id == prev_statement_batch.id,
+                StockStatementLine.item_class == "CONSUMABLE",
+            )
+        ).all()
+        for l in lines:
+            stmt_lines_map[l.item_id.strip().upper()] = l
+
+    current_param_batch = session.scalar(
+        select(StockParameterBatch).where(
+            StockParameterBatch.month == month,
+            StockParameterBatch.year == year,
+            StockParameterBatch.status == "active",
+        )
+    )
+    param_map: dict[str, StockParameter] = {}
+    if current_param_batch:
+        params = session.scalars(
+            select(StockParameter).where(StockParameter.batch_id == current_param_batch.id)
+        ).all()
+        for p in params:
+            param_map[p.item_id.strip().upper()] = p
+
     grouped: dict[str, dict[str, object]] = {}
     for row in rows:
         key = row.consumable_code.strip().upper() or row.consumable_name.strip().upper()
@@ -169,6 +212,30 @@ def list_purchase_workspace(
             status = "READY_FOR_APPROVAL"
             remarks = "Ready to submit to the existing purchase approval queue."
 
+        item_key = code.strip().upper()
+        flags: list[str] = []
+        if prev_statement_batch:
+            if item_key in stmt_lines_map:
+                stmt_line = stmt_lines_map[item_key]
+                if stmt_line.closing_qty is not None:
+                    effective_stock = stmt_line.closing_qty
+                else:
+                    effective_stock = _q4(bucket["stock"])
+            else:
+                effective_stock = _q4(bucket["stock"])
+                flags.append(f"Not in {prev_month:02d}/{prev_year} statement")
+        else:
+            effective_stock = _q4(bucket["stock"])
+            flags.append(f"No stock statement for {prev_month:02d}/{prev_year}")
+
+        if not current_param_batch:
+            flags.append(f"No stock parameters for {month:02d}/{year}")
+        elif item_key not in param_map:
+            flags.append("No stock parameters set for item")
+
+        if flags:
+            remarks = f"{remarks} [{'; '.join(flags)}]" if remarks else "; ".join(flags)
+
         record = PurchaseWorkspaceRecord(
             id=f"{version.id}:{key}",
             planning_period=planning_period,
@@ -184,7 +251,7 @@ def list_purchase_workspace(
             supplier_name=supplier.name if supplier else None,
             unit=stock_unit.code if stock_unit else str(bucket["unit"]),
             required_qty=_q4(bucket["required"]),  # type: ignore[arg-type]
-            stock_qty=_q4(bucket["stock"]),  # type: ignore[arg-type]
+            stock_qty=_q4(effective_stock),
             po_pending_qty=_q4(bucket["po_pending"]),  # type: ignore[arg-type]
             shortage_qty=shortage,
             system_recommended_qty=recommended,

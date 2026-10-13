@@ -1,0 +1,123 @@
+import io
+from typing import Annotated, Optional
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
+
+from app.db.session import get_db
+from app.schemas.auth import CurrentUser
+from app.schemas.error import ErrorResponse
+from app.schemas.stock_statements import (
+    StockManagementResponse,
+    StockParameterBatchUpdateRequest,
+    StockParameterConfirmRequest,
+    StockParameterHistoryItem,
+    StockParameterPreviewResponse,
+)
+from app.security.permissions import require_permissions
+from app.services import stock_management_service as service
+
+router = APIRouter(
+    prefix="/inventory/management",
+    tags=["stock-management"],
+    responses={code: {"model": ErrorResponse} for code in (401, 403, 404, 409, 422, 500)},
+)
+
+ReadUser = Annotated[CurrentUser, Depends(require_permissions("inventory.stock.read", "inventory.read"))]
+ImportUser = Annotated[CurrentUser, Depends(require_permissions("inventory.stock.import", "inventory.create", "inventory.update"))]
+Database = Annotated[Session, Depends(get_db)]
+
+
+@router.get("", response_model=StockManagementResponse)
+@router.get("/", response_model=StockManagementResponse, include_in_schema=False)
+def get_management(
+    session: Database,
+    user: ReadUser,
+    month: Annotated[int, Query(ge=1, le=12, description="Target month (1-12)")],
+    year: Annotated[int, Query(ge=2000, le=2100, description="Target year (e.g. 2026)")],
+    search: Optional[str] = Query(None, description="Search item id, description, or category"),
+) -> StockManagementResponse:
+    """Retrieve the stock control parameters (MSL, Max, MOQ, Lead Time) for the selected month."""
+    return service.get_stock_management(
+        session,
+        month=month,
+        year=year,
+        search=search,
+    )
+
+
+@router.post("/preview", response_model=StockParameterPreviewResponse)
+async def preview_parameters(
+    session: Database,
+    user: ImportUser,
+    file: UploadFile = File(...),
+    month: int = Form(...),
+    year: int = Form(...),
+) -> StockParameterPreviewResponse:
+    """Upload and validate an Excel file for Stock Management parameters without saving to DB."""
+    content = await file.read()
+    filename = file.filename or "stock_management.xlsx"
+    return service.parse_and_preview_stock_parameters(
+        session,
+        content=content,
+        filename=filename,
+        month=month,
+        year=year,
+    )
+
+
+@router.post("/confirm", response_model=StockManagementResponse, status_code=status.HTTP_201_CREATED)
+def confirm_parameters(
+    session: Database,
+    user: ImportUser,
+    payload: StockParameterConfirmRequest,
+) -> StockManagementResponse:
+    """Confirm a previously previewed stock management import and commit in a single transaction."""
+    return service.confirm_stock_parameters_import(
+        session,
+        payload=payload,
+        user=user,
+    )
+
+
+@router.patch("/batch-update", response_model=StockManagementResponse)
+def batch_update_parameters(
+    session: Database,
+    user: ImportUser,
+    payload: StockParameterBatchUpdateRequest,
+) -> StockManagementResponse:
+    """Save inline edits to stock parameters (MSL, Max, MOQ, Lead Time) for the month."""
+    return service.batch_update_stock_parameters(
+        session,
+        payload=payload,
+        user=user,
+    )
+
+
+@router.get("/history", response_model=list[StockParameterHistoryItem])
+def list_history(
+    session: Database,
+    user: ReadUser,
+    limit: int = Query(50, ge=1, le=200),
+) -> list[StockParameterHistoryItem]:
+    """List historical stock parameter upload batches."""
+    return service.list_stock_parameter_history(session, limit=limit)
+
+
+@router.get("/export")
+def export_parameters(
+    session: Database,
+    user: ReadUser,
+    month: int = Query(..., ge=1, le=12),
+    year: int = Query(..., ge=2000, le=2100),
+):
+    """Download the active stock management parameters for the month as a formatted Excel spreadsheet."""
+    excel_bytes, filename = service.export_stock_management_excel(session, month=month, year=year)
+    headers = {
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
+    return StreamingResponse(io.BytesIO(excel_bytes), headers=headers)
+
