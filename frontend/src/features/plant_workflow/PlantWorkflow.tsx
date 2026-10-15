@@ -20,6 +20,7 @@ import {
   type UpdateLineItemPayload,
 } from '../requirements/api';
 import PlanGrid from '../requirements/PlanGrid';
+import CentralRequirements from '../requirements/CentralRequirements';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -51,7 +52,14 @@ interface PlantWorkflowProps {
   currentUserId: string;
 }
 
-export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWorkflowProps) {
+export default function PlantWorkflow(props: PlantWorkflowProps) {
+  const {user}=useAuth();
+  const [central,setCentral]=useState(Boolean(user?.is_super_admin));
+  if(!user?.is_super_admin) return <LegacyPlantWorkflow {...props}/>;
+  return <div className="space-y-3 min-w-0"><div className="flex gap-2"><button className="rounded border bg-white px-4 py-2" onClick={()=>setCentral(true)}>Central plan review</button><button className="rounded border bg-white px-4 py-2" onClick={()=>setCentral(false)}>Existing plant plans</button></div>{central?<CentralRequirements/>:<LegacyPlantWorkflow {...props}/>}</div>;
+}
+
+function LegacyPlantWorkflow({ currentUserId: _currentUserId }: PlantWorkflowProps) {
   const { user } = useAuth();
   const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const hasModernFlags = user && (

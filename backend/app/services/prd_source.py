@@ -73,6 +73,8 @@ def parse(rows, target_period=None, revision_label=None):
         if not any(identifiers.values()):
             continue
         raw = row[quantity_column] if quantity_column < len(row) else None
+        if isinstance(raw, str) and raw.strip() in {'-', '–', '—'}:
+            raw = '0'  # Owner-confirmed spreadsheet zero markers; negative quantities still fail.
         try:
             quantity = Decimal(str(raw).strip())
             if not quantity.is_finite() or quantity < 0 or quantity > Decimal('9999999999.9999') or quantity != quantity.quantize(Decimal('0.0001')):

@@ -102,7 +102,7 @@ class PRDOrderHeader(Base):
 class PRDOrderItem(Base):
     __tablename__ = "prd_order_items"
     __table_args__ = (
-        CheckConstraint("planned_quantity > 0", name="ck_planned_quantity_positive"),
+        CheckConstraint("planned_quantity >= 0", name="planned_quantity_positive"),
         UniqueConstraint("planning_version_id", "product_id", "plant_code", "target_period", name="uq_prd_item_version_product_plant_period"),
     )
 

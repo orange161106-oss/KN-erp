@@ -1,7 +1,7 @@
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 import io
@@ -72,7 +72,7 @@ def _to_requirement_response(req: CalculatedRequirement) -> CalculatedRequiremen
         rule_version=req.rule_version,
         parameters=req.parameters,
         source_production_qty=req.source_production_qty,
-        raw_requirement=req.raw_requirement,
+        raw_requirement=Decimal(req.explanation_payload['raw_requirement']) if req.explanation_payload.get('workflow') == 'BASIC_CENTRAL_V1' else req.raw_requirement,
         rounding_policy=req.rounding_policy,
         rounding_precision=req.rounding_precision,
         calculated_qty=req.calculated_qty,
@@ -108,6 +108,9 @@ def calculate_planning_version_requirements(
     req: CalculationRunRequest,
     current_user_id: UUID,
 ) -> RequirementCalculationRunResponse:
+    from app.services import basic_planning
+    if basic_planning.is_central_version(db, req.planning_version_id):
+        return basic_planning.calculate(db, req, current_user_id)
     # 1. Fetch Planning Version & Validate Status
     version = db.scalar(select(PlanningVersion).where(PlanningVersion.id == req.planning_version_id).with_for_update())
     if not version:
@@ -1466,6 +1469,5 @@ def bulk_upsert_line_items(
         except Exception:
             pass
         raise ApplicationError("PARSING_FAILED", f"Excel Parsing Failed: {str(exc)}", 400)
-
 
 

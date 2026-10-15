@@ -316,6 +316,7 @@ def promote_batch_to_planning_version(
     user_id: UUID,
     planning_period: str = "2026-10",
     revision_label: str = "R0",
+    *, commit: bool = True,
 ) -> tuple[PlanningVersion, PRDOrderHeader, int]:
     batch = db.get(ImportBatch, batch_id)
     if not batch:
@@ -383,9 +384,12 @@ def promote_batch_to_planning_version(
         db.add(prd_item)
 
     header.total_planned_qty = total_qty
-    db.commit()
-    db.refresh(version)
-    db.refresh(header)
+    if commit:
+        db.commit()
+        db.refresh(version)
+        db.refresh(header)
+    else:
+        db.flush()
     return version, header, len(batch.staged_data)
 
 

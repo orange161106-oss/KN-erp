@@ -65,7 +65,7 @@ export default function Toolbar({
   const [showExportMenu, setShowExportMenu] = useState(false);
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 py-2 border-b border-ink-text/10 bg-vanilla-surface px-2 rounded-t select-none">
+    <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-between gap-2 py-2 border-b border-ink-text/10 bg-vanilla-surface px-2 rounded-t select-none">
       {/* Left: Action Buttons */}
       <div className="flex items-center gap-1.5 flex-wrap">
         {canImport && onUpload && (

@@ -108,7 +108,7 @@ class FinalRequirementItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     planning_version_id: UUID
-    plant_id: UUID
+    plant_id: UUID | None
     plant_name: Optional[str] = None
     consumable_id: UUID
     consumable_code: Optional[str] = None

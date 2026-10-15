@@ -19,7 +19,7 @@ class DemandEvent(Input):
 
 
 class DemandPlan(Input):
-    plant_id: UUID
+    plant_id: UUID | None
     fulfilled_quantity: Quantity
     reserved_quantity: Quantity
     events: list[DemandEvent] | None = Field(default=None, max_length=500)
@@ -139,7 +139,7 @@ class ProjectionResult(BaseModel):
 
 
 class RequirementTotal(BaseModel):
-    plant_id: UUID
+    plant_id: UUID | None
     final_quantity: Amount
     is_fully_confirmed: bool
 

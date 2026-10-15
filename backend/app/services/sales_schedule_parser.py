@@ -439,9 +439,11 @@ def parse_sales_schedule_data(
     session: Session,
     target_period: Optional[str] = None,
     revision_label: Optional[str] = None,
+    *, seed_defaults: bool = True,
 ) -> dict[str, Any]:
     """Parse sales schedule workbook rows using KNL two-pass block parser."""
-    seed_default_customers_and_aliases(session)
+    if seed_defaults:
+        seed_default_customers_and_aliases(session)
 
     header_row_idx, left_cols, qty_cols = detect_header_layout(rows)
 

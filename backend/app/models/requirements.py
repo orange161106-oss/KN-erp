@@ -50,8 +50,8 @@ class CalculatedRequirement(Base):
     product_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
     )
-    plant_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("plants.id", ondelete="RESTRICT"), nullable=False
+    plant_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("plants.id", ondelete="RESTRICT"), nullable=True
     )
     process_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("processes.id", ondelete="RESTRICT"), nullable=False
@@ -90,7 +90,7 @@ class CalculatedRequirement(Base):
     planning_version: Mapped["PlanningVersion"] = relationship("PlanningVersion")  # noqa: F821
     prd_order_item: Mapped["PRDOrderItem"] = relationship("PRDOrderItem")  # noqa: F821
     product: Mapped["Product"] = relationship("Product")  # noqa: F821
-    plant: Mapped["Plant"] = relationship("Plant")  # noqa: F821
+    plant: Mapped[Optional["Plant"]] = relationship("Plant")  # noqa: F821
     process: Mapped["Process"] = relationship("Process")  # noqa: F821
     consumable: Mapped["Consumable"] = relationship("Consumable")  # noqa: F821
     rule: Mapped["ConsumptionNorm"] = relationship("ConsumptionNorm")  # noqa: F821

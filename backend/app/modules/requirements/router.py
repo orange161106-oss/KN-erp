@@ -1,6 +1,6 @@
 import logging
 import traceback
-from app.security.permissions import require_permissions
+from app.security.permissions import require_permissions, require_feature_flag
 from typing import Annotated, Optional
 from uuid import UUID
 
@@ -62,6 +62,11 @@ def post_calculate_requirements(
     session: Annotated[Session, Depends(get_db)],
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> RequirementCalculationRunResponse:
+    from app.services.basic_planning import is_central_version
+    if is_central_version(session, req.planning_version_id):
+        from app.modules.requirements.basic_router import central_user
+        require_feature_flag('requirements_update')(current_user)
+        central_user(current_user)
     return calculate_planning_version_requirements(session, req, current_user.id)
 
 
@@ -76,6 +81,11 @@ def get_version_calculated_requirements(
     plant_id: Optional[UUID] = Query(None),
     consumable_id: Optional[UUID] = Query(None),
 ) -> list[CalculatedRequirementResponse]:
+    from app.services.basic_planning import is_central_version
+    if is_central_version(session, planning_version_id):
+        from app.modules.requirements.basic_router import central_user
+        require_feature_flag('requirements_read')(current_user)
+        central_user(current_user)
     return get_calculated_requirements(
         session,
         planning_version_id=planning_version_id,
@@ -93,6 +103,11 @@ def get_version_calculation_errors(
     session: Annotated[Session, Depends(get_db)],
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> list[RequirementCalculationErrorResponse]:
+    from app.services.basic_planning import is_central_version
+    if is_central_version(session, planning_version_id):
+        from app.modules.requirements.basic_router import central_user
+        require_feature_flag('requirements_read')(current_user)
+        central_user(current_user)
     return get_calculation_errors(session, planning_version_id=planning_version_id)
 
 

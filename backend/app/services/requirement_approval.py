@@ -26,6 +26,8 @@ def approve(session, identity, user):
     rows = list(session.scalars(select(CalculatedRequirement).where(CalculatedRequirement.planning_version_id == identity)))
     old = version.status
     for row in rows:
+        if row.plant_id is None:
+            continue  # Central release is recorded once on the version, not as a plant confirmation.
         if session.scalar(select(PlantConfirmation.id).where(PlantConfirmation.calculated_requirement_id == row.id)) is None:
             session.add(PlantConfirmation(calculated_requirement_id=row.id, planning_version_id=version.id,
                         plant_id=row.plant_id, confirmed_by=user.id, notes='Super Admin approval of calculated revision'))

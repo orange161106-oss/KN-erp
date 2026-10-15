@@ -1,923 +1,233 @@
-import { useEffect, useState, useContext } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from '../../api/client';
-import type { ConsumptionNorm, EvaluationResult } from './types';
+import DataTable from '../../components/DataTable';
+import type { ColumnDef } from '../../components/DataTable';
 import { AuthContext } from '../auth/context';
 import NormSetup from './NormSetup';
-import { TableSkeleton } from '../../components/ui/Skeleton';
+import NormImportWorkspace from './NormImportWorkspace';
+import { downloadNormFile } from './normFiles';
+import { NORM_ENDPOINT } from './types';
+import type { ConsumptionNorm, EvaluationResult, NormReferenceData } from './types';
 
-const RULE_TYPES = [
-  'PRODUCTION_RATE',
-  'AREA_COVERAGE',
-  'PACKING_RATIO',
-  'TOOL_LIFE',
-  'FIXED_QUANTITY',
-  'PLANT_REQUEST',
-  'MAINTENANCE',
-  'MIN_MAX',
-] as const;
-
-const ROUNDING_POLICIES = [
-  'NONE',
-  'ROUND',
-  'ROUNDUP',
-  'ROUNDDOWN',
-  'CEILING',
-  'FLOOR',
-  'ROUND_HALF_UP',
-] as const;
-
-interface MasterItem {
-  id: string;
-  code: string;
-  name?: string;
+const RULE_TYPES = ['PRODUCTION_RATE', 'AREA_COVERAGE', 'PACKING_RATIO', 'TOOL_LIFE', 'FIXED_QUANTITY', 'PLANT_REQUEST', 'MAINTENANCE', 'MIN_MAX'];
+const REFERENCE_FIELDS = ['part_number', 'part_name', 'used_part_number', 'thickness', 'process_count', 'reference_production_qty', 'reference_schedule_qty'] as const;
+type NormRow = ConsumptionNorm & Record<typeof REFERENCE_FIELDS[number], string> & { parameters_json: string };
+function gridRow(norm: ConsumptionNorm): NormRow {
+  const reference = norm.reference_data || {};
+  return { ...norm,
+    part_number: reference.part_number || norm.product_part_number || norm.product_code || '',
+    part_name: reference.part_name || norm.product_name || '',
+    used_part_number: reference.used_part_number || norm.product_part_number || norm.product_code || '',
+    thickness: String(reference.thickness ?? ''), process_count: String(reference.process_count ?? ''),
+    reference_production_qty: String(reference.reference_production_qty ?? ''),
+    reference_schedule_qty: String(reference.reference_schedule_qty ?? ''),
+    parameters_json: JSON.stringify(norm.parameters),
+  };
 }
 
 export default function ConsumptionNorms() {
   const auth = useContext(AuthContext);
-  const user = auth?.user ?? null;
-  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
-  const hasModernFlags = user && (
-    'consumption_norms_read' in user ||
-    'consumption_norms_create' in user ||
-    'consumption_norms_update' in user ||
-    'consumption_norms_delete' in user
-  );
-  const canRead = Boolean(isSuperAdmin || (hasModernFlags ? user?.consumption_norms_read : true));
-  const canCreate = Boolean(isSuperAdmin || (hasModernFlags ? user?.consumption_norms_create : user?.permissions?.includes('masters.write')));
-  const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.consumption_norms_update : user?.permissions?.includes('masters.write')));
-  const canDelete = Boolean(isSuperAdmin || (hasModernFlags ? user?.consumption_norms_delete : user?.permissions?.includes('masters.write')));
-  const canEdit = Boolean(isSuperAdmin || canUpdate || canDelete);
-  const hasActions = Boolean(isSuperAdmin || canUpdate || canDelete);
-  const canCalculate = Boolean(isSuperAdmin || user?.permissions?.includes('requirements.calculate'));
+  const user = auth?.user;
+  const superAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
+  const modern = Boolean(user && ['consumption_norms_read', 'consumption_norms_create', 'consumption_norms_update'].some(flag => flag in user));
+  const canRead = superAdmin || Boolean(modern ? user?.consumption_norms_read : user?.permissions?.some(code => ['norms.read', 'masters.read', 'masters.write'].includes(code)));
+  const canCreate = superAdmin || Boolean(modern ? user?.consumption_norms_create : user?.permissions?.some(code => ['norms.write', 'masters.write'].includes(code)));
+  const canUpdate = superAdmin || Boolean(modern ? user?.consumption_norms_update : user?.permissions?.some(code => ['norms.write', 'masters.write'].includes(code)));
+  const canCalculate = superAdmin || Boolean(user?.requirements_update || user?.permissions?.includes('requirements.calculate'));
   const [norms, setNorms] = useState<ConsumptionNorm[]>([]);
+  const [rows, setRows] = useState<NormRow[]>([]);
+  const [original, setOriginal] = useState(new Map<string, NormRow>());
+  const [selected, setSelected] = useState(new Set<string>());
   const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-
-  // Filtering
-  const [selectedRuleTypeFilter, setSelectedRuleTypeFilter] = useState<string>('ALL');
-  const [searchTerm, setSearchTerm] = useState('');
-
-  // Evaluation Simulator State
+  const [message, setMessage] = useState('');
+  const [search, setSearch] = useState('');
+  const [processFilter, setProcessFilter] = useState('');
+  const [ruleFilter, setRuleFilter] = useState('');
+  const [history, setHistory] = useState(false);
+  const [reason, setReason] = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [epoch, setEpoch] = useState(0);
   const [evalNormId, setEvalNormId] = useState('');
-  const [evalQty, setEvalQty] = useState('1000');
-  const [evalResult, setEvalResult] = useState<EvaluationResult | null>(null);
-  const [evalLoading, setEvalLoading] = useState(false);
-  const [evalError, setEvalError] = useState('');
+  const [evalQty, setEvalQty] = useState('');
   const [evalDate, setEvalDate] = useState('');
   const [requestedQty, setRequestedQty] = useState('');
-
-  // Create Norm Modal State
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [consumablesList, setConsumablesList] = useState<MasterItem[]>([]);
-  const [unitsList, setUnitsList] = useState<MasterItem[]>([]);
-  const [createLoading, setCreateLoading] = useState(false);
-  const [createError, setCreateError] = useState('');
-
-  // Form State
-  const [formRuleType, setFormRuleType] = useState<string>('PRODUCTION_RATE');
-  const [formConsumableId, setFormConsumableId] = useState('');
-  const [formUnitId, setFormUnitId] = useState('');
-  const [formRoundingPolicy, setFormRoundingPolicy] = useState('NONE');
-  const [formRoundingPrecision, setFormRoundingPrecision] = useState(2);
-  const [formEffectiveFrom, setFormEffectiveFrom] = useState(
-    new Date().toISOString().split('T')[0]
-  );
-
-  // Dynamic Parameter Form State
-  const [paramRate, setParamRate] = useState('0.005');
-  const [paramScrapFactor, setParamScrapFactor] = useState('0');
-  const [paramAreaPerUnit, setParamAreaPerUnit] = useState('2.5');
-  const [paramCoverage, setParamCoverage] = useState('100');
-  const [paramLossFactor, setParamLossFactor] = useState('0');
-  const [paramUnitsPerPack, setParamUnitsPerPack] = useState('24');
-  const [paramMaterialPerPack, setParamMaterialPerPack] = useState('1');
-  const [paramOpsPerUnit, setParamOpsPerUnit] = useState('1');
-  const [paramToolLife, setParamToolLife] = useState('2000');
-  const [paramQuantity, setParamQuantity] = useState('50');
-  const [paramDefaultQty, setParamDefaultQty] = useState('100');
-  const [paramFixedAmount, setParamFixedAmount] = useState('20');
-  const [paramVariableRate, setParamVariableRate] = useState('0.002');
-  const [paramMslDays, setParamMslDays] = useState('10');
-  const [paramWorkingDays, setParamWorkingDays] = useState('26');
-  const [paramLeadTimeDays, setParamLeadTimeDays] = useState('0');
-  const [paramMoq, setParamMoq] = useState('675');
-  const [paramOrderMultiple, setParamOrderMultiple] = useState('0');
-
-  useEffect(() => {
-    loadNorms();
-    loadMasters();
+  const [evalResult, setEvalResult] = useState<EvaluationResult | null>(null);
+  const [evalError, setEvalError] = useState('');
+  const [evaluating, setEvaluating] = useState(false);
+  const pending = useRef(false);
+  const requestId = useRef(0);
+  const loadNorms = useCallback(async (preferredId?: string) => {
+    const id = ++requestId.current;
+    setLoading(true); setError('');
+    try {
+      const data = await apiClient.get<ConsumptionNorm[]>(NORM_ENDPOINT);
+      if (id !== requestId.current) return;
+      const records = data.map(gridRow);
+      setNorms(data); setRows(records); setOriginal(new Map(records.map(row => [row.id, row])));
+      setSelected(new Set()); setEpoch(value => value + 1);
+      setEvalNormId(previous => data.find(norm => norm.id === (preferredId || previous) && norm.is_active)?.id || data.find(norm => norm.is_active)?.id || '');
+    } catch (failure) { if (id === requestId.current) setError(failure instanceof Error ? failure.message : 'Could not load consumption norms.'); }
+    finally { if (id === requestId.current) setLoading(false); }
   }, []);
-
-  async function loadNorms(preferredId?: string) {
-    setLoading(true);
-    setError('');
+  useEffect(() => {
+    if (canRead) void loadNorms();
+    return () => { ++requestId.current; };
+  }, [canRead, loadNorms]);
+  const changedRows = useMemo(() => rows.filter(row => {
+    const before = original.get(row.id);
+    return row.is_active && before && ([...REFERENCE_FIELDS, 'parameters_json', 'rounding_policy', 'rounding_precision', 'effective_from', 'effective_to'] as const)
+      .some(key => String(row[key] ?? '') !== String(before[key] ?? ''));
+  }), [rows, original]);
+  const dirty = changedRows.length > 0;
+  const visible = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return rows.filter(row => (history || row.is_active) && (!processFilter || row.process_name === processFilter) && (!ruleFilter || row.rule_type === ruleFilter) &&
+      (!term || [row.part_number, row.used_part_number, row.part_name, row.product_code, row.product_item_id, row.consumable_code, row.consumable_name]
+        .some(value => String(value || '').toLowerCase().includes(term))));
+  }, [rows, search, processFilter, ruleFilter, history]);
+  const processes = useMemo(() => [...new Set(rows.map(row => row.process_name).filter((value): value is string => Boolean(value)))].sort(), [rows]);
+  function discard() { setRows(Array.from(original.values())); setReason(''); setError(''); setEpoch(value => value + 1); }
+  async function save() {
+    if (pending.current || !canUpdate || !dirty) return;
+    setError(''); setMessage('');
+    if (!reason.trim()) { setError('Enter a change reason before saving.'); return; }
+    const updates = [];
+    for (const row of changedRows) {
+      let parameters: unknown;
+      try { parameters = JSON.parse(row.parameters_json); }
+      catch { setError(`Invalid formula parameters for ${row.consumable_code || row.id}. Enter a JSON object.`); return; }
+      if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) {
+        setError('Formula parameters must be a JSON object containing approved values.'); return;
+      }
+      const precision = Number(row.rounding_precision);
+      if (!Number.isInteger(precision) || precision < 0 || precision > 4) { setError('Decimal places must be an integer from 0 to 4.'); return; }
+      const before = original.get(row.id)!;
+      const reference: NormReferenceData = { ...before.reference_data };
+      REFERENCE_FIELDS.forEach(key => { reference[key] = row[key] || null; });
+      const update: Record<string, unknown> = { norm_id: row.id, expected_version: before.version };
+      if (row.parameters_json !== before.parameters_json) update.parameters = parameters;
+      if (REFERENCE_FIELDS.some(key => row[key] !== before[key])) update.reference_data = reference;
+      if (row.rounding_policy !== before.rounding_policy) update.rounding_policy = row.rounding_policy;
+      if (String(row.rounding_precision) !== String(before.rounding_precision)) update.rounding_precision = precision;
+      if (row.effective_from !== before.effective_from) update.effective_from = row.effective_from;
+      if (String(row.effective_to ?? '') !== String(before.effective_to ?? '')) update.effective_to = row.effective_to || null;
+      updates.push(update);
+    }
+    pending.current = true; setBusy(true);
     try {
-      const data = await apiClient.get<ConsumptionNorm[]>('/api/v1/consumption-norms');
-      setNorms(data);
-      setEvalNormId(previous => data.find(n => n.id === (preferredId || previous) && n.is_active)?.id || data.find(n => n.is_active)?.id || '');
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to load consumption norms');
-    } finally {
-      setLoading(false);
-    }
+      const result = await apiClient.post<{ updated_count: number }>(`${NORM_ENDPOINT}/bulk-update`, { updates, reason: reason.trim() });
+      setReason(''); await loadNorms(); setMessage(`${result.updated_count} norms saved as reviewed versions. Earlier versions remain in history.`);
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Changes could not be saved.'); }
+    finally { pending.current = false; setBusy(false); }
   }
-
-  async function loadMasters() {
-    const [materials, units] = await Promise.allSettled([
-      apiClient.get<{ items: MasterItem[] }>('/api/v1/masters/consumables?limit=100'),
-      apiClient.get<{ items: MasterItem[] }>('/api/v1/masters/units?limit=100'),
-    ]);
-    // Each lookup remains independent when master access is restricted.
-    if (materials.status === 'fulfilled' && materials.value?.items) setConsumablesList(materials.value.items);
-    if (units.status === 'fulfilled' && units.value?.items) {
-      setUnitsList(units.value.items);
-      if (units.value.items.length > 0) setFormUnitId(units.value.items[0].id);
-    }
+  async function download(kind: 'template' | 'export', format: 'xlsx' | 'csv') {
+    if (pending.current) return;
+    pending.current = true; setBusy(true); setError('');
+    try { await downloadNormFile(kind, format); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : 'Download failed.'); }
+    finally { pending.current = false; setBusy(false); }
   }
-
-  async function handleSimulateEvaluation(e: React.FormEvent) {
-    e.preventDefault();
-    const selectedNorm = norms.find(n => n.id === evalNormId);
-    if (!selectedNorm || !canCalculate) return;
-
-    setEvalLoading(true);
-    setEvalError('');
-    setEvalResult(null);
+  async function simulate(event: React.FormEvent) {
+    event.preventDefault();
+    const norm = norms.find(value => value.id === evalNormId);
+    if (!norm || !canCalculate || evaluating) return;
+    setEvaluating(true); setEvalError(''); setEvalResult(null);
     try {
-      const res = await apiClient.post<EvaluationResult>('/api/v1/consumption-norms/evaluate', {
-        consumable_id: selectedNorm.consumable_id,
-        product_id: selectedNorm.product_id || null,
-        process_id: selectedNorm.process_id || null,
-        plant_id: selectedNorm.plant_id || null,
-        production_quantity: evalQty,
-        as_of_date: evalDate,
-        requested_quantity: requestedQty || null,
-      });
-      setEvalResult(res);
-    } catch (err: unknown) {
-      setEvalError(err instanceof Error ? err.message : 'Evaluation failed');
-    } finally {
-      setEvalLoading(false);
-    }
+      setEvalResult(await apiClient.post<EvaluationResult>(`${NORM_ENDPOINT}/evaluate`, {
+        consumable_id: norm.consumable_id, product_id: norm.product_id || null, process_id: norm.process_id || null,
+        plant_id: norm.plant_id || null, production_quantity: evalQty, as_of_date: evalDate, requested_quantity: requestedQty || null,
+      }));
+    } catch (failure) { setEvalError(failure instanceof Error ? failure.message : 'Calculation failed.'); }
+    finally { setEvaluating(false); }
   }
-
-  async function handleToggleActive(norm: ConsumptionNorm) {
-    if (!canEdit) return;
-    try {
-      await apiClient.put(`/api/v1/consumption-norms/${norm.id}`, {
-        is_active: !norm.is_active,
-      });
-      loadNorms();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to update norm');
-    }
-  }
-
-  function buildParameters(): Record<string, any> {
-    switch (formRuleType) {
-      case 'PRODUCTION_RATE':
-        return { rate: paramRate, scrap_factor: paramScrapFactor };
-      case 'AREA_COVERAGE':
-        return {
-          area_per_unit: paramAreaPerUnit,
-          coverage: paramCoverage,
-          loss_factor: paramLossFactor,
-        };
-      case 'PACKING_RATIO':
-        return {
-          units_per_pack: paramUnitsPerPack,
-          material_per_pack: paramMaterialPerPack,
-        };
-      case 'TOOL_LIFE':
-        return {
-          operations_per_unit: paramOpsPerUnit,
-          tool_life: paramToolLife,
-        };
-      case 'FIXED_QUANTITY':
-        return { quantity: paramQuantity };
-      case 'PLANT_REQUEST':
-        return { default_quantity: paramDefaultQty };
-      case 'MAINTENANCE':
-        return {
-          fixed_amount: paramFixedAmount,
-          variable_rate: paramVariableRate,
-        };
-      case 'MIN_MAX':
-        return {
-          msl_days: paramMslDays,
-          working_days: paramWorkingDays,
-          lead_time_days: paramLeadTimeDays,
-          moq: paramMoq,
-          order_multiple: paramOrderMultiple,
-        };
-      default:
-        return {};
-    }
-  }
-
-  async function handleCreateNorm(e: React.FormEvent) {
-    e.preventDefault();
-    if (!formConsumableId) {
-      setCreateError('Please select a consumable.');
-      return;
-    }
-    if (!formUnitId) {
-      setCreateError('Please select a measurement unit.');
-      return;
-    }
-
-    setCreateLoading(true);
-    setCreateError('');
-    try {
-      const payload = {
-        rule_type: formRuleType,
-        consumable_id: formConsumableId,
-        unit_id: formUnitId,
-        parameters: buildParameters(),
-        rounding_policy: formRoundingPolicy,
-        rounding_precision: formRoundingPrecision,
-        effective_from: formEffectiveFrom,
-      };
-
-      await apiClient.post('/api/v1/consumption-norms', payload);
-      setShowCreateModal(false);
-      await loadNorms();
-    } catch (err: unknown) {
-      setCreateError(err instanceof Error ? err.message : 'Failed to create consumption norm');
-    } finally {
-      setCreateLoading(false);
-    }
-  }
-
-  const filteredNorms = norms.filter(n => {
-    if (selectedRuleTypeFilter !== 'ALL' && n.rule_type !== selectedRuleTypeFilter) {
-      return false;
-    }
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase();
-      const code = (n.consumable_code || '').toLowerCase();
-      const name = (n.consumable_name || '').toLowerCase();
-      if (!code.includes(term) && !name.includes(term)) return false;
-    }
-    return true;
-  });
-
-  if (!canRead) {
-    return <p role="alert" className="text-red-700">You do not have permission to view consumption norms.</p>;
-  }
-
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-  <h2 className="text-2xl font-bold text-gray-900 tracking-tight">
-    Consumption Rules & Norms
-  </h2>
-  <p className="text-sm text-gray-500 mt-0.5">
-    KNL-Verified Consumable Calculation Engine: 8 Deterministic Rule Families with Full Traceability
-  </p>
-</div>
-        {canCreate && (
-          <button
-            type="button"
-            onClick={() => {
-              setShowCreateModal(true);
-              setCreateError('');
-            }}
-            className="px-4 py-2 bg-burnt-orange hover:bg-burnt-orange-dark text-white rounded text-sm font-semibold shadow-xs flex items-center gap-1.5 transition-colors"
-          >
-            <span>＋</span> New Consumption Norm
-          </button>
-        )}
+  const columns: ColumnDef<NormRow>[] = [
+    { key: 'part_number', label: 'Part No.', width: 170, isEditable: true },
+    { key: 'part_name', label: 'Used for – Part Name', width: 240, isEditable: true },
+    { key: 'used_part_number', label: 'Used Part No. (PRD Order)', width: 215, isEditable: true },
+    { key: 'product_code', label: 'Product Master Code', width: 170, isEditable: false },
+    { key: 'consumable_code', label: 'Consumable Item ID', width: 170, isEditable: false },
+    { key: 'consumable_name', label: 'Consumable Name', width: 235, isEditable: false },
+    { key: 'process_name', label: 'Process Name', width: 150, isEditable: false },
+    { key: 'thickness', label: 'Part Thickness (mm)', width: 150, type: 'number', isEditable: true },
+    { key: 'process_count', label: 'No. of Process', width: 135, type: 'number', isEditable: true },
+    { key: 'reference_production_qty', label: 'Reference Prd. Order', width: 170, type: 'number', isEditable: true },
+    { key: 'reference_schedule_qty', label: 'Reference Sch', width: 140, type: 'number', isEditable: true },
+    { key: 'unit_code', label: 'Stock Unit', width: 100, isEditable: false },
+    { key: 'rule_type', label: 'Formula Type', width: 165, isEditable: false },
+    { key: 'parameters_json', label: 'Approved Parameters (JSON)', width: 300, isEditable: true },
+    { key: 'rounding_policy', label: 'Rounding', width: 140, isEditable: true },
+    { key: 'rounding_precision', label: 'Decimal Places', width: 120, type: 'number', isEditable: true },
+    { key: 'effective_from', label: 'Effective From', width: 150, type: 'date', isEditable: true },
+    { key: 'effective_to', label: 'Effective Until', width: 150, type: 'date', isEditable: true },
+    { key: 'version', label: 'Version', width: 90, isEditable: false },
+    { key: 'is_active', label: 'Status', width: 110, isEditable: false, render: value => value ? 'Active' : 'Historical' },
+  ];
+  const button = 'inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-40';
+  const field = 'rounded border border-gray-300 bg-white px-3 py-2 text-sm';
+  if (!canRead) return <p role="alert">You do not have permission to view consumption norms.</p>;
+  return <div className="space-y-5">
+    <header className="rounded-xl border bg-white p-5">
+      <h2 className="text-2xl font-bold">Consumption Norms</h2>
+      <p className="mt-1 text-sm text-gray-600">Maintain approved product, process and consumable rules for basic requirements. New products use master data; plant routes are not required for this workflow.</p>
+    </header>
+    <section className="space-y-3 rounded-xl border bg-white p-4">
+      <div className="flex flex-wrap gap-2">
+        {canCreate && <><button className={`${button} bg-burnt-orange text-white`} type="button" disabled={busy || dirty || loading} onClick={() => setShowImport(true)}>Upload Excel / CSV</button>
+          <button className={button} type="button" disabled={busy || dirty || loading} onClick={() => setShowCreate(value => !value)}>Add new norm</button></>}
+        <button type="button" className={button} disabled={busy} onClick={() => void download('template', 'xlsx')}>Download Excel template</button>
+        <button type="button" className={button} disabled={busy} onClick={() => void download('template', 'csv')}>Download CSV template</button>
+        <button type="button" className={button} disabled={busy || dirty || loading || !norms.length} onClick={() => void download('export', 'xlsx')}>Export Excel</button>
+        <button type="button" className={button} disabled={busy || dirty || loading || !norms.length} onClick={() => void download('export', 'csv')}>Export CSV</button>
+        <span className="ml-auto self-center text-sm">{dirty ? `${changedRows.length} unsaved norms` : 'Saved'}</span>
       </div>
-
-      {canCreate && <NormSetup onCreated={async id => { await loadNorms(id); setEvalResult(null); setEvalError(''); }} />}
-      {!canCreate && <p className="text-sm text-gray-600">You have read-only access. A Super Admin or an employee with Create permission can configure norms.</p>}
-
-      {/* Evaluation Simulator Card */}
-      <div className="bg-white p-6 rounded-lg border border-ink-text/15 shadow-2xs space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-base font-bold text-indigo-950 uppercase tracking-wide">
-              Test a consumption norm
-            </h3>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Simulate explainable requirement calculations with step-by-step audit trails.
-            </p>
-          </div>
-          <span className="text-xs bg-indigo-100 text-indigo-800 font-semibold px-2.5 py-1 rounded-full">
-            Calculation preview
-          </span>
-        </div>
-
-        <form onSubmit={handleSimulateEvaluation} className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
-          <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">Select Norm to Evaluate</label>
-            <select
-              value={evalNormId}
-              onChange={e => setEvalNormId(e.target.value)}
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white"
-            >
-              {norms.length === 0 ? (
-                <option value="">No norms configured</option>
-              ) : (
-                norms.filter(n => n.is_active).map(n => (
-                  <option key={n.id} value={n.id}>
-                    {n.consumable_code || n.consumable_id} [{n.rule_type} v{n.version}]
-                  </option>
-                ))
-              )}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">Production Quantity</label>
-            <input
-              type="number"
-              step="any"
-              min="0"
-              value={evalQty}
-              onChange={e => setEvalQty(e.target.value)}
-              required
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
-              placeholder="e.g. 1000"
-            />
-          </div>
-
-          <label className="block text-xs font-medium">Calculation date
-            <input required type="date" className="block w-full border rounded px-3 py-2" value={evalDate} onChange={e => setEvalDate(e.target.value)} />
-          </label>
-          {norms.find(n => n.id === evalNormId)?.rule_type === 'PLANT_REQUEST' && <label className="block text-xs font-medium">Explicit requested quantity (optional)
-            <input type="number" min="0" step="any" className="block w-full border rounded px-3 py-2" value={requestedQty} onChange={e => setRequestedQty(e.target.value)} />
-          </label>}
-
-          <div>
-            <button
-              type="submit"
-              disabled={evalLoading || !evalNormId || !canCalculate}
-              className="w-full bg-burnt-orange hover:bg-burnt-orange-dark text-white font-medium py-2 px-4 rounded text-sm disabled:opacity-50 transition-colors shadow-xs"
-            >
-              {evalLoading ? 'Calculating…' : 'Run Calculation'}
-            </button>
-          </div>
-        </form>
-        <p className="text-sm text-gray-600">This preview does not approve demand, create a purchase order or change stock.</p>
-
-        {evalError && (
-          <div className="bg-red-50 text-red-700 p-3 rounded text-sm border border-red-200">
-            {evalError}
-          </div>
-        )}
-
-        {evalResult && (
-          <div className="mt-4 p-5 bg-indigo-50/50 rounded-lg border border-indigo-100 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-indigo-100 pb-3">
-              <div>
-                <span className="text-xs uppercase font-bold text-indigo-700">Calculated Output</span>
-                <div className="text-2xl font-bold text-gray-900 mt-1">
-                  {evalResult.calculation.final_calculated_requirement}{' '}
-                  <span className="text-sm font-normal text-gray-600">{evalResult.calculation.unit}</span>
-                </div>
-              </div>
-
-              <div className="text-right text-xs text-gray-500">
-                <div>Raw Value: <span className="font-mono text-gray-800">{evalResult.calculation.raw_requirement}</span></div>
-                <div>Rounding: <span className="font-semibold text-gray-800">{evalResult.calculation.rounding_policy}</span> (prec {evalResult.calculation.rounding_precision})</div>
-              </div>
-            </div>
-
-            <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-gray-600 block mb-2">
-                Explainable Audit Steps:
-              </span>
-              <ul className="space-y-2 text-xs">
-                {evalResult.calculation.calculation_steps.map((step, idx) => (
-                  <li key={idx} className="bg-white p-3 rounded border border-gray-200 shadow-2xs">
-                    <span className="font-bold text-indigo-600 mr-2">Step {step.step_number}:</span>
-                    <span className="text-gray-800">{step.description}</span>
-                    <div className="mt-1 font-mono text-indigo-900 bg-indigo-50/60 p-1.5 rounded text-2xs">
-                      Formula: {step.formula} ⇒ <span className="font-bold">{step.result}</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        )}
+      <div className="flex flex-wrap items-center gap-3">
+        <input aria-label="Search consumption norms" className={`${field} min-w-64 flex-1`} placeholder="Search Part No., Used Part No., Item ID or consumable name" value={search} onChange={event => setSearch(event.target.value)}/>
+        <select aria-label="Filter process" className={field} value={processFilter} onChange={event => setProcessFilter(event.target.value)}><option value="">All processes</option>{processes.map(value => <option key={value}>{value}</option>)}</select>
+        <select aria-label="Filter formula" className={field} value={ruleFilter} onChange={event => setRuleFilter(event.target.value)}><option value="">All formulas</option>{RULE_TYPES.map(value => <option key={value}>{value}</option>)}</select>
+        <label className="text-sm flex items-center gap-2"><input type="checkbox" checked={history} onChange={event => setHistory(event.target.checked)}/>Show history</label>
       </div>
-
-      {/* Norms Directory Table */}
-      <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-          <h3 className="text-lg font-semibold text-gray-800">Rule Master Registry ({filteredNorms.length})</h3>
-
-          <div className="flex items-center gap-3 w-full sm:w-auto">
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-              placeholder="🔍 Search consumable..."
-              className="border border-gray-300 rounded px-3 py-1.5 text-xs bg-white w-full sm:w-48"
-            />
-          </div>
-        </div>
-
-        {/* Rule Type Filter Tabs */}
-        <div className="flex flex-wrap gap-1 border-b border-gray-200 pb-2">
-          <button
-            type="button"
-            onClick={() => setSelectedRuleTypeFilter('ALL')}
-            className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-              selectedRuleTypeFilter === 'ALL'
-                ? 'bg-indigo-600 text-white font-bold'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-          >
-            All Rules ({norms.length})
-          </button>
-          {RULE_TYPES.map(rt => {
-            const count = norms.filter(n => n.rule_type === rt).length;
-            return (
-              <button
-                key={rt}
-                type="button"
-                onClick={() => setSelectedRuleTypeFilter(rt)}
-                className={`px-2.5 py-1 rounded text-2xs font-semibold transition-colors ${
-                  selectedRuleTypeFilter === rt
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                {rt} ({count})
-              </button>
-            );
-          })}
-        </div>
-
-        {loading && <div className="mb-4"><TableSkeleton columns={7 + (hasActions ? 1 : 0)} rows={5} /></div>}
-        {error && <div className="text-red-700 p-3 bg-red-50 rounded border border-red-200">{error}</div>}
-
-        <div className="bg-white rounded-lg border border-ink-text/10 overflow-hidden shadow-2xs">
-          <table className="min-w-full divide-y divide-ink-text/10 text-sm">
-            <thead className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
-              <tr>
-                <th className="px-4 py-3 text-left font-semibold text-ink-text">Consumable</th>
-                <th className="px-4 py-3 text-left font-semibold text-ink-text">Rule Type</th>
-                <th className="px-4 py-3 text-center font-semibold text-ink-text">Version</th>
-                <th className="px-4 py-3 text-left font-semibold text-ink-text">Scope</th>
-                <th className="px-4 py-3 text-left font-semibold text-ink-text">Parameters</th>
-                <th className="px-4 py-3 text-center font-semibold text-ink-text">Rounding</th>
-                <th className="px-4 py-3 text-center font-semibold text-ink-text">Status</th>
-                {hasActions && <th className="px-4 py-3 text-right font-semibold text-ink-text">Actions</th>}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-ink-text/10">
-              {filteredNorms.length === 0 ? (
-                <tr>
-                  <td colSpan={7 + (hasActions ? 1 : 0)} className="px-4 py-6 text-center text-gray-500">
-                    No consumption norms match the selected filter.
-                  </td>
-                </tr>
-              ) : (
-                filteredNorms.map(norm => (
-                  <tr key={norm.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">
-                      {norm.consumable_code || norm.consumable_id}
-                      {norm.consumable_name && (
-                        <span className="block text-xs text-gray-500 font-normal">{norm.consumable_name}</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-indigo-100 text-indigo-800">
-                        {norm.rule_type}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-center font-bold text-gray-700">v{norm.version}</td>
-                    <td className="px-4 py-3 text-xs text-gray-600">
-                      <div>Product: {norm.product_code || (norm.product_id ? 'Yes' : 'Global')}</div>
-                      <div>Process: {norm.process_name || (norm.process_id ? 'Yes' : 'Global')}</div>
-                    </td>
-                    <td className="px-4 py-3 text-xs font-mono text-gray-700">
-                      {JSON.stringify(norm.parameters)}
-                    </td>
-                    <td className="px-4 py-3 text-center text-xs text-gray-600">
-                      {norm.rounding_policy} ({norm.rounding_precision})
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <span
-                        className={`px-2 py-0.5 text-xs font-semibold rounded ${
-                          norm.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-600'
-                        }`}
-                      >
-                        {norm.is_active ? 'Active' : 'Superseded'}
-                      </span>
-                    </td>
-                    {hasActions && (
-                      <td className="px-4 py-3 text-right">
-                        {canDelete && (
-                          <button
-                            onClick={() => handleToggleActive(norm)}
-                            className="text-xs text-indigo-600 hover:text-indigo-900 underline font-medium"
-                          >
-                            {norm.is_active ? 'Deactivate' : 'Reactivate'}
-                          </button>
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Create Consumption Norm Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-lg shadow-xl border border-gray-200 max-w-xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gray-50/70">
-              <div>
-                <h3 className="text-base font-bold text-gray-900">Define New Consumption Norm</h3>
-                <p className="text-xs text-gray-500">
-                  Versioned deterministic business rule foundation
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowCreateModal(false)}
-                className="text-gray-400 hover:text-gray-600 font-bold text-lg p-1"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateNorm} className="p-6 space-y-4 text-xs">
-              {createError && (
-                <div className="p-3 bg-red-50 text-red-700 rounded border border-red-200">
-                  {createError}
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-medium text-gray-700 mb-1">Rule Type *</label>
-                  <select
-                    value={formRuleType}
-                    onChange={e => setFormRuleType(e.target.value)}
-                    className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-xs bg-white font-medium text-indigo-950"
-                  >
-                    {RULE_TYPES.map(rt => (
-                      <option key={rt} value={rt}>{rt}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-medium text-gray-700 mb-1">Measurement Unit *</label>
-                  {unitsList.length > 0 ? (
-                    <select
-                      value={formUnitId}
-                      onChange={e => setFormUnitId(e.target.value)}
-                      className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-xs bg-white"
-                      required
-                    >
-                      <option value="">Select Unit</option>
-                      {unitsList.map(u => (
-                        <option key={u.id} value={u.id}>{u.code} {u.name ? `(${u.name})` : ''}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      value={formUnitId}
-                      onChange={e => setFormUnitId(e.target.value)}
-                      placeholder="Unit ID or Code"
-                      required
-                      className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-xs"
-                    />
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-medium text-gray-700 mb-1">Consumable *</label>
-                {consumablesList.length > 0 ? (
-                  <select
-                    value={formConsumableId}
-                    onChange={e => setFormConsumableId(e.target.value)}
-                    className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-xs bg-white"
-                    required
-                  >
-                    <option value="">Select Consumable</option>
-                    {consumablesList.map(c => (
-                      <option key={c.id} value={c.id}>{c.code} - {c.name || 'Consumable'}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    value={formConsumableId}
-                    onChange={e => setFormConsumableId(e.target.value)}
-                    placeholder="Consumable UUID"
-                    required
-                    className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-xs"
-                  />
-                )}
-              </div>
-
-              {/* Dynamic Parameter Fields */}
-              <div className="p-3.5 bg-gray-50 border border-gray-200 rounded-md space-y-3">
-                <div className="font-bold text-indigo-900 uppercase tracking-wide text-2xs">
-                  {formRuleType} Parameters
-                </div>
-
-                {formRuleType === 'PRODUCTION_RATE' && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">Consumption Rate *</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramRate}
-                        onChange={e => setParamRate(e.target.value)}
-                        required
-                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
-                        placeholder="e.g. 0.005"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">Scrap Factor (e.g. 0.05)</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramScrapFactor}
-                        onChange={e => setParamScrapFactor(e.target.value)}
-                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {formRuleType === 'AREA_COVERAGE' && (
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">Area / Unit (Sq.ft)</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramAreaPerUnit}
-                        onChange={e => setParamAreaPerUnit(e.target.value)}
-                        required
-                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">Coverage (Sq.ft/kg) *</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramCoverage}
-                        onChange={e => setParamCoverage(e.target.value)}
-                        required
-                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">Loss Factor</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramLossFactor}
-                        onChange={e => setParamLossFactor(e.target.value)}
-                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {formRuleType === 'PACKING_RATIO' && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">Pieces Per Pack *</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramUnitsPerPack}
-                        onChange={e => setParamUnitsPerPack(e.target.value)}
-                        required
-                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">Material Factor / Pack</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramMaterialPerPack}
-                        onChange={e => setParamMaterialPerPack(e.target.value)}
-                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {formRuleType === 'TOOL_LIFE' && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">Operations Per Part</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramOpsPerUnit}
-                        onChange={e => setParamOpsPerUnit(e.target.value)}
-                        required
-                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">Rated Tool Life (Operations) *</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramToolLife}
-                        onChange={e => setParamToolLife(e.target.value)}
-                        required
-                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {formRuleType === 'FIXED_QUANTITY' && (
-                  <div>
-                    <label className="block text-gray-600 mb-0.5">Fixed Periodic Quantity *</label>
-                    <input
-                      type="number"
-                      step="any"
-                      value={paramQuantity}
-                      onChange={e => setParamQuantity(e.target.value)}
-                      required
-                      className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
-                    />
-                  </div>
-                )}
-
-                {formRuleType === 'PLANT_REQUEST' && (
-                  <div>
-                    <label className="block text-gray-600 mb-0.5">Default Fallback Quantity</label>
-                    <input
-                      type="number"
-                      step="any"
-                      value={paramDefaultQty}
-                      onChange={e => setParamDefaultQty(e.target.value)}
-                      required
-                      className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
-                    />
-                  </div>
-                )}
-
-                {formRuleType === 'MAINTENANCE' && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">Fixed Baseline Amount</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramFixedAmount}
-                        onChange={e => setParamFixedAmount(e.target.value)}
-                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">Variable Wear Rate</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramVariableRate}
-                        onChange={e => setParamVariableRate(e.target.value)}
-                        className="w-full border border-gray-300 rounded px-2.5 py-1 text-xs"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {formRuleType === 'MIN_MAX' && (
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">MSL Days (e.g. 10)</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramMslDays}
-                        onChange={e => setParamMslDays(e.target.value)}
-                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">Working Days (26)</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramWorkingDays}
-                        onChange={e => setParamWorkingDays(e.target.value)}
-                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">MOQ</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramMoq}
-                        onChange={e => setParamMoq(e.target.value)}
-                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">Lead Time Days</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramLeadTimeDays}
-                        onChange={e => setParamLeadTimeDays(e.target.value)}
-                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-gray-600 mb-0.5">Pack Multiple</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={paramOrderMultiple}
-                        onChange={e => setParamOrderMultiple(e.target.value)}
-                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Rounding & Effective Date */}
-              <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <label className="block font-medium text-gray-700 mb-1">Rounding Policy</label>
-                  <select
-                    value={formRoundingPolicy}
-                    onChange={e => setFormRoundingPolicy(e.target.value)}
-                    className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs bg-white"
-                  >
-                    {ROUNDING_POLICIES.map(rp => (
-                      <option key={rp} value={rp}>{rp}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-medium text-gray-700 mb-1">Precision</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="6"
-                    value={formRoundingPrecision}
-                    onChange={e => setFormRoundingPrecision(Number(e.target.value))}
-                    className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-gray-700 mb-1">Effective Date</label>
-                  <input
-                    type="date"
-                    value={formEffectiveFrom}
-                    onChange={e => setFormEffectiveFrom(e.target.value)}
-                    required
-                    className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-3 border-t border-gray-200 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="px-3.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded font-medium text-xs"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={createLoading}
-                  className="px-4 py-1.5 bg-burnt-orange hover:bg-burnt-orange-dark text-white rounded font-medium text-xs disabled:opacity-50 transition-colors shadow-xs"
-                >
-                  {createLoading ? 'Creating…' : 'Save & Publish Norm'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+      {canUpdate && <div className="flex flex-wrap items-center gap-2">
+        <input aria-label="Change reason" className={`${field} flex-1`} placeholder="Reason for the reviewed changes" value={reason} maxLength={1000} disabled={busy} onChange={event => setReason(event.target.value)}/>
+        <button type="button" className={`${button} bg-emerald-600 text-white`} disabled={busy || loading || !dirty} onClick={() => void save()}>Save changes</button>
+        <button type="button" className={button} disabled={busy || !dirty} onClick={discard}>Cancel edits</button>
+      </div>}
+      <p className="text-xs text-gray-600">Prd. Order / Sch are reference values. Current production quantities are supplied in Production for sale. Master links are protected; use Add new norm to select different master records. Historical rows are read-only.</p>
+      {error && <p role="alert" className="rounded bg-red-50 p-3 text-red-700">{error}</p>}
+      {message && <p role="status" className="rounded bg-green-50 p-3 text-green-800">{message}</p>}
+    </section>
+    {showCreate && canCreate && <NormSetup onCancel={() => setShowCreate(false)} onCreated={async id => { await loadNorms(id); setShowCreate(false); setMessage('Consumption norm saved.'); }}/>}
+    <section className="h-[520px] min-h-0 flex flex-col overflow-hidden rounded-xl border bg-white">
+      <DataTable key={epoch} virtualize columns={columns} data={visible} originalData={original} selectedIds={selected} onSelectionChange={setSelected}
+        canUpdate={canUpdate && !busy && !loading} canCreate={false} canDelete={false} isLoading={loading || busy}
+        onCellChange={(id, key, value) => {
+          if (!canUpdate || busy) return;
+          if (!original.get(id)?.is_active) { setError('Historical versions are read-only. Edit the active version.'); return; }
+          setRows(previous => previous.map(row => row.id === id ? { ...row, [key]: value } : row));
+        }}
+        onSave={save} onDiscardChanges={discard} storageKey="consumption-norms-grid" saveStatus={busy ? 'saving' : 'idle'}
+        getRowClassName={row => row.is_active ? '' : 'text-gray-500 bg-gray-50'}
+        emptyMessage="No consumption norms match. Upload a workbook or add an approved norm to start."/>
+    </section>
+    <section className="space-y-4 rounded-xl border bg-white p-5">
+      <h3 className="text-lg font-semibold">Test a consumption norm</h3>
+      <p className="text-sm text-gray-600">Preview the approved formula with its source parameters. This does not approve demand, create a purchase order or change stock.</p>
+      <form onSubmit={event => void simulate(event)} className="grid gap-3 sm:grid-cols-4">
+        <label className="text-sm">Norm<select className={`${field} block w-full mt-1`} value={evalNormId} onChange={event => { setEvalNormId(event.target.value); setEvalResult(null); }}><option value="">Choose norm</option>{norms.filter(norm => norm.is_active).map(norm => <option key={norm.id} value={norm.id}>{norm.product_code || 'Global'} · {norm.process_name || 'Any process'} · {norm.consumable_code} [{norm.rule_type} v{norm.version}]</option>)}</select></label>
+        <label className="text-sm">Production quantity<input required type="number" min="0" step="any" className={`${field} block w-full mt-1`} value={evalQty} onChange={event => setEvalQty(event.target.value)}/></label>
+        <label className="text-sm">Calculation date<input required type="date" className={`${field} block w-full mt-1`} value={evalDate} onChange={event => setEvalDate(event.target.value)}/></label>
+        {norms.find(norm => norm.id === evalNormId)?.rule_type === 'PLANT_REQUEST' && <label className="text-sm">Explicit requested quantity<input type="number" min="0" step="any" className={`${field} block w-full mt-1`} value={requestedQty} onChange={event => setRequestedQty(event.target.value)}/></label>}
+        <button type="submit" className={`${button} bg-burnt-orange text-white self-end justify-center`} disabled={evaluating || !evalNormId || !canCalculate}>{evaluating ? 'Calculating…' : 'Run Calculation'}</button>
+      </form>
+      {evalError && <p role="alert" className="text-red-700">{evalError}</p>}
+      {evalResult && <div className="space-y-3 rounded border bg-indigo-50 p-4">
+        <p className="text-xl font-bold">Calculated Output: {evalResult.calculation.final_calculated_requirement} {evalResult.calculation.unit}</p>
+        <p className="text-sm">Raw value: {evalResult.calculation.raw_requirement} · Rounding: {evalResult.calculation.rounding_policy} ({evalResult.calculation.rounding_precision}) · Version: {evalResult.calculation.rule_version}</p>
+        <ol className="space-y-2">{evalResult.calculation.calculation_steps.map((step, index) => <li key={index} className="rounded border bg-white p-3 text-sm"><strong>Step {step.step_number}: {step.description}</strong><p className="font-mono">{step.formula} ⇒ {step.result}</p></li>)}</ol>
+      </div>}
+    </section>
+    {showImport && canCreate && <NormImportWorkspace canUpdate={canUpdate} onClose={() => setShowImport(false)} onImported={async value => { await loadNorms(); setMessage(value); }}/>}
+  </div>;
 }

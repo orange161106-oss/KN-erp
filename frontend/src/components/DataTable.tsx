@@ -48,6 +48,7 @@ export interface DataTableProps<T extends { id: string; row_index?: number | nul
   onDeleteRows?: (rowIds: string[]) => Promise<void> | void;
   onDiscardChanges?: () => void;
   isLoading?: boolean;
+  virtualize?: boolean;
   emptyMessage?: string;
   onAddRow?: () => void;
   canCreate?: boolean;
@@ -103,6 +104,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   onDeleteRows,
   onDiscardChanges,
   isLoading = false,
+  virtualize = false,
   emptyMessage = 'No records found matching your filters.',
   onAddRow,
   canCreate = true,
@@ -353,14 +355,16 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   const [isScrolledLeft, setIsScrolledLeft] = useState<boolean>(false);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(540);
+  const [viewportWidth, setViewportWidth] = useState(0);
   const [headerHeight, setHeaderHeight] = useState(56);
   const ROW_HEIGHT = 28;
 
   useLayoutEffect(() => {
     const container = tableContainerRef.current;
-    if (!container || !virtualize) return;
+    if (!container) return;
     const measure = () => {
       setViewportHeight(container.clientHeight || 540);
+      setViewportWidth(container.clientWidth);
       setHeaderHeight(container.querySelector('thead')?.getBoundingClientRect().height || 56);
     };
     measure();
@@ -1402,10 +1406,10 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                         return null; // clear sort
                       });
                     }}
-                    className={`relative p-2 font-semibold text-ink-text border-r border-ink-text/10 select-none bg-vanilla-surface cursor-pointer group hover:bg-vanilla-surface/80 ${
+                    className={`p-2 font-semibold text-ink-text border-r border-ink-text/10 select-none bg-vanilla-surface cursor-pointer group hover:bg-vanilla-surface/80 ${
                       col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'
                     } ${
-                      isFrozen ? 'sticky z-30 shadow-2xs font-bold' : ''
+                      isFrozen ? 'sticky z-30 shadow-2xs font-bold' : 'relative'
                     } ${isLastFrozen && isScrolledLeft ? 'shadow-[4px_0_6px_-2px_rgba(0,0,0,0.15)] border-r-2 border-r-gray-400' : ''}`}
                   >
                     <div className="flex items-center justify-between gap-1">
@@ -1441,9 +1445,9 @@ export default function DataTable<T extends { id: string; row_index?: number | n
               <tr className="h-48">
                 <td
                   colSpan={visibleColumns.length + 2}
-                  className="text-center p-8 bg-white border-b border-gray-200"
+                  className="p-0 text-center bg-white border-b border-gray-200"
                 >
-                  <div className="flex flex-col items-center justify-center gap-2">
+                  <div style={{ width: viewportWidth || undefined }} className="sticky left-0 flex min-h-48 max-w-full flex-col items-center justify-center gap-2 px-6 py-8">
                     <div className="animate-spin h-6 w-6 border-2 border-brand-navy border-t-transparent rounded-full" />
                     <span className="text-xs text-gray-500 font-medium">Loading records…</span>
                   </div>
@@ -1453,9 +1457,9 @@ export default function DataTable<T extends { id: string; row_index?: number | n
               <tr className="h-48">
                 <td
                   colSpan={visibleColumns.length + 2}
-                  className="text-center p-8 bg-white border-b border-gray-200"
+                  className="p-0 text-center bg-white border-b border-gray-200"
                 >
-                  <div className="flex flex-col items-center justify-center gap-2 text-gray-400">
+                  <div style={{ width: viewportWidth || undefined }} className="sticky left-0 flex min-h-48 max-w-full flex-col items-center justify-center gap-2 px-6 py-8 text-gray-400">
                     <span className="text-3xl">📋</span>
                     <p className="font-medium text-gray-600 text-xs">{emptyMessage}</p>
                     {canCreate && onAddRow && (
@@ -1567,12 +1571,12 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                             handleStartEdit(row.id, col.key);
                           }}
                           onContextMenu={e => handleContextMenu(e, 'cell', row.id, rIdx, col.key)}
-                          className={`relative border-r border-gray-200 px-2 py-0.5 truncate cursor-cell select-none outline-none ${
+                          className={`border-r border-gray-200 px-2 py-0.5 truncate cursor-cell select-none outline-none ${
                             col.align === 'right' ? 'text-right font-mono tabular-nums' : col.align === 'center' ? 'text-center' : 'text-left'
                           } ${
                             isFrozen
                               ? `sticky z-10 ${isRowSelected ? 'bg-blue-100' : isZebra ? 'bg-gray-100' : 'bg-white'}`
-                              : ''
+                              : 'relative'
                           } ${
                             isLastFrozen && isScrolledLeft ? 'shadow-[4px_0_6px_-2px_rgba(0,0,0,0.15)] border-r-2 border-r-gray-400' : ''
                           } ${
@@ -1638,7 +1642,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
       </div>
 
       {/* 4. Grid Footer Status Bar */}
-      <div className="flex flex-wrap items-center justify-between px-3 py-1.5 bg-gray-100 border-t border-gray-300 text-[11px] text-gray-600 select-none">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-3 py-1.5 bg-gray-100 border-t border-gray-300 text-[11px] text-gray-600 select-none">
         <div className="flex items-center gap-3">
           <span>
             Showing <strong className="text-gray-900">{processedData.length}</strong> of{' '}
@@ -1682,7 +1686,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
             setHeightMode('fit');
           }}
           onKeyDown={handleResizeHandleKeyDown}
-          className={`h-2.5 w-full bg-gray-100 hover:bg-burnt-orange/20 border-t border-gray-300 flex items-center justify-center cursor-row-resize select-none transition-colors group focus:outline-none focus:ring-1 focus:ring-burnt-orange ${
+          className={`h-2.5 w-full shrink-0 bg-gray-100 hover:bg-burnt-orange/20 border-t border-gray-300 flex items-center justify-center cursor-row-resize select-none transition-colors group focus:outline-none focus:ring-1 focus:ring-burnt-orange ${
             isResizingHeight ? 'bg-burnt-orange/30' : ''
           }`}
         >

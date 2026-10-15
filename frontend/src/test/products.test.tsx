@@ -179,9 +179,13 @@ test('localized inline search dynamically filters table records', async () => {
   expect(screen.getByText('CS-AL-002')).toBeInTheDocument();
 });
 
-test('bulk upload previews the workbook then saves explicitly without month/year controls', async () => {
-  const empty = { category: 'consumables', review_token: 'a'.repeat(64), row_count: 0, filename: null, report: {}, records: [] };
-  const saved = { ...empty, row_count: 1, filename: 'consumables.xlsx', records: [{ id: 'c-1', item_id: 'TEST-MAT-1', description: 'Synthetic material', output_unit: 'PCS' }] };
+test.each([
+  ['consumables', 'List of Consumables', { item_id: 'TEST-MAT-1', description: 'Synthetic material', output_unit: 'PCS' }],
+  ['assemble', 'Consumable for Assemble', { consumable_item: 'TEST-MAT-1', part_no_saleable_item: 'TEST-PART-1', process_name: 'Sample process', output_unit: 'PCS' }],
+  ['sales_parts', 'List of Sales Parts', { part_no: 'TEST-PART-1', item_id: 'TEST-ITEM-1', part_description: 'Synthetic part', uom: 'PCS' }],
+] as const)('bulk upload previews then saves %s explicitly without month/year controls', async (category, label, record) => {
+  const empty = { category, review_token: 'a'.repeat(64), row_count: 0, filename: null, report: {}, records: [] };
+  const saved = { ...empty, row_count: 1, filename: 'synthetic.xlsx', records: [{ id: 'c-1', ...record }] };
   const fetchSpy = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
     const url = String(input);
     if (url.endsWith('/workspace/preview')) return new Response(JSON.stringify(saved), { status: 200 });
@@ -192,6 +196,7 @@ test('bulk upload previews the workbook then saves explicitly without month/year
   render(<AuthContext.Provider value={{ user: { id: 'root', username: 'root', roles: [], permissions: [], is_super_admin: true }, login: vi.fn(), logout: vi.fn() }}>
     <Products />
   </AuthContext.Provider>);
+  fireEvent.click(screen.getByRole('button', { name: label }));
   fireEvent.click(screen.getByRole('button', { name: /Bulk Import/i }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Upload data' })).toBeEnabled());
   expect(screen.queryByLabelText('Upload month')).not.toBeInTheDocument();
@@ -203,11 +208,27 @@ test('bulk upload previews the workbook then saves explicitly without month/year
   expect(await screen.findByText('1 items saved successfully.')).toBeInTheDocument();
   const posted = fetchSpy.mock.calls.filter(([, init]) => init?.method === 'POST');
   expect(posted).toHaveLength(2);
-  expect(String(posted[0][0])).toContain('/consumables/workspace/preview');
-  expect(String(posted[1][0])).toContain('/consumables/workspace');
+  expect(String(posted[0][0])).toContain(`/${category}/workspace/preview`);
+  expect(String(posted[1][0])).toContain(`/${category}/workspace`);
   expect(posted[1][1]?.body).toBeInstanceOf(FormData);
   expect(screen.getByRole('button', { name: 'Delete data' })).toBeEnabled();
   expect(screen.getByRole('button', { name: 'Export Excel' })).toBeEnabled();
+});
+
+test('an employee granted master creation can open bulk import without gaining delete permission', async () => {
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async input => new Response(JSON.stringify(
+    String(input).endsWith('/workspace')
+      ? { category: 'consumables', review_token: 'a'.repeat(64), row_count: 0, filename: null, report: {}, records: [] }
+      : { items: [], total: 0 },
+  ), { status: 200 })));
+  render(<AuthContext.Provider value={{ user: { id: 'uploader', username: 'uploader', roles: ['USER'], permissions: [],
+    masters_read: true, masters_create: true, masters_update: false, masters_delete: false }, login: vi.fn(), logout: vi.fn() }}>
+    <Products />
+  </AuthContext.Provider>);
+  fireEvent.click(screen.getByRole('button', { name: /Bulk Import/i }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Upload data' })).toBeEnabled());
+  expect(screen.getByRole('button', { name: 'Delete data' })).toBeDisabled();
+  expect(screen.queryByRole('heading', { name: 'Single Consumable Intake' })).not.toBeInTheDocument();
 });
 
 test('edit action populates intake form, changes button to Update Record, and submits PUT', async () => {

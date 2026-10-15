@@ -176,7 +176,7 @@ def calculate_workspace_requirements(
 
             for row in requirements:
                 material = session.get(Consumable, row.consumable_id)
-                plant = session.get(Plant, row.plant_id)
+                plant = session.get(Plant, row.plant_id) if row.plant_id else None
                 process = session.get(Process, row.process_id)
                 product = session.get(Product, row.product_id)
 
@@ -201,7 +201,7 @@ def calculate_workspace_requirements(
                         process_count=p_count,
                         production_order_qty=format(row.source_production_qty, ".4f"),
                         scheduled_consumable_qty=format(row.calculated_qty, ".4f"),
-                        plant=plant.name if plant else "Plant 1",
+                        plant=plant.name if plant else "Central / unassigned",
                         process=process.name if process else "",
                         description=material.name if material else "",
                         unit=row.uom,

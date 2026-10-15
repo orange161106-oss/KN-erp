@@ -71,6 +71,7 @@ test('renders PRD planning table with toolbar buttons and rows', async () => {
   renderPRDWorkspace();
 
   expect(await screen.findByText('Production for sale')).toBeInTheDocument();
+  expect(screen.getAllByRole('columnheader', { name: '#' })).toHaveLength(1);
   expect(screen.getByText(/Upload Excel/)).toBeInTheDocument();
   expect(screen.getByText(/Add Row/)).toBeInTheDocument();
   expect(screen.getByText(/Save Changes/)).toBeInTheDocument();

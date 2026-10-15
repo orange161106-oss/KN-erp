@@ -27,6 +27,7 @@ from app.models.inventory_masters import Consumable, Unit
 from app.models.plant_workflow import PlantConfirmation, RequirementAdjustment, UserPlant
 from app.models.production import Plant
 from app.models.requirements import CalculatedRequirement
+from app.models.prd import PlanningVersion
 from app.schemas.auth import CurrentUser
 from app.schemas.plant_workflow import (
     ConfirmRequirementRequest,
@@ -51,6 +52,8 @@ def _get_user_plant_ids(session: Session, user_id: UUID) -> set[UUID]:
 
 
 def _assert_plant_access(session: Session, user: CurrentUser, plant_id: UUID) -> None:
+    if plant_id is None:
+        raise ApplicationError('CENTRAL_REVIEW_REQUIRED', 'Central requirements require Super Admin approval of the whole planning revision.', 403)
     """Raise 403 if the user is not assigned to the given plant."""
     plant = session.get(Plant, plant_id)
     if plant is None or not plant.is_active:
@@ -621,7 +624,7 @@ def get_final_requirements(
     all_keys = set(calc_map.keys()) | set(adj_map.keys())
 
     # Pre-fetch plants and consumables for metadata
-    plant_ids = {k[0] for k in all_keys}
+    plant_ids = {k[0] for k in all_keys if k[0] is not None}
     consumable_ids = {k[1] for k in all_keys}
 
     plants: dict[UUID, str] = {}
@@ -641,6 +644,8 @@ def get_final_requirements(
         units = {u.id: u.code for u in u_rows}
 
     results: list[FinalRequirementItemResponse] = []
+    version = session.get(PlanningVersion, planning_version_id) if any(k[0] is None for k in all_keys) else None
+    central_approved = bool(version and version.status == 'APPROVED' and version.approved_by and version.approved_at)
     for p_id, c_id in sorted(all_keys, key=lambda k: (plants.get(k[0], ""), consumables[k[1]].code if k[1] in consumables else "")):
         calc_qty, calc_count = calc_map.get((p_id, c_id), (Decimal("0"), 0))
         adj_qty = adj_map.get((p_id, c_id), Decimal("0"))
@@ -648,6 +653,8 @@ def get_final_requirements(
 
         confirmed_count = conf_map.get((p_id, c_id), 0)
         is_fully_confirmed = (calc_count > 0) and (confirmed_count == calc_count)
+        if p_id is None:
+            is_fully_confirmed = calc_count > 0 and central_approved
 
         c_obj = consumables.get(c_id)
         uom_str = units.get(c_obj.unit_id, "UNK") if c_obj else "UNK"
@@ -656,7 +663,7 @@ def get_final_requirements(
             FinalRequirementItemResponse(
                 planning_version_id=planning_version_id,
                 plant_id=p_id,
-                plant_name=plants.get(p_id),
+                plant_name=plants.get(p_id) if p_id else "Central",
                 consumable_id=c_id,
                 consumable_code=c_obj.code if c_obj else None,
                 consumable_name=c_obj.name if c_obj else None,

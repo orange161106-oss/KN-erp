@@ -1769,19 +1769,6 @@ def get_stock_management(
         if (p.resolution_applied or "NONE") != "NONE"
     )
 
-<<<<<<< HEAD
-    missing_limits, min_gt_max = session.execute(
-        select(
-            func.count(case((
-                StockParameter.min_stock_level.is_(None)
-                | StockParameter.max_stock_level.is_(None)
-                | StockParameter.min_order_qty.is_(None)
-                | StockParameter.lead_time_days.is_(None), 1,
-            ))),
-            func.count(case((StockParameter.min_stock_level > StockParameter.max_stock_level, 1))),
-        ).where(StockParameter.batch_id == batch.id)
-    ).one()
-=======
     # Map resolver names
     resolver_ids = {p.resolved_by for p in filtered_params if p.resolved_by}
     resolvers_by_id: dict[uuid.UUID, str] = {}
@@ -1789,7 +1776,6 @@ def get_stock_management(
         r_users = session.scalars(select(User).where(User.id.in_(resolver_ids))).all()
         for u in r_users:
             resolvers_by_id[u.id] = getattr(u, "full_name", None) or u.username
->>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
 
     records = [
         StockParameterRecord(
@@ -1863,46 +1849,26 @@ def batch_update_stock_parameters(
         raise ApplicationError("INVALID_REQUEST", "Missing batch update request or user.", 400)
 
     try:
-<<<<<<< HEAD
+        now_utc = datetime.now(timezone.utc)
         batch = session.scalar(select(StockParameterBatch).where(
-            StockParameterBatch.month == request.month, StockParameterBatch.year == request.year,
+            StockParameterBatch.month == req.month, StockParameterBatch.year == req.year,
             StockParameterBatch.status == "active",
         ).with_for_update().execution_options(populate_existing=True))
         if batch is None:
             raise ApplicationError("NOT_FOUND", "No active parameter batch for this period.", 404)
-        if request.batch_id is not None and request.batch_id != batch.id:
+        if req.batch_id is not None and req.batch_id != batch.id:
             raise ApplicationError("PARAMETERS_CHANGED", "Parameters were replaced. Refresh before saving.", 409)
         parameters_by_id = {param.id: param for param in session.scalars(
             select(StockParameter).where(
                 StockParameter.batch_id == batch.id,
-                StockParameter.id.in_([update.id for update in request.updates]),
+                StockParameter.id.in_([update.id for update in req.updates]),
             ).execution_options(populate_existing=True)
         )}
-        for update in request.updates:
+        for update in req.updates:
             param = parameters_by_id.get(update.id)
             if param is None or param.batch_id != batch.id:
                 raise ApplicationError("INVALID_PARAMETER_ROW", "A row does not belong to the selected parameters.", 422)
             changes = update.model_dump(exclude_unset=True, exclude={"id"})
-=======
-        batch = session.scalar(
-            select(StockParameterBatch).where(
-                StockParameterBatch.month == req.month,
-                StockParameterBatch.year == req.year,
-                StockParameterBatch.status == "active",
-            ).with_for_update().execution_options(populate_existing=True)
-        )
-        if not batch:
-            raise ApplicationError("NOT_FOUND", f"No active stock management batch found for {MONTH_NAMES[req.month - 1]} {req.year}.", 404)
-
-        now_utc = datetime.now(timezone.utc)
-        for update_item in req.updates:
-            param_id = update_item.id if isinstance(update_item.id, uuid.UUID) else uuid.UUID(str(update_item.id))
-            param = session.get(StockParameter, param_id)
-            if not param or param.batch_id != batch.id:
-                raise ApplicationError("INVALID_ROW", "A row does not belong to the selected parameter batch.", 422)
-
-            changes = update_item.model_dump(exclude_unset=True, exclude={"id"})
->>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
             if not changes:
                 continue
 
@@ -1954,26 +1920,18 @@ def list_stock_parameter_history(
     limit: int = 50,
 ) -> list[StockParameterHistoryItem]:
     """List historical upload batches for stock management."""
-<<<<<<< HEAD
-    batches = session.scalars(
-        select(StockParameterBatch)
-        .where(
-            StockParameterBatch.month == month,
-            StockParameterBatch.year == year,
-        )
-        .order_by(StockParameterBatch.created_at.desc())
-        .options(joinedload(StockParameterBatch.uploader).load_only(User.full_name, User.username))
-    ).all()
-=======
     stmt = select(StockParameterBatch)
     if month is not None:
         stmt = stmt.where(StockParameterBatch.month == month)
     if year is not None:
         stmt = stmt.where(StockParameterBatch.year == year)
-    stmt = stmt.order_by(StockParameterBatch.created_at.desc()).limit(limit)
+    stmt = (
+        stmt.order_by(StockParameterBatch.created_at.desc())
+        .limit(limit)
+        .options(joinedload(StockParameterBatch.uploader).load_only(User.full_name, User.username))
+    )
 
     batches = session.scalars(stmt).all()
->>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
 
     items: list[StockParameterHistoryItem] = []
     for b in batches:

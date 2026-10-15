@@ -50,6 +50,10 @@ deployment record only.
 
 ## Shared implementation contracts
 
+- [Central basic consumable planning](24_CENTRAL_BASIC_PLANNING_CONTRACT.md):
+  owner-approved direct production → norms → central Super Admin review → inventory/
+  purchase workflow, reviewed files, source/approval evidence, migration and QA limits.
+
 - [M1.3 authentication and RBAC](13_AUTH_RBAC_CONTRACT.md): schema, login/current-user
   API, centralized permission checks, token configuration and remaining authority TBDs.
 - [M2.3 consumable, unit and supplier masters](15_CONSUMABLE_SUPPLIER_MASTER_CONTRACT.md):

@@ -6,6 +6,7 @@ import DataTable, { type ColumnDef, type HeaderGroupDef } from '../../components
 import Toolbar from '../../components/Toolbar';
 import MonthlyExcelUploadModal from './MonthlyExcelUploadModal';
 import RequirementWorkspace from './RequirementWorkspace';
+import CentralRequirements from './CentralRequirements';
 
 export interface RequirementRecord {
   id: string;
@@ -82,6 +83,12 @@ function formatDisplayDate(dateStr?: string | null): string {
 }
 
 export default function Requirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' } = {}) {
+  const {user} = useAuth();
+  const [central,setCentral] = useState(!defaultTab && Boolean(user?.is_super_admin || !user?.plant_ids?.length));
+  return <div className="min-w-0 space-y-3"><div className="flex gap-2"><button className="rounded border bg-white px-4 py-2" onClick={()=>setCentral(true)}>Central requirement plan</button><button className="rounded border bg-white px-4 py-2" onClick={()=>setCentral(false)}>Existing monthly plans</button></div>{central?<CentralRequirements/>:<LegacyRequirements defaultTab={defaultTab}/>}</div>;
+}
+
+function LegacyRequirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' } = {}) {
   const { user } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'workspace' | 'mrp'>(() => {

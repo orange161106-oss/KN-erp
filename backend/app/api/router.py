@@ -18,6 +18,7 @@ from app.modules.requirements.router import (
 )
 from app.schemas.requirements import AggregatedRequirementResponse, AggregationRunResponse
 from app.modules.rules.router import router as rules_router
+from app.modules.requirements.basic_router import router as basic_planning_router
 from app.modules.inventory.router import router as inventory_router
 from app.modules.inventory.projection_router import router as projection_router
 from app.modules.inventory.reorder_router import router as reorder_router
@@ -37,6 +38,7 @@ from app.modules.reports.inventory_purchase_router import router as inventory_pu
 from app.modules.admin.audit_router import router as admin_audit_router
 
 api_router = APIRouter(prefix="/api/v1")
+api_router.include_router(basic_planning_router)
 api_router.include_router(grn_router)
 api_router.include_router(purchase_orders_router)
 api_router.include_router(prd_workspace_router)

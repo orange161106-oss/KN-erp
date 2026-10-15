@@ -300,3 +300,54 @@ workbook can have a separate Unit/UOM/Stock Unit column; it takes precedence ove
 numeric Output/Unit values. Explicit blank units remain unresolved for human review.
 No actual unit values were supplied or guessed. Final focused verification passed:
 18 backend checks, 12 frontend checks and the production build.
+
+## Product Master bulk entry repair — 2026-10-15
+
+A later merge reconnected the former direct uploader in `Products.tsx` while its
+upload state and helpers were absent. Clicking Bulk Import raised
+`setUploadError is not defined` before the dialog opened. The page now uses
+`MasterBulkWorkspace` for consumables, assembly mappings and sales parts, and the
+broken duplicate upload implementation was removed. An employee with the explicit
+`masters_create` grant can open this uploader; its read/create/update/delete checks
+remain enforced independently. The undated preview → review → Save changes flow,
+delete-before-replacement rule, units, history and protected IDs are unchanged.
+No live company records were uploaded or deleted for this repair.
+Focused verification passed: 18 frontend checks and 8 isolated backend checks.
+The full TypeScript check still reports independent `settledSearch` /
+`useDebouncedValue` errors in the stock statement and stock management pages.
+
+## Direct basic demand and central approval — 2026-10-15
+
+Munees explicitly removed Product–Plant Mapping as a prerequisite for the new basic
+consumable planning workflow and confirmed **Super Admin reviews one central plan**.
+The supplied drill example is final demand: 100 parts × 2 processes = 200 units,
+without an invented tool-life divisor. Other existing formulas retain their handlers.
+
+Reviewed XLSX/CSV norm import, correction, atomic confirmation, templates/exports,
+editable versioned grid and canonical master selection are implemented. New central
+production uploads preserve exact product identities, customer alias/reconciliation
+checks, selected month/revision and source rows without auto-creating masters/routes.
+New ImportBatch metadata marks BASIC_CENTRAL_V1; old batches keep their legacy path.
+CalculatedRequirement now supports explicit null plant scope; whole-version approval
+uses Super Admin actor/time/audit, never fake Plant 1 or null PlantConfirmation rows.
+The existing projection/purchase engines consume consolidated approved demand once
+per material. Missing inventory timing/reconciliation/policy evidence remains incomplete.
+
+See `24_CENTRAL_BASIC_PLANNING_CONTRACT.md` for files, APIs, reference workbook
+findings, formulas, import/authorization rules, manual workflow and remaining limits.
+Focused checks: 94 backend, 17 frontend, TypeScript and optimized build passed;
+one independent old SQLite column-drop fixture is documented as excluded. Synthetic
+browser verification found/corrected false unsaved counts on read-only new tables.
+The earlier three stock-search TypeScript errors were repaired using their intended
+debounced search values; stock quantities and workflow were not altered.
+
+Database deployment was explicitly approved by the owner and committed on 2026-10-15
+at 16:07:39 UTC (21:37:39 IST). Preflight confirmed revision 2762e6d553d3 and a compatible
+existing master_upload_batches schema. The reviewed e002_master_period_uploads merge
+and c001_central_basic_planning migration ran atomically. A fresh read through the
+application connection confirmed c001 as the sole current/head revision, nullable
+calculated plant, planned_quantity >= 0 and no pending migrations. The application
+schema gate passed. Counts in eight business/history tables and protected foreign-key,
+primary-key and uniqueness constraints were unchanged. No company business records
+were imported/approved/deleted; this verifies schema deployment, not company data
+readiness or production acceptance. No migration was rewritten or blindly stamped.
