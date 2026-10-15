@@ -14,6 +14,7 @@ class StockStatementLineResponse(BaseModel):
     item_id: str
     consumable_id: Optional[str] = None
     item_class: str = "CONSUMABLE"
+    store_group: Optional[str] = None
     item_description: Optional[str] = None
     cust_part_no: Optional[str] = None
     unit: Optional[str] = None
@@ -50,6 +51,7 @@ class StockStatementMetadata(BaseModel):
     statement_year: int
     statement_date: str  # YYYY-MM-DD
     source_filename: Optional[str] = None
+    location_text: Optional[str] = None
     status: Optional[str] = None
     created_at: Optional[datetime] = None
     created_by_name: Optional[str] = None
@@ -60,12 +62,67 @@ class StockStatementMetadata(BaseModel):
     consumable_count: int = 0
     product_or_other_count: int = 0
     unknown_count: int = 0
+    missing_consumables_count: int = 0
+    grand_total_opening_value: Optional[Decimal] = Decimal("0.0000")
+    grand_total_receipt_value: Optional[Decimal] = Decimal("0.0000")
+    grand_total_issue_value: Optional[Decimal] = Decimal("0.0000")
+    grand_total_closing_value: Optional[Decimal] = Decimal("0.0000")
+    grand_total_warnings_count: int = 0
+    store_groups_found: list[str] = Field(default_factory=list)
 
 
 class StockStatementResponse(BaseModel):
     metadata: StockStatementMetadata
     summary: StockStatementSummary
     records: list[StockStatementLineResponse]
+
+
+class MissingConsumableItem(BaseModel):
+    item_id: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    unit_code: Optional[str] = None
+    rate: Optional[Decimal] = None
+
+
+class MissingConsumablesResponse(BaseModel):
+    statement_month: int
+    statement_year: int
+    count: int
+    items: list[MissingConsumableItem]
+
+
+class PromoteConsumableItem(BaseModel):
+    item_id: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    type_of_material: Optional[str] = None
+    unit_code: Optional[str] = "NOS"
+    rate: Optional[Decimal] = None
+    supplier_id: Optional[UUID] = None
+
+
+class PromoteConsumablesRequest(BaseModel):
+    items: list[PromoteConsumableItem] = Field(min_length=1, max_length=1000)
+
+
+class PromoteConsumablesResponse(BaseModel):
+    promoted_count: int
+    promoted_items: list[str]
+    message: str
+
+
+class DemoteConsumableRequest(BaseModel):
+    item_id: str
+    reason: Optional[str] = None
+
+
+class DemoteConsumableResponse(BaseModel):
+    item_id: str
+    demoted: bool
+    message: str
 
 
 class RowIssue(BaseModel):
@@ -76,6 +133,14 @@ class RowIssue(BaseModel):
     code: Optional[str] = None
     item_id: Optional[str] = None
     item_class: Optional[str] = None
+    suggested_action: Optional[str] = None
+    row_content: Optional[dict[str, Any]] = None
+    conflicting_row: Optional[int] = None
+    conflicting_row_content: Optional[dict[str, Any]] = None
+    possible_matches: list[dict[str, Any]] = Field(default_factory=list)
+    resolvable: bool = False
+    allowed_actions: list[str] = Field(default_factory=list)
+    default_action: Optional[str] = None
 
 
 class GroupedWarningResponse(BaseModel):
@@ -91,6 +156,7 @@ class StockStatementPreviewResponse(BaseModel):
     statement_date: str
     detected_title: Optional[str] = None
     source_filename: str
+    location_text: Optional[str] = None
     file_token: str
     is_existing_batch: bool = False
     existing_batch_filename: Optional[str] = None
@@ -104,6 +170,8 @@ class StockStatementPreviewResponse(BaseModel):
     consumable_count: int = 0
     product_or_other_count: int = 0
     unknown_count: int = 0
+    missing_consumables_count: int = 0
+    store_groups_found: list[dict[str, Any]] = Field(default_factory=list)
     lines_preview: list[StockStatementLineResponse] = Field(default_factory=list)
     can_confirm: bool = False
 
@@ -151,6 +219,13 @@ class StockStatementHistoryItem(BaseModel):
 # ── Stock Management Schemas ──────────────────────────────────────────
 
 
+class RowResolutionInput(BaseModel):
+    row: int
+    action: str  # "SKIP_ROW", "SKIP_DUPLICATE", "KEEP_FIRST", "KEEP_SECOND", "KEEP_BOTH", "ASSIGN_ITEM_ID"
+    assigned_item_id: Optional[str] = None
+    note: Optional[str] = None
+
+
 class StockParameterRecord(BaseModel):
     id: str
     item_id: str
@@ -164,12 +239,22 @@ class StockParameterRecord(BaseModel):
     lead_time_days: Optional[int] = None
     edited_after_import: bool = False
     source_row: int = 0
+    resolution_applied: Optional[str] = "NONE"
+    resolved_by_name: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    resolution_note: Optional[str] = None
+    category_count: int = 1
+    has_conflicting_limits: bool = False
 
 
 class StockManagementSummary(BaseModel):
     item_count: int = 0
     missing_limits_count: int = 0
     min_exceeds_max_count: int = 0
+    multi_category_items_count: int = 0
+    ambiguous_limits_items_count: int = 0
+    skipped_rows_count: int = 0
+    resolved_rows_count: int = 0
 
 
 class StockManagementMetadata(BaseModel):
@@ -185,6 +270,8 @@ class StockManagementMetadata(BaseModel):
     updated_at: Optional[datetime] = None
     updated_by_name: Optional[str] = None
     row_count: int = 0
+    skipped_rows: list[dict[str, Any]] = Field(default_factory=list)
+    resolutions_applied: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class StockManagementResponse(BaseModel):
@@ -209,13 +296,17 @@ class StockParameterPreviewResponse(BaseModel):
     detected_title: Optional[str] = None
     source_filename: str
     file_token: str
+    uniqueness_mode: str = "ITEM_AND_CATEGORY"
     is_existing_batch: bool = False
     existing_batch_filename: Optional[str] = None
     errors: list[RowIssue] = Field(default_factory=list)
     warnings: list[RowIssue] = Field(default_factory=list)
+    issue_counts_by_code: dict[str, int] = Field(default_factory=dict)
     unknown_items: list[str] = Field(default_factory=list)
+    consumable_options: list[dict[str, Any]] = Field(default_factory=list)
     comparison: ComparisonSummary
     total_rows: int = 0
+    unresolved_blocking_count: int = 0
     lines_preview: list[StockParameterRecord] = Field(default_factory=list)
     can_confirm: bool = False
 
@@ -225,6 +316,7 @@ class StockParameterConfirmRequest(BaseModel):
     month: int
     year: int
     replace_confirmed: bool = False
+    resolutions: list[RowResolutionInput] = Field(default_factory=list)
 
 
 StockQuantityDecimal = Annotated[Decimal, Field(ge=0, max_digits=14, decimal_places=4)]
@@ -253,6 +345,7 @@ class StockStatementUpdateItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: UUID
     item_description: Optional[str] = Field(default=None, max_length=2000)
+    cust_part_no: Optional[str] = Field(default=None, max_length=128)
     opening_qty: Optional[StockQuantityDecimal] = None
     opening_value: Optional[StockEditDecimal] = None
     receipt_qty: Optional[StockQuantityDecimal] = None

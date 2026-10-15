@@ -39,6 +39,7 @@ class StockStatementBatch(Base):
     row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     warning_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     validation_summary: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    location_text: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     uploaded_by: Mapped[Optional[UUID]] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -83,6 +84,9 @@ class StockStatementLine(Base):
     """Detailed line in a monthly stock statement."""
 
     __tablename__ = "stock_statement_lines"
+    __table_args__ = (
+        Index("ix_stock_statement_lines_batch_item", "batch_id", "item_id"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     batch_id: Mapped[UUID] = mapped_column(
@@ -102,6 +106,7 @@ class StockStatementLine(Base):
     item_class: Mapped[str] = mapped_column(
         String(32), nullable=False, default="CONSUMABLE", server_default="CONSUMABLE", index=True
     )
+    store_group: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     item_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     cust_part_no: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
@@ -251,6 +256,17 @@ class StockParameter(Base):
     )
     source_row: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    resolution_applied: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default="NONE", server_default="NONE"
+    )
+    resolved_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    resolution_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -272,4 +288,5 @@ class StockParameter(Base):
     )
     consumable = relationship("Consumable", foreign_keys=[consumable_id])
     updater = relationship("User", foreign_keys=[updated_by])
+    resolver = relationship("User", foreign_keys=[resolved_by])
 

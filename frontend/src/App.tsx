@@ -129,7 +129,12 @@ function Application() {
             <ProtectedRoute isAllowed={isAdmin}><UserManagement /></ProtectedRoute>
           } />
           
-          <Route path="/status" element={<SystemStatus />} />
+          <Route path="/status" element={
+            <ProtectedRoute isAllowed={isAdmin}><SystemStatus /></ProtectedRoute>
+          } />
+          <Route path="/system-status" element={
+            <ProtectedRoute isAllowed={isAdmin}><SystemStatus /></ProtectedRoute>
+          } />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </Suspense>

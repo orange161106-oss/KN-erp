@@ -63,8 +63,8 @@ export interface DataTableProps<T extends { id: string; row_index?: number | nul
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
   lastModifiedText?: string;
   onExport?: (mode: 'ALL' | 'FILTERED' | 'SELECTED') => void;
-  /** Fixed-height spreadsheet rows; all records remain available to edit/export. */
-  virtualize?: boolean;
+  customRowActions?: (row: T) => Array<{ label: string; onClick: (row?: T) => void; icon?: React.ReactNode; disabled?: boolean; className?: string }>;
+  onSaveRow?: (rowId: string, updates: Record<string, any>) => Promise<void>;
 }
 
 // Convert column width specifications (e.g. 'w-44', '180px', or 180) to pure pixel numbers
@@ -117,7 +117,8 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   storageKey,
   saveStatus = 'idle',
   lastModifiedText,
-  virtualize = false,
+  customRowActions,
+  onSaveRow,
 }: DataTableProps<T>) {
   // --- Persistent Layout State ---
   const persistentKey = storageKey ? `knl_grid_layout_${storageKey}` : null;
@@ -334,6 +335,10 @@ export default function DataTable<T extends { id: string; row_index?: number | n
 
   // --- Row Editor Modal State ---
   const [rowEditorItem, setRowEditorItem] = useState<T | null>(null);
+  const [rowEditorDraft, setRowEditorDraft] = useState<Record<string, string>>({});
+  const [rowEditorInitial, setRowEditorInitial] = useState<Record<string, string>>({});
+  const [isSavingRowEditor, setIsSavingRowEditor] = useState(false);
+  const [rowEditorError, setRowEditorError] = useState<string | null>(null);
 
   // --- Delete Confirmation Modal State ---
   const [confirmDeleteIds, setConfirmDeleteIds] = useState<string[] | null>(null);
@@ -633,9 +638,104 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   const applyCellEdit = (rowId: string, colKey: keyof T & string, value: string) =>
     applyEdits([{ rowId, colKey, value }]);
 
+  const openRowEditor = useCallback((row: T) => {
+    const initialMap: Record<string, string> = {};
+    columns.forEach(col => {
+      const rawVal = (row as any)[col.key];
+      if (rawVal === null || rawVal === undefined) {
+        initialMap[col.key] = '';
+      } else if (typeof rawVal === 'number') {
+        initialMap[col.key] = Number(rawVal).toFixed(2);
+      } else {
+        initialMap[col.key] = String(rawVal);
+      }
+    });
+    setRowEditorInitial(initialMap);
+    setRowEditorDraft(initialMap);
+    setRowEditorError(null);
+    setRowEditorItem(row);
+  }, [columns]);
+
   useEffect(() => {
-    setRowEditorItem(prev => prev ? data.find(row => row.id === prev.id) || null : null);
-  }, [data]);
+    if (!rowEditorItem || onSaveRow) return;
+    const fresh = data.find(r => r.id === rowEditorItem.id);
+    if (fresh) {
+      setRowEditorDraft(prev => {
+        const next = { ...prev };
+        columns.forEach(col => {
+          const raw = (fresh as any)[col.key];
+          next[col.key] = raw === null || raw === undefined ? '' : String(raw);
+        });
+        return next;
+      });
+    }
+  }, [data, rowEditorItem, onSaveRow, columns]);
+
+  const isRowEditorDirty = useMemo(() => {
+    if (!rowEditorItem) return false;
+    return Object.keys(rowEditorDraft).some(k => (rowEditorDraft[k] ?? '') !== (rowEditorInitial[k] ?? ''));
+  }, [rowEditorItem, rowEditorDraft, rowEditorInitial]);
+
+  const handleCloseRowEditor = useCallback(() => {
+    if (isSavingRowEditor) return;
+    if (isRowEditorDirty) {
+      if (window.confirm('Discard unsaved changes? Any edits made in this dialog will be lost.')) {
+        setRowEditorItem(null);
+        setRowEditorError(null);
+      }
+    } else {
+      setRowEditorItem(null);
+      setRowEditorError(null);
+    }
+  }, [isSavingRowEditor, isRowEditorDirty]);
+
+  const handleSaveRowEditor = useCallback(async () => {
+    if (!rowEditorItem || !isRowEditorDirty || isSavingRowEditor) return;
+    setIsSavingRowEditor(true);
+    setRowEditorError(null);
+    try {
+      const changedFields: Record<string, string> = {};
+      for (const [k, v] of Object.entries(rowEditorDraft)) {
+        if ((v ?? '') !== (rowEditorInitial[k] ?? '')) {
+          changedFields[k] = v;
+        }
+      }
+      if (onSaveRow) {
+        await onSaveRow(rowEditorItem.id, changedFields);
+      } else {
+        const edits = Object.entries(changedFields).map(([k, v]) => ({
+          rowId: rowEditorItem.id,
+          colKey: k as any,
+          value: v,
+        }));
+        applyEdits(edits);
+        if (onSave) {
+          await onSave();
+        }
+      }
+      setRowEditorItem(null);
+    } catch (err: any) {
+      setRowEditorError(err?.message || 'Failed to save row changes.');
+    } finally {
+      setIsSavingRowEditor(false);
+    }
+  }, [rowEditorItem, isRowEditorDirty, isSavingRowEditor, rowEditorDraft, rowEditorInitial, onSaveRow, onSave, applyEdits]);
+
+  useEffect(() => {
+    if (!rowEditorItem) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleCloseRowEditor();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        e.stopPropagation();
+        void handleSaveRowEditor();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [rowEditorItem, handleCloseRowEditor, handleSaveRowEditor]);
 
   // Keyboard shortcut Ctrl/Cmd+S and Ctrl/Cmd+A and Undo/Redo inside grid
   useEffect(() => {
@@ -1637,7 +1737,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                       disabled={!canUpdate}
                       onClick={() => {
                         const targetRow = data.find(r => r.id === contextMenu.rowId);
-                        if (targetRow) setRowEditorItem(targetRow);
+                        if (targetRow) openRowEditor(targetRow);
                         setContextMenu(null);
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-gray-100 disabled:opacity-40 flex items-center justify-between"
@@ -1867,7 +1967,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                       type="button"
                       onClick={() => {
                         const targetRow = data.find(r => r.id === contextMenu.rowId);
-                        if (targetRow) setRowEditorItem(targetRow);
+                        if (targetRow) openRowEditor(targetRow);
                         setContextMenu(null);
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-gray-100"
@@ -1875,6 +1975,34 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                       Edit row…
                     </button>
                   )}
+
+                  {customRowActions && contextMenu.rowId && (() => {
+                    const targetRow = data.find(r => r.id === contextMenu.rowId);
+                    if (!targetRow) return null;
+                    const actions = customRowActions(targetRow);
+                    if (!actions || actions.length === 0) return null;
+                    return (
+                      <div className="py-1 border-t border-gray-100">
+                        {actions.map((act, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            disabled={act.disabled}
+                            onClick={() => {
+                              setContextMenu(null);
+                              act.onClick(targetRow);
+                            }}
+                            className={`w-full text-left px-3 py-1.5 hover:bg-gray-100 flex items-center gap-2 ${
+                              act.className || 'text-gray-800'
+                            }`}
+                          >
+                            {act.icon}
+                            <span>{act.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
 
                   {canDelete && onDeleteRows && (
                     <button
@@ -1884,7 +2012,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                         setConfirmDeleteIds(idsToDelete);
                         setContextMenu(null);
                       }}
-                      className="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 font-semibold"
+                      className="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 font-semibold border-t border-gray-100"
                     >
                       Delete row(s)…
                     </button>
@@ -1897,63 +2025,164 @@ export default function DataTable<T extends { id: string; row_index?: number | n
         )}
 
       {/* 6. Row Editor Panel Modal */}
-      {rowEditorItem && (
-        <div className="fixed inset-0 bg-black/40 z-[10000] flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-2xl max-w-lg w-full p-5 space-y-4 max-h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between border-b pb-2">
-              <h3 className="text-base font-bold text-gray-900">
-                Edit Row (ID: {String(rowEditorItem.id).slice(0, 8)}…)
-              </h3>
-              <button
-                type="button"
-                onClick={() => setRowEditorItem(null)}
-                className="text-gray-400 hover:text-gray-700 text-lg font-bold"
-              >
-                ✕
-              </button>
-            </div>
+      {rowEditorItem && (() => {
+        const rowItemId = String((rowEditorItem as any).item_id || rowEditorItem.id || '');
+        const rowItemDesc = String(
+          (rowEditorItem as any).item_description ||
+          (rowEditorItem as any).name ||
+          (rowEditorItem as any).description ||
+          ''
+        );
+        const modalTitle = rowItemId && rowItemDesc
+          ? `Edit row: ${rowItemId} - ${rowItemDesc}`
+          : `Edit row: ${rowItemId}`;
 
-            <div className="flex-1 overflow-y-auto space-y-3 pr-1 text-xs">
-              {columns.map(col => {
-                const isEditable = canUpdate && col.isEditable !== false;
-                const val = String((rowEditorItem as any)[col.key] ?? '');
-                return (
-                  <div key={col.key} className="space-y-1">
-                    <label htmlFor={`edit-row-${rowEditorItem.id}-${col.key}`} className="font-semibold text-gray-700 block">{col.label}</label>
-                    {isEditable ? (
-                      <input
-                        type="text"
-                        id={`edit-row-${rowEditorItem.id}-${col.key}`}
-                        value={val}
-                        onChange={e => {
-                          const nextVal = e.target.value;
-                          setRowEditorItem(prev => (prev ? { ...prev, [col.key]: nextVal } : null));
-                          applyCellEdit(rowEditorItem.id, col.key, nextVal);
-                        }}
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 font-mono text-xs"
-                      />
-                    ) : (
-                      <div className="px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded text-gray-600 font-mono text-xs">
-                        {val || '—'}
-                      </div>
-                    )}
+        // Arithmetic check for stock statements
+        const hasQtyCols = ['opening_qty', 'receipt_qty', 'issue_qty', 'closing_qty'].every(k =>
+          columns.some(c => c.key === k)
+        );
+        let arithmeticMismatchMsg: string | null = null;
+        if (hasQtyCols) {
+          const op = parseFloat(rowEditorDraft['opening_qty'] || '0') || 0;
+          const rc = parseFloat(rowEditorDraft['receipt_qty'] || '0') || 0;
+          const is = parseFloat(rowEditorDraft['issue_qty'] || '0') || 0;
+          const cl = parseFloat(rowEditorDraft['closing_qty'] || '0') || 0;
+          const expected = op + rc - is;
+          if (Math.abs(expected - cl) > 0.01) {
+            arithmeticMismatchMsg = `Opening (${op.toFixed(2)}) + Receipt (${rc.toFixed(2)}) - Issue (${is.toFixed(2)}) = ${expected.toFixed(2)}, which differs from entered Closing (${cl.toFixed(2)}) by ${(cl - expected).toFixed(2)}.`;
+          }
+        }
+
+        return (
+          <div className="fixed inset-0 bg-black/50 z-[10000] flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl shadow-2xl max-w-xl w-full flex flex-col max-h-[85vh] overflow-hidden border border-gray-200">
+              {/* Header */}
+              <div className="flex items-center justify-between border-b px-5 py-3.5 bg-gray-50">
+                <h3 className="text-sm font-bold text-gray-900 truncate pr-2" title={modalTitle}>
+                  {modalTitle}
+                </h3>
+                <button
+                  type="button"
+                  onClick={handleCloseRowEditor}
+                  className="text-gray-400 hover:text-gray-700 text-base font-bold p-1 rounded hover:bg-gray-200 transition-colors"
+                  title="Close (Esc)"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Error banner if save fails */}
+              {rowEditorError && (
+                <div className="mx-5 mt-3 p-2.5 bg-red-50 border border-red-200 text-red-700 rounded text-xs flex items-center gap-2">
+                  <span>⚠️</span>
+                  <span>{rowEditorError}</span>
+                </div>
+              )}
+
+              {/* Arithmetic mismatch warning banner */}
+              {arithmeticMismatchMsg && (
+                <div className="mx-5 mt-3 p-2.5 bg-amber-50 border border-amber-200 text-amber-800 rounded text-xs flex items-start gap-2">
+                  <span className="shrink-0 mt-0.5">⚠️</span>
+                  <div>
+                    <span className="font-semibold">Arithmetic check warning: </span>
+                    <span>{arithmeticMismatchMsg}</span>
                   </div>
-                );
-              })}
-            </div>
+                </div>
+              )}
 
-            <div className="flex justify-end gap-2 pt-3 border-t">
-              <button
-                type="button"
-                onClick={() => setRowEditorItem(null)}
-                className="px-4 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded font-semibold text-xs"
-              >
-                Close
-              </button>
+              {/* Form scrollable body */}
+              <div className="flex-1 overflow-y-auto p-5 space-y-3.5 text-xs">
+                {columns.map(col => {
+                  const readOnlyKeys = ['item_id', 'unit', 'item_class', 'store_group'];
+                  const isEditable = canUpdate && col.isEditable !== false && !readOnlyKeys.includes(col.key);
+                  const currentVal = rowEditorDraft[col.key] ?? '';
+                  const isNumericCol = col.key.includes('qty') || col.key.includes('value') || col.key.includes('rate') || col.key.includes('amount');
+                  const isValueCol = col.key.includes('value') || col.key.includes('rate') || col.key.includes('amount');
+
+                  return (
+                    <div key={col.key} className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <label htmlFor={`edit-row-${rowEditorItem.id}-${col.key}`} className="font-semibold text-gray-700">
+                          {col.label}
+                          {!isEditable && <span className="ml-1.5 text-[10px] text-gray-400 font-normal">(Read-only)</span>}
+                        </label>
+                        {isValueCol && currentVal && !isNaN(parseFloat(currentVal)) && (
+                          <span className="text-[11px] font-mono text-emerald-700 font-semibold">
+                            Preview: ₹ {parseFloat(currentVal).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        )}
+                      </div>
+                      {isEditable ? (
+                        <div>
+                          <input
+                            type="text"
+                            id={`edit-row-${rowEditorItem.id}-${col.key}`}
+                            value={currentVal}
+                            onChange={e => {
+                              const nextVal = e.target.value;
+                              setRowEditorDraft(prev => ({ ...prev, [col.key]: nextVal }));
+                              if (!onSaveRow) {
+                                applyCellEdit(rowEditorItem.id, col.key, nextVal);
+                              }
+                            }}
+                            placeholder={isNumericCol ? 'Empty (null)' : 'Enter value'}
+                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 font-mono text-xs bg-white text-gray-900"
+                          />
+                          {isNumericCol && (
+                            <p className="text-[10px] text-gray-400 mt-0.5">
+                              {col.key.includes('qty') ? 'Quantity (2 decimals, empty = null)' : 'Value (currency ₹, empty = null)'}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="px-2.5 py-1.5 bg-gray-100 border border-gray-200 rounded text-gray-600 font-mono text-xs select-none">
+                          {currentVal || '—'}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Sticky Footer */}
+              <div className="flex items-center justify-between px-5 py-3 border-t bg-gray-50 shrink-0">
+                <div className="text-[11px] text-gray-500">
+                  {isRowEditorDirty ? (
+                    <span className="text-amber-700 font-medium">Unsaved changes (Ctrl+S to save)</span>
+                  ) : (
+                    <span>No changes made</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCloseRowEditor}
+                    disabled={isSavingRowEditor}
+                    className="px-3.5 py-1.5 bg-white border border-gray-300 hover:bg-gray-100 text-gray-700 rounded font-semibold text-xs transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveRowEditor}
+                    disabled={!isRowEditorDirty || isSavingRowEditor}
+                    className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded font-semibold text-xs shadow-xs transition-colors"
+                  >
+                    {isSavingRowEditor ? (
+                      <>
+                        <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span>Saving…</span>
+                      </>
+                    ) : (
+                      <span>Save</span>
+                    )}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* 7. Row Delete Confirmation Dialog */}
       {confirmDeleteIds && (

@@ -24,11 +24,13 @@ from app.models.grn import GRNItem
 from app.models.inventory import StockSnapshot
 from app.models.inventory_masters import Consumable, Unit
 from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem
+from app.models.stock_statements import StockParameter, StockParameterBatch
 from app.schemas.alerts import (
     AlertEvaluationSummaryResponse,
     InventoryAlertResponse,
 )
 from app.schemas.auth import CurrentUser
+from app.services.stock_management_service import resolve_stock_parameter_for_item
 
 DEFAULT_MSL_THRESHOLD = Decimal("100.0000")
 
@@ -168,13 +170,48 @@ def evaluate_inventory_alerts(session: Session) -> AlertEvaluationSummaryRespons
 
     snapshot_by_consumable = {s.consumable_id: s for s in latest_snapshots}
 
+    latest_param_batch = session.scalar(
+        select(StockParameterBatch)
+        .where(StockParameterBatch.status == "active")
+        .order_by(StockParameterBatch.year.desc(), StockParameterBatch.month.desc())
+        .limit(1)
+    )
+    params_by_item: dict[str, list[StockParameter]] = {}
+    if latest_param_batch:
+        for p in session.scalars(select(StockParameter).where(StockParameter.batch_id == latest_param_batch.id)).all():
+            params_by_item.setdefault(p.item_id.strip().upper(), []).append(p)
+
     counts = {"created": 0, "updated": 0}
 
     for c in consumables:
         snap = snapshot_by_consumable.get(c.id)
         current_stock = snap.usable_quantity if snap else Decimal("0.0000")
-        threshold_qty = DEFAULT_MSL_THRESHOLD
         uom_str = units_map.get(c.unit_id, "UNK")
+
+        c_params = params_by_item.get(c.code.strip().upper(), [])
+        threshold_qty = DEFAULT_MSL_THRESHOLD
+        ambig_flag: Optional[str] = None
+        if c_params:
+            resolved_p, flag_msg = resolve_stock_parameter_for_item(c_params, category=c.category)
+            if resolved_p is not None and resolved_p.min_stock_level is not None:
+                threshold_qty = resolved_p.min_stock_level
+            elif resolved_p is None and len(c_params) > 1:
+                ambig_flag = flag_msg
+
+        if ambig_flag:
+            _process_alert_condition(
+                session=session,
+                consumable=c,
+                alert_type="LOW_STOCK",
+                severity="WARNING",
+                current_stock=current_stock,
+                threshold_qty=Decimal("0.0000"),
+                uom=uom_str,
+                message=f"WARNING: {c.code} has ambiguous stock limits across categories ({ambig_flag}).",
+                condition_active=True,
+                counts=counts,
+            )
+            continue
 
         # Check conditions
         is_below_msl = current_stock < threshold_qty

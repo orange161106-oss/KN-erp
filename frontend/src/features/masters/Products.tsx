@@ -47,28 +47,56 @@ interface SalesPartRow {
   is_active: boolean;
 }
 
+interface AssembleRowIssue {
+  row: number;
+  column?: string;
+  error_code: string;
+  message: string;
+  raw_value?: string;
+  suggested_action?: string;
+}
+
+interface AssemblePreviewData {
+  file_token: string;
+  source_filename: string;
+  detected_header_row: number;
+  columns_matched: string[];
+  total_rows: number;
+  rows_to_add: number;
+  rows_to_update: number;
+  errors: AssembleRowIssue[];
+  warning_count: number;
+  error_count: number;
+  can_confirm: boolean;
+}
+
+interface AssembleJobStatus {
+  job_id: string;
+  status: string;
+  stage: string;
+  progress_percent: number;
+  total_rows: number;
+  upserted: number;
+  rows_added: number;
+  rows_updated: number;
+  errors: AssembleRowIssue[];
+  error_message?: string;
+}
+
 export default function Products() {
   const { user } = useAuth();
   const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
+  const userRole = (user?.role || user?.roles?.[0] || (isSuperAdmin ? 'SUPER ADMIN' : 'USER')).toUpperCase();
+  const isAdmin = ['SUPER ADMIN', 'ADMIN'].includes(userRole) || isSuperAdmin || (user?.roles || []).some(r => ['SUPER ADMIN', 'ADMIN'].includes(r.toUpperCase()));
+
   const canRead = Boolean(
-    isSuperAdmin ||
+    isAdmin ||
     user?.masters_read ||
     user?.permissions?.includes('masters.read') ||
     user?.permissions?.some((p: string) => p.startsWith('masters.'))
   );
-  const canCreate = Boolean(
-    isSuperAdmin ||
-    user?.masters_create ||
-    user?.permissions?.includes('masters.write') ||
-    user?.permissions?.some((p: string) => p.endsWith('.write'))
-  );
-  const canEdit = Boolean(
-    isSuperAdmin ||
-    user?.masters_create ||
-    user?.permissions?.includes('masters.write') ||
-    user?.permissions?.some((p: string) => p.endsWith('.write'))
-  );
-  const canDelete = canEdit;
+  const canCreate = isAdmin;
+  const canEdit = isAdmin;
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('consumables');
 
@@ -86,6 +114,10 @@ export default function Products() {
   // Bulk Upload Modal & Progress states
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [assemblePreview, setAssemblePreview] = useState<AssemblePreviewData | null>(null);
+  const [assembleJob, setAssembleJob] = useState<AssembleJobStatus | null>(null);
+  const [isConfirming, setIsConfirming] = useState<boolean>(false);
 
   const activeTabLabel = useMemo(() => {
     switch (activeTab) {
@@ -339,7 +371,7 @@ export default function Products() {
   const handleAssembleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!assembleForm.consumable_item.trim() || !assembleForm.part_no_saleable_item.trim()) {
-      setFeedback({ type: 'error', message: 'Consumable Item and Saleable Part No. are required.' });
+      setFeedback({ type: 'error', message: 'Consumable Description and Part No. of Saleable Item are required.' });
       return;
     }
     setSubmitting(true);
@@ -476,6 +508,275 @@ export default function Products() {
   };
 
   // ---------------------------------------------------------------------------
+<<<<<<< HEAD
+=======
+  // Bulk Excel File Upload & Header Hunter Execution
+  // ---------------------------------------------------------------------------
+
+  const handleFileUpload = async (file: File) => {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.xlsx')) {
+      const err = 'Please select a valid Excel (.xlsx) file.';
+      setUploadError(err);
+      setFeedback({ type: 'error', message: err });
+      return;
+    }
+
+    if (file.size > 15 * 1024 * 1024) {
+      const err = 'File size exceeds 15 MB limit. Please select a smaller file.';
+      setUploadError(err);
+      setFeedback({ type: 'error', message: err });
+      return;
+    }
+
+    setSelectedFile(file);
+    setUploading(true);
+    setUploadProgress(0);
+    setUploadPhase('uploading');
+    setUploadError(null);
+    setFeedback(null);
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const token = getAccessToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    // Two-step preview for Consumable for Assemble tab
+    if (activeTab === 'assemble') {
+      try {
+        const response = await axios.post<AssemblePreviewData>(
+          `${getApiBaseUrl()}/api/v1/masters/product-master/assemble/preview`,
+          formData,
+          {
+            headers,
+            timeout: 60000,
+            onUploadProgress: (progressEvent: AxiosProgressEvent) => {
+              if (progressEvent.total) {
+                const percent = Math.round((progressEvent.loaded / progressEvent.total) * 100);
+                setUploadProgress(percent);
+                if (percent >= 100) {
+                  setUploadPhase('parsing');
+                } else {
+                  setUploadPhase('uploading');
+                }
+              }
+            },
+          }
+        );
+
+        setAssemblePreview(response.data);
+        setUploading(false);
+        setUploadProgress(0);
+        setUploadPhase('idle');
+        return;
+      } catch (e: any) {
+        const isTimeout = e?.code === 'ECONNABORTED' || e?.message?.includes('timeout');
+        const errMsg = isTimeout
+          ? 'Preview generation timed out after 60 seconds. High network latency or large row processing took too long. You can click "Retry Upload" below.'
+          : e?.response?.data?.message ||
+            e?.response?.data?.detail ||
+            e?.message ||
+            'Failed to preview assemble file.';
+        setUploadError(errMsg);
+        setFeedback({ type: 'error', message: errMsg });
+        setUploading(false);
+        return;
+      }
+    }
+
+    // Direct upload for consumables and sales_parts tabs
+    let endpoint = '/api/v1/masters/product-master/consumables/bulk';
+    if (activeTab === 'sales_parts') {
+      endpoint = '/api/v1/masters/product-master/sales-parts/bulk';
+    }
+
+    try {
+      const response = await axios.post<{
+        total_rows: number;
+        upserted: number;
+        errors: string[];
+      }>(`${getApiBaseUrl()}${endpoint}`, formData, {
+        headers,
+        timeout: 60000,
+        onUploadProgress: (progressEvent: AxiosProgressEvent) => {
+          if (progressEvent.total) {
+            const percent = Math.round((progressEvent.loaded / progressEvent.total) * 100);
+            setUploadProgress(percent);
+            if (percent >= 100) {
+              setUploadPhase('parsing');
+            } else {
+              setUploadPhase('uploading');
+            }
+          }
+        },
+      });
+
+      const res = response.data;
+      const msg = `Bulk upload complete: ${res.upserted} records successfully upserted out of ${res.total_rows} evaluated rows.`;
+      setFeedback({ type: 'success', message: msg });
+      setToast({ type: 'success', message: msg });
+      if (res.errors && res.errors.length > 0) {
+        console.warn('Bulk upload row notices:', res.errors);
+      }
+
+      setIsUploadModalOpen(false);
+      setUploading(false);
+      setUploadProgress(0);
+      setUploadPhase('idle');
+      setSelectedFile(null);
+      await loadData();
+    } catch (e: any) {
+      const isTimeout = e?.code === 'ECONNABORTED' || e?.message?.includes('timeout');
+      const errMsg = isTimeout
+        ? 'Processing timed out after 60 seconds. High network latency or large row processing took too long. You can click "Retry Upload" below.'
+        : e?.response?.data?.message ||
+          e?.response?.data?.detail ||
+          e?.message ||
+          'Bulk upload failed.';
+      setUploadError(errMsg);
+      setFeedback({ type: 'error', message: errMsg });
+      setUploading(false);
+    }
+  };
+
+  const handleConfirmAssemble = async () => {
+    if (!assemblePreview?.file_token) return;
+    setIsConfirming(true);
+    setUploadError(null);
+    try {
+      const token = getAccessToken();
+      const headers: Record<string, string> = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      const res = await axios.post<AssembleJobStatus>(
+        `${getApiBaseUrl()}/api/v1/masters/product-master/assemble/confirm`,
+        { file_token: assemblePreview.file_token },
+        { headers, timeout: 60000 }
+      );
+
+      const job = res.data;
+      if (job.status === 'completed') {
+        const msg = `Bulk import complete: ${job.upserted} records successfully upserted.`;
+        setFeedback({ type: 'success', message: msg });
+        setToast({ type: 'success', message: msg });
+        setIsUploadModalOpen(false);
+        setAssemblePreview(null);
+        setSelectedFile(null);
+        setIsConfirming(false);
+        await loadData();
+      } else {
+        setAssembleJob(job);
+        pollAssembleJob(job.job_id);
+      }
+    } catch (e: any) {
+      const isTimeout = e?.code === 'ECONNABORTED' || e?.message?.includes('timeout');
+      const errMsg = isTimeout
+        ? 'Import request timed out. Your import may be continuing in the background. You can retry if needed.'
+        : e?.response?.data?.message || e?.response?.data?.detail || e?.message || 'Import confirmation failed.';
+      setUploadError(errMsg);
+      setIsConfirming(false);
+    }
+  };
+
+  const pollAssembleJob = (jobId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const token = getAccessToken();
+        const headers: Record<string, string> = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
+
+        const res = await axios.get<AssembleJobStatus>(
+          `${getApiBaseUrl()}/api/v1/masters/product-master/assemble/jobs/${jobId}`,
+          { headers }
+        );
+        const job = res.data;
+        setAssembleJob(job);
+
+        if (job.status === 'completed') {
+          clearInterval(interval);
+          const msg = `Bulk import complete: ${job.upserted} records successfully upserted.`;
+          setFeedback({ type: 'success', message: msg });
+          setToast({ type: 'success', message: msg });
+          setIsUploadModalOpen(false);
+          setAssemblePreview(null);
+          setAssembleJob(null);
+          setSelectedFile(null);
+          setIsConfirming(false);
+          await loadData();
+        } else if (job.status === 'failed') {
+          clearInterval(interval);
+          setUploadError(`Import failed: ${job.error_message || 'Background import failed.'}`);
+          setIsConfirming(false);
+        }
+      } catch {
+        clearInterval(interval);
+        setUploadError('Failed to retrieve background job progress.');
+        setIsConfirming(false);
+      }
+    }, 1500);
+  };
+
+  const handleDownloadErrorReport = async () => {
+    if (!assemblePreview?.file_token) return;
+    try {
+      const token = getAccessToken();
+      const url = `${getApiBaseUrl()}/api/v1/masters/product-master/assemble/preview-errors?file_token=${encodeURIComponent(
+        assemblePreview.file_token
+      )}`;
+      const res = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error('Failed to download error report');
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `assemble_import_errors_${assemblePreview.source_filename || 'assemble.xlsx'}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err: any) {
+      setUploadError(`Error report download failed: ${err.message}`);
+    }
+  };
+
+  const handleResetUpload = () => {
+    setAssemblePreview(null);
+    setAssembleJob(null);
+    setSelectedFile(null);
+    setUploadError(null);
+    setUploading(false);
+    setIsConfirming(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // Drag and drop handlers
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActive(true);
+    } else if (e.type === 'dragleave') {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileUpload(e.dataTransfer.files[0]);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+>>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
   // Localized Inline Column Search Filters
   // ---------------------------------------------------------------------------
 
@@ -542,6 +843,7 @@ export default function Products() {
             Authoritative master catalog for raw consumables, sales parts, and assembly BOM mappings.
           </p>
         </div>
+<<<<<<< HEAD
         <button
           type="button"
           onClick={() => setIsUploadModalOpen(true)}
@@ -550,6 +852,22 @@ export default function Products() {
         >
           Bulk Import ☁️
         </button>
+=======
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={() => {
+              setUploadError(null);
+              setUploadProgress(0);
+              setUploadPhase('idle');
+              setIsUploadModalOpen(true);
+            }}
+            className="inline-flex items-center gap-2 bg-erp-orange hover:bg-erp-tenne text-white text-xs sm:text-sm font-semibold px-4 py-2.5 rounded-lg shadow-sm hover:shadow transition-all"
+          >
+            Bulk Import ☁️
+          </button>
+        )}
+>>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
       </div>
 
       {/* Task 2: Dashboard KPI Cards (Top Row) */}
@@ -684,7 +1002,8 @@ export default function Products() {
       {activeTab === 'consumables' && (
         <div className="space-y-6">
           {/* Horizontal Single Consumable Intake Panel */}
-          <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
+          {isAdmin && (
+            <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 mb-5 border-b border-erp-dark-vanilla/20 gap-3">
               <div>
                 <h2 className="text-base font-bold text-erp-chocolate flex items-center gap-2">
@@ -879,6 +1198,7 @@ export default function Products() {
               </div>
             </form>
           </div>
+          )}
 
           {/* Consumables Data Table with Localized Inline Search */}
           <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
@@ -1019,16 +1339,18 @@ export default function Products() {
                     </th>
 
                     {/* 9. Actions Header */}
-                    <th className="p-3 w-24 text-center">
-                      <div>Actions</div>
-                      <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
-                    </th>
+                    {isAdmin && (
+                      <th className="p-3 w-24 text-center">
+                        <div>Actions</div>
+                        <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
+                      </th>
+                    )}
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-gray-100 font-mono">
                   {loading ? (
-                    <TableSkeletonRows rows={7} columns={9} />
+                    <TableSkeletonRows rows={7} columns={isAdmin ? 9 : 8} />
                   ) : filteredConsumables.length > 0 ? (
                     filteredConsumables.map((row) => (
                       <tr
@@ -1082,33 +1404,34 @@ export default function Products() {
                         <td className="p-3 text-right font-semibold text-erp-tenne">
                           {row.rate !== null && row.rate !== undefined ? row.rate : '—'}
                         </td>
-                        <td className="p-3 text-center whitespace-nowrap">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => startEditConsumable(row)}
-                              disabled={!canEdit}
-                              title="Edit consumable"
-                              className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors disabled:opacity-40 text-xs"
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeactivate('consumables', row.id, row.item_id)}
-                              disabled={!canDelete || actionLoadingId === row.id}
-                              title="Delete consumable"
-                              className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
-                            >
-                              {actionLoadingId === row.id ? '…' : '🗑️'}
-                            </button>
-                          </div>
-                        </td>
+                        {isAdmin && (
+                          <td className="p-3 text-center whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => startEditConsumable(row)}
+                                title="Edit consumable"
+                                className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors text-xs"
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeactivate('consumables', row.id, row.item_id)}
+                                disabled={actionLoadingId === row.id}
+                                title="Delete consumable"
+                                className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
+                              >
+                                {actionLoadingId === row.id ? '…' : '🗑️'}
+                              </button>
+                            </div>
+                          </td>
+                        )}
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={9} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
+                      <td colSpan={isAdmin ? 9 : 8} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
                         No consumables match your search filters or the master table is empty.
                       </td>
                     </tr>
@@ -1126,7 +1449,8 @@ export default function Products() {
       {activeTab === 'assemble' && (
         <div className="space-y-6">
           {/* Horizontal Single Assembly Intake Panel */}
-          <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
+          {isAdmin && (
+            <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 mb-5 border-b border-erp-dark-vanilla/20 gap-3">
               <div>
                 <h2 className="text-base font-bold text-erp-chocolate flex items-center gap-2">
@@ -1194,7 +1518,7 @@ export default function Products() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
                   <div>
                     <label className="block text-[11px] font-semibold text-erp-chocolate mb-1">
-                      Consumable Item <span className="text-erp-orange">*</span>
+                      Consumable Description <span className="text-erp-orange">*</span>
                     </label>
                     <input
                       type="text"
@@ -1208,7 +1532,7 @@ export default function Products() {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-erp-chocolate mb-1">
-                      Saleable Part No. <span className="text-erp-orange">*</span>
+                      Part No. of Saleable Item <span className="text-erp-orange">*</span>
                     </label>
                     <input
                       type="text"
@@ -1222,7 +1546,7 @@ export default function Products() {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-erp-chocolate mb-1">
-                      Part Name
+                      Used for – Name of Saleable Part
                     </label>
                     <input
                       type="text"
@@ -1235,7 +1559,7 @@ export default function Products() {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-erp-chocolate mb-1">
-                      PRD Part No.
+                      Used Part No. (PRD Order)
                     </label>
                     <input
                       type="text"
@@ -1272,7 +1596,7 @@ export default function Products() {
 
                     <div>
                       <label className="block text-[11px] font-semibold text-erp-chocolate mb-1">
-                        Thickness (mm/gsm)
+                        Material Thickness in mm / GSM
                       </label>
                       <input
                         type="text"
@@ -1285,7 +1609,7 @@ export default function Products() {
 
                     <div>
                       <label className="block text-[11px] font-semibold text-erp-chocolate mb-1">
-                        Process Qty
+                        No. of Processes per Part
                       </label>
                       <input
                         type="number"
@@ -1308,7 +1632,7 @@ export default function Products() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                     <div>
                       <label className="block text-[11px] font-semibold text-erp-chocolate mb-1">
-                        Output Unit
+                        Output / Unit
                       </label>
                       <input
                         type="text"
@@ -1337,6 +1661,7 @@ export default function Products() {
               </div>
             </form>
           </div>
+          )}
 
           {/* Assembly Data Table with Localized Inline Search */}
           <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
@@ -1381,8 +1706,8 @@ export default function Products() {
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-erp-vanilla/35 text-erp-chocolate font-semibold border-b border-gray-200">
                   <tr>
-                    <th className="p-3 min-w-[130px]">
-                      <div>Consumable Item</div>
+                    <th className="p-3 min-w-[150px]">
+                      <div>Consumable Description</div>
                       <input
                         type="text"
                         placeholder="Search..."
@@ -1392,8 +1717,8 @@ export default function Products() {
                       />
                     </th>
 
-                    <th className="p-3 min-w-[130px]">
-                      <div>Saleable Part No.</div>
+                    <th className="p-3 min-w-[150px]">
+                      <div>Part No. of Saleable Item</div>
                       <input
                         type="text"
                         placeholder="Search..."
@@ -1404,7 +1729,7 @@ export default function Products() {
                     </th>
 
                     <th className="p-3 min-w-[180px]">
-                      <div>Saleable Part Name</div>
+                      <div>Used for – Name of Saleable Part</div>
                       <input
                         type="text"
                         placeholder="Search..."
@@ -1414,8 +1739,8 @@ export default function Products() {
                       />
                     </th>
 
-                    <th className="p-3 min-w-[120px]">
-                      <div>PRD Part No.</div>
+                    <th className="p-3 min-w-[150px]">
+                      <div>Used Part No. (PRD Order)</div>
                       <input
                         type="text"
                         placeholder="Search..."
@@ -1425,8 +1750,8 @@ export default function Products() {
                       />
                     </th>
 
-                    <th className="p-3 min-w-[110px]">
-                      <div>Process</div>
+                    <th className="p-3 min-w-[120px]">
+                      <div>Process Name</div>
                       <input
                         type="text"
                         placeholder="Search..."
@@ -1436,8 +1761,8 @@ export default function Products() {
                       />
                     </th>
 
-                    <th className="p-3 min-w-[100px]">
-                      <div>Thickness</div>
+                    <th className="p-3 min-w-[160px]">
+                      <div>Material Thickness in mm / GSM</div>
                       <input
                         type="text"
                         placeholder="Search..."
@@ -1447,8 +1772,8 @@ export default function Products() {
                       />
                     </th>
 
-                    <th className="p-3 min-w-[90px] text-right">
-                      <div>Qty / Part</div>
+                    <th className="p-3 min-w-[150px] text-right">
+                      <div>No. of Processes per Part</div>
                       <input
                         type="text"
                         placeholder="Qty"
@@ -1458,8 +1783,8 @@ export default function Products() {
                       />
                     </th>
 
-                    <th className="p-3 min-w-[80px] text-center">
-                      <div>Unit</div>
+                    <th className="p-3 min-w-[100px] text-center">
+                      <div>Output / Unit</div>
                       <input
                         type="text"
                         placeholder="UOM"
@@ -1470,7 +1795,7 @@ export default function Products() {
                     </th>
 
                     <th className="p-3 min-w-[90px] text-right">
-                      <div>Rate (₹)</div>
+                      <div>Rate</div>
                       <input
                         type="text"
                         placeholder="Rate"
@@ -1481,16 +1806,18 @@ export default function Products() {
                     </th>
 
                     {/* 10. Actions Header */}
-                    <th className="p-3 w-24 text-center">
-                      <div>Actions</div>
-                      <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
-                    </th>
+                    {isAdmin && (
+                      <th className="p-3 w-24 text-center">
+                        <div>Actions</div>
+                        <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
+                      </th>
+                    )}
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-gray-100 font-mono">
                   {loading ? (
-                    <TableSkeletonRows rows={7} columns={10} />
+                    <TableSkeletonRows rows={7} columns={isAdmin ? 10 : 9} />
                   ) : filteredAssembleRows.length > 0 ? (
                     filteredAssembleRows.map((row) => (
                       <tr
@@ -1537,33 +1864,34 @@ export default function Products() {
                         <td className="p-3 text-right font-semibold text-erp-tenne">
                           {row.rate !== null ? `₹${row.rate.toFixed(2)}` : '—'}
                         </td>
-                        <td className="p-3 text-center whitespace-nowrap">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => startEditAssemble(row)}
-                              disabled={!canEdit}
-                              title="Edit assembly mapping"
-                              className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors disabled:opacity-40 text-xs"
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeactivate('assemble', row.id, `${row.consumable_item} -> ${row.part_no_saleable_item}`)}
-                              disabled={!canDelete || actionLoadingId === row.id}
-                              title="Delete assembly mapping"
-                              className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
-                            >
-                              {actionLoadingId === row.id ? '…' : '🗑️'}
-                            </button>
-                          </div>
-                        </td>
+                        {isAdmin && (
+                          <td className="p-3 text-center whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => startEditAssemble(row)}
+                                title="Edit assembly mapping"
+                                className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors text-xs"
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeactivate('assemble', row.id, `${row.consumable_item} -> ${row.part_no_saleable_item}`)}
+                                disabled={actionLoadingId === row.id}
+                                title="Delete assembly mapping"
+                                className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
+                              >
+                                {actionLoadingId === row.id ? '…' : '🗑️'}
+                              </button>
+                            </div>
+                          </td>
+                        )}
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={10} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
+                      <td colSpan={isAdmin ? 10 : 9} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
                         No assembly mappings match your search filters or the table is empty.
                       </td>
                     </tr>
@@ -1581,7 +1909,8 @@ export default function Products() {
       {activeTab === 'sales_parts' && (
         <div className="space-y-6">
           {/* Horizontal Single Sales Part Intake Panel */}
-          <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
+          {isAdmin && (
+            <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 mb-5 border-b border-erp-dark-vanilla/20 gap-3">
               <div>
                 <h2 className="text-base font-bold text-erp-chocolate flex items-center gap-2">
@@ -1711,6 +2040,7 @@ export default function Products() {
               </div>
             </form>
           </div>
+          )}
 
           {/* Sales Parts Data Table with Localized Inline Search */}
           <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
@@ -1807,16 +2137,18 @@ export default function Products() {
                     </th>
 
                     {/* 6. Actions Header */}
-                    <th className="p-3 w-24 text-center">
-                      <div>Actions</div>
-                      <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
-                    </th>
+                    {isAdmin && (
+                      <th className="p-3 w-24 text-center">
+                        <div>Actions</div>
+                        <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
+                      </th>
+                    )}
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-gray-100 font-mono">
                   {loading ? (
-                    <TableSkeletonRows rows={7} columns={6} />
+                    <TableSkeletonRows rows={7} columns={isAdmin ? 6 : 5} />
                   ) : filteredSalesParts.length > 0 ? (
                     filteredSalesParts.map((row) => (
                       <tr
@@ -1849,33 +2181,34 @@ export default function Products() {
                             {row.uom}
                           </span>
                         </td>
-                        <td className="p-3 text-center whitespace-nowrap">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => startEditSalesPart(row)}
-                              disabled={!canEdit}
-                              title="Edit sales part"
-                              className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors disabled:opacity-40 text-xs"
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeactivate('sales_parts', row.id, row.part_no)}
-                              disabled={!canDelete || actionLoadingId === row.id}
-                              title="Delete sales part"
-                              className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
-                            >
-                              {actionLoadingId === row.id ? '…' : '🗑️'}
-                            </button>
-                          </div>
-                        </td>
+                        {isAdmin && (
+                          <td className="p-3 text-center whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => startEditSalesPart(row)}
+                                title="Edit sales part"
+                                className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors text-xs"
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeactivate('sales_parts', row.id, row.part_no)}
+                                disabled={actionLoadingId === row.id}
+                                title="Delete sales part"
+                                className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
+                              >
+                                {actionLoadingId === row.id ? '…' : '🗑️'}
+                              </button>
+                            </div>
+                          </td>
+                        )}
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={6} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
+                      <td colSpan={isAdmin ? 6 : 5} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
                         No sales parts match your search filters or the table is empty.
                       </td>
                     </tr>
@@ -1889,8 +2222,292 @@ export default function Products() {
       {/* ========================================================================= */}
       {/* BULK UPLOAD MODAL OVERLAY                                                 */}
       {/* ========================================================================= */}
+<<<<<<< HEAD
       {isUploadModalOpen && <MasterBulkWorkspace category={activeTab} label={activeTabLabel}
         onClose={() => setIsUploadModalOpen(false)} onChanged={() => { void loadData(); }}/>}
+=======
+      {isUploadModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in duration-200"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bulk-upload-modal-title"
+        >
+          {/* Backdrop dismiss */}
+          <div
+            className="fixed inset-0 -z-10"
+            onClick={() => !uploading && setIsUploadModalOpen(false)}
+          />
+
+          <div className="bg-white border border-erp-dark-vanilla/30 rounded-2xl max-w-lg w-full p-6 shadow-2xl relative">
+            <div className="flex items-start justify-between pb-3 border-b border-erp-dark-vanilla/20 mb-4">
+              <div>
+                <h2 id="bulk-upload-modal-title" className="text-lg font-bold text-erp-chocolate">
+                  Bulk Excel Intake
+                </h2>
+                <p className="text-xs text-erp-chocolate/70 mt-0.5">
+                  Target: <span className="font-semibold text-erp-orange">{activeTabLabel}</span>
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={uploading || isConfirming}
+                onClick={() => {
+                  handleResetUpload();
+                  setIsUploadModalOpen(false);
+                }}
+                className="text-erp-chocolate/60 hover:text-erp-chocolate p-1.5 rounded hover:bg-erp-vanilla/40 transition-colors disabled:opacity-30 text-sm font-bold"
+                aria-label="Close modal"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-erp-chocolate/75 mb-3 leading-relaxed">
+              Upload an unformatted Excel file (.xlsx up to 15MB, max 5,000 rows). Header Hunter scans top rows, drops banners, and maps columns into <span className="font-semibold text-erp-chocolate">{activeTabLabel}</span>.
+            </p>
+
+            <div className="mb-4 flex items-center justify-between text-[11px] bg-erp-vanilla/25 px-2.5 py-1.5 rounded-lg border border-erp-dark-vanilla/20 text-erp-chocolate/70">
+              <span>File limits: <strong className="text-erp-chocolate">Max 15 MB</strong></span>
+              <span>Capacity: <strong className="text-erp-chocolate">Up to 5,000 rows</strong></span>
+            </div>
+
+            {uploadError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-900 rounded-md text-xs space-y-2">
+                <div>{uploadError}</div>
+                {selectedFile && !uploading && !isConfirming && (
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => handleFileUpload(selectedFile)}
+                      className="px-2.5 py-1 bg-red-800 hover:bg-red-900 text-white font-semibold rounded text-[11px] transition-colors"
+                    >
+                      ↻ Retry with {selectedFile.name}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetUpload}
+                      className="px-2 py-1 border border-red-300 text-red-800 hover:bg-red-100 rounded text-[11px]"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'assemble' && assemblePreview ? (
+              <div className="space-y-4">
+                {/* Header match badge & metadata */}
+                <div className="bg-erp-vanilla/20 border border-erp-dark-vanilla/30 rounded-xl p-3.5 space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-semibold text-erp-chocolate flex items-center gap-1.5">
+                      <span>📄</span>
+                      <span className="truncate max-w-[220px]">{assemblePreview.source_filename}</span>
+                    </span>
+                    <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-[11px] font-medium">
+                      Header Row {assemblePreview.detected_header_row}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-erp-chocolate/70">
+                    Matched <span className="font-semibold text-erp-chocolate">{assemblePreview.columns_matched.length} columns</span> using Header Hunter v2.0.
+                  </p>
+
+                  {/* Summary Stat Badges */}
+                  <div className="grid grid-cols-4 gap-2 pt-1 text-center">
+                    <div className="p-2 bg-white rounded-lg border border-erp-dark-vanilla/20 shadow-xs">
+                      <div className="text-[10px] text-erp-chocolate/60 font-medium">Total Rows</div>
+                      <div className="text-sm font-bold text-erp-chocolate font-mono">{assemblePreview.total_rows}</div>
+                    </div>
+                    <div className="p-2 bg-emerald-50 rounded-lg border border-emerald-200 shadow-xs">
+                      <div className="text-[10px] text-emerald-700 font-medium">Additions</div>
+                      <div className="text-sm font-bold text-emerald-800 font-mono">+{assemblePreview.rows_to_add}</div>
+                    </div>
+                    <div className="p-2 bg-blue-50 rounded-lg border border-blue-200 shadow-xs">
+                      <div className="text-[10px] text-blue-700 font-medium">Updates</div>
+                      <div className="text-sm font-bold text-blue-800 font-mono">↺ {assemblePreview.rows_to_update}</div>
+                    </div>
+                    <div className={`p-2 rounded-lg border shadow-xs ${assemblePreview.error_count > 0 ? 'bg-red-50 border-red-200 text-red-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+                      <div className="text-[10px] font-medium">{assemblePreview.error_count > 0 ? 'Errors' : 'Notices'}</div>
+                      <div className="text-sm font-bold font-mono">{assemblePreview.error_count + assemblePreview.warning_count}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Issues display if any */}
+                {assemblePreview.errors && assemblePreview.errors.length > 0 && (
+                  <div className="border border-erp-dark-vanilla/25 rounded-xl p-3 bg-white space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-erp-chocolate">
+                        Row Notices ({assemblePreview.errors.length}{assemblePreview.warning_count + assemblePreview.error_count > assemblePreview.errors.length ? ` of ${assemblePreview.warning_count + assemblePreview.error_count}` : ''})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleDownloadErrorReport}
+                        className="text-[11px] text-erp-orange hover:text-erp-chocolate font-semibold flex items-center gap-1 hover:underline"
+                      >
+                        <span>📥</span> Download Error Report (.xlsx)
+                      </button>
+                    </div>
+                    <div className="max-h-32 overflow-y-auto space-y-1 pr-1 text-[11px]">
+                      {assemblePreview.errors.slice(0, 5).map((err, i) => (
+                        <div key={i} className="p-1.5 rounded bg-amber-50/60 border border-amber-200/50 text-erp-chocolate flex items-start gap-1.5">
+                          <span className="font-mono font-bold text-amber-800 min-w-[50px]">Row {err.row}:</span>
+                          <span className="flex-1">{err.message}</span>
+                        </div>
+                      ))}
+                      {assemblePreview.errors.length > 5 && (
+                        <div className="text-center text-[10px] text-erp-chocolate/60 pt-0.5 italic">
+                          + {assemblePreview.errors.length - 5} additional issues recorded. Click Download Error Report for full details.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Confirmation Progress State */}
+                {isConfirming && (
+                  <div className="p-3 bg-white rounded-lg border border-erp-dark-vanilla/25 space-y-2">
+                    <div className="flex justify-between items-center text-xs font-semibold text-erp-chocolate">
+                      <span className="flex items-center gap-1.5">
+                        <svg className="animate-spin h-3.5 w-3.5 text-erp-orange" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                        </svg>
+                        <span>{assembleJob?.stage || 'Committing records to database...'}</span>
+                      </span>
+                      <span className="font-mono text-erp-orange font-bold">
+                        {assembleJob?.progress_percent || 0}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-erp-vanilla/60 rounded-full h-2.5 overflow-hidden border border-erp-dark-vanilla/30">
+                      <div
+                        className="bg-erp-orange h-2.5 rounded-full transition-all duration-300 ease-out"
+                        style={{ width: `${assembleJob?.progress_percent || 20}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Modal Buttons */}
+                <div className="flex items-center justify-between pt-2 border-t border-erp-dark-vanilla/20">
+                  <button
+                    type="button"
+                    disabled={isConfirming}
+                    onClick={handleResetUpload}
+                    className="text-xs px-3 py-1.5 border border-erp-dark-vanilla/40 rounded-lg hover:bg-erp-vanilla/40 text-erp-chocolate disabled:opacity-40"
+                  >
+                    Choose Another File
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isConfirming || !assemblePreview.can_confirm}
+                    onClick={handleConfirmAssemble}
+                    className="text-xs px-4 py-2 bg-erp-orange hover:bg-erp-orange/90 text-white font-bold rounded-lg shadow-sm transition-all disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    {isConfirming ? (
+                      <>Saving Records...</>
+                    ) : (
+                      <>Confirm & Import {assemblePreview.total_rows} Records ✓</>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div
+                  onDragEnter={handleDrag}
+                  onDragLeave={handleDrag}
+                  onDragOver={handleDrag}
+                  onDrop={handleDrop}
+                  onClick={() => !uploading && fileInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
+                    uploading
+                      ? 'pointer-events-none opacity-60 border-erp-orange bg-erp-orange/5'
+                      : dragActive
+                      ? 'border-erp-orange bg-erp-orange/10'
+                      : 'border-erp-dark-vanilla/40 hover:border-erp-orange bg-erp-vanilla/15 hover:bg-erp-vanilla/30'
+                  }`}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx"
+                    className="hidden"
+                    disabled={uploading}
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        handleFileUpload(e.target.files[0]);
+                      }
+                    }}
+                  />
+                  <div className="space-y-1.5">
+                    <div className="text-3xl">📥</div>
+                    <p className="text-xs font-bold text-erp-chocolate">
+                      {uploading ? 'Processing File…' : `Drag & drop ${activeTabLabel} Excel here`}
+                    </p>
+                    <p className="text-[11px] text-erp-chocolate/60">
+                      or click to browse from device (.xlsx up to 15MB)
+                    </p>
+                  </div>
+                </div>
+
+                {/* Progress Bar & Processing States */}
+                {uploading && (
+                  <div className="mt-4 p-3 bg-white rounded-lg border border-erp-dark-vanilla/25 space-y-2">
+                    <div className="flex justify-between items-center text-xs font-semibold text-erp-chocolate">
+                      <span className="flex items-center gap-1.5">
+                        {uploadPhase !== 'parsing' && uploadProgress < 100 ? (
+                          `Uploading: ${uploadProgress}%`
+                        ) : (
+                          <>
+                            <svg className="animate-spin h-3.5 w-3.5 text-erp-orange" viewBox="0 0 24 24" fill="none">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                            </svg>
+                            <span>Scanning headers & validating rows...</span>
+                          </>
+                        )}
+                      </span>
+                      <span className="font-mono text-erp-orange font-bold">{uploadProgress}%</span>
+                    </div>
+
+                    <div className="w-full bg-erp-vanilla/60 rounded-full h-2.5 overflow-hidden border border-erp-dark-vanilla/30">
+                      <div
+                        className="bg-erp-orange h-2.5 rounded-full transition-all duration-300 ease-out"
+                        style={{ width: `${uploadProgress}%` }}
+                      />
+                    </div>
+
+                    {(uploadPhase === 'parsing' || uploadProgress === 100) && (
+                      <p className="text-[11px] text-erp-chocolate/60 italic pt-0.5">
+                        Header Hunter is scanning top rows and validating column vocabulary...
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <div className="mt-4 pt-3 border-t border-erp-dark-vanilla/20 flex items-center justify-between text-[11px] text-erp-chocolate/60">
+                  <span className="font-mono text-erp-topaz font-semibold">Header Hunter v2.0</span>
+                  <button
+                    type="button"
+                    disabled={uploading}
+                    onClick={() => {
+                      handleResetUpload();
+                      setIsUploadModalOpen(false);
+                    }}
+                    className="text-xs px-3 py-1.5 border border-erp-dark-vanilla/40 rounded-lg hover:bg-erp-vanilla/40 transition-colors disabled:opacity-40 text-erp-chocolate"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+>>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
 
       {/* Floating Success Toast */}
       {toast && (

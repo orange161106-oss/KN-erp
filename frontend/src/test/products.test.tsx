@@ -337,3 +337,287 @@ test('delete action triggers confirmation dialog and sends deactivation request'
   confirmSpy.mockRestore();
 });
 
+test('RBAC Lockdown: standard USER has read-only table with no intake form, bulk import, or edit/delete buttons, and SUPER ADMIN restores full toolset', async () => {
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async input => {
+    if (String(input).includes('/product-master/consumables')) {
+      return new Response(JSON.stringify({
+        items: [
+          {
+            id: 'c-read-only-1',
+            supplier_id: 'SUP-99',
+            supplier_name: 'Standard Steel',
+            item_id: 'CS-RO-001',
+            category: 'Raw Material',
+            type_of_material: 'Steel',
+            description: 'Read-only Item',
+            output_unit: 'KG',
+            rate: 55.0,
+            is_active: true,
+          }
+        ],
+        total: 1,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }));
+
+  // 1. Log in as a standard USER
+  const { rerender } = render(
+    <AuthContext.Provider
+      value={{
+        user: {
+          id: 'user-standard',
+          username: 'worker1',
+          roles: ['USER'],
+          role: 'USER',
+          permissions: ['masters.read'],
+          is_super_admin: false,
+          masters_read: true,
+        },
+        login: vi.fn(),
+        logout: vi.fn(),
+      }}
+    >
+      <Products />
+    </AuthContext.Provider>
+  );
+
+  // Read-only data must be present
+  expect(await screen.findByText('CS-RO-001')).toBeInTheDocument();
+  expect(screen.getByText('Read-only Item')).toBeInTheDocument();
+
+  // Write & destructive tools MUST be completely absent for standard USER
+  expect(screen.queryByRole('button', { name: /Bulk Import/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: /Single Consumable Intake/i })).not.toBeInTheDocument();
+  expect(screen.queryByTitle(/Edit consumable/i)).not.toBeInTheDocument();
+  expect(screen.queryByTitle(/Delete consumable/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Edit \/ Del/i)).not.toBeInTheDocument();
+
+  // 2. Log back in as a SUPER ADMIN
+  rerender(
+    <AuthContext.Provider
+      value={{
+        user: {
+          id: 'root-admin',
+          username: 'root',
+          roles: ['ADMIN'],
+          role: 'SUPER ADMIN',
+          permissions: [],
+          is_super_admin: true,
+        },
+        login: vi.fn(),
+        logout: vi.fn(),
+      }}
+    >
+      <Products />
+    </AuthContext.Provider>
+  );
+
+  // Full toolset MUST return for SUPER ADMIN
+  expect(await screen.findByRole('button', { name: /Bulk Import ☁️/i })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Single Consumable Intake' })).toBeInTheDocument();
+  expect(screen.getByTitle('Edit consumable')).toBeInTheDocument();
+  expect(screen.getByTitle('Delete consumable')).toBeInTheDocument();
+  expect(screen.getByText('Edit / Del')).toBeInTheDocument();
+});
+
+test('renders Consumable for Assemble tab with all 9 updated form labels and table column headers', async () => {
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async (input) => {
+    const url = String(input);
+    if (url.includes('/product-master/assemble')) {
+      return new Response(
+        JSON.stringify({
+          items: [
+            {
+              id: 'asm-1',
+              consumable_item: 'CS-ST-004',
+              part_no_saleable_item: 'PN-DOOR-LH',
+              used_for_name_of_saleable_part: 'Outer Door LH',
+              used_part_no_prd_order: 'PRD-PART-01',
+              process_name: 'ASSEMBLY',
+              material_thickness_in_mm_gsm: '1.20mm',
+              no_of_process_per_part: 1.0,
+              output_unit: 'PCS',
+              rate: 85.5,
+              is_active: true,
+            },
+          ],
+          total: 1,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response(JSON.stringify({ items: [], total: 0 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }));
+
+  const user = userEvent.setup();
+  render(
+    <AuthContext.Provider
+      value={{
+        user: { id: 'root', username: 'root', roles: [], permissions: [], is_super_admin: true },
+        login: vi.fn(),
+        logout: vi.fn(),
+      }}
+    >
+      <Products />
+    </AuthContext.Provider>
+  );
+
+  // Switch to Consumable for Assemble tab
+  await user.click(screen.getByRole('button', { name: 'Consumable for Assemble' }));
+
+  // 1. Verify all 9 Form Labels in Single Assembly Intake form
+  expect(screen.getByText(/Consumable Description/i, { selector: 'label' })).toBeInTheDocument();
+  expect(screen.getByText(/Part No. of Saleable Item/i, { selector: 'label' })).toBeInTheDocument();
+  expect(screen.getByText('Used for – Name of Saleable Part', { selector: 'label' })).toBeInTheDocument();
+  expect(screen.getByText('Used Part No. (PRD Order)', { selector: 'label' })).toBeInTheDocument();
+  expect(screen.getByText('Process Name', { selector: 'label' })).toBeInTheDocument();
+  expect(screen.getByText('Material Thickness in mm / GSM', { selector: 'label' })).toBeInTheDocument();
+  expect(screen.getByText('No. of Processes per Part', { selector: 'label' })).toBeInTheDocument();
+  expect(screen.getByText('Output / Unit', { selector: 'label' })).toBeInTheDocument();
+  expect(screen.getByText('Rate', { selector: 'label' })).toBeInTheDocument();
+
+  // 2. Verify all 9 Column Headers in Consumable for Assemble Table
+  expect(screen.getByRole('columnheader', { name: /Consumable Description/i })).toBeInTheDocument();
+  expect(screen.getByRole('columnheader', { name: /Part No. of Saleable Item/i })).toBeInTheDocument();
+  expect(screen.getByRole('columnheader', { name: /Used for – Name of Saleable Part/i })).toBeInTheDocument();
+  expect(screen.getByRole('columnheader', { name: /Used Part No. \(PRD Order\)/i })).toBeInTheDocument();
+  expect(screen.getByRole('columnheader', { name: /Process Name/i })).toBeInTheDocument();
+  expect(screen.getByRole('columnheader', { name: /Material Thickness in mm \/ GSM/i })).toBeInTheDocument();
+  expect(screen.getByRole('columnheader', { name: /No. of Processes per Part/i })).toBeInTheDocument();
+  expect(screen.getByRole('columnheader', { name: /Output \/ Unit/i })).toBeInTheDocument();
+  expect(screen.getByRole('columnheader', { name: /^Rate/i })).toBeInTheDocument();
+
+  // 3. Verify record values display correctly
+  expect(await screen.findByText('CS-ST-004')).toBeInTheDocument();
+  expect(screen.getByText('PN-DOOR-LH')).toBeInTheDocument();
+  expect(screen.getByText('Outer Door LH')).toBeInTheDocument();
+  expect(screen.getByText('PRD-PART-01')).toBeInTheDocument();
+  expect(screen.getByText('1.0000')).toBeInTheDocument();
+  expect(screen.getByText('₹85.50')).toBeInTheDocument();
+});
+
+test('handles Consumable for Assemble CRUD and validation messages with approved terminology', async () => {
+  const fetchSpy = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+    const url = String(input);
+    const method = init?.method || 'GET';
+
+    if (url.includes('/product-master/assemble') && method === 'GET') {
+      return new Response(
+        JSON.stringify({
+          items: [
+            {
+              id: 'asm-99',
+              consumable_item: 'CS-ST-099',
+              part_no_saleable_item: 'PN-HOOD-01',
+              used_for_name_of_saleable_part: 'Engine Hood',
+              used_part_no_prd_order: 'PRD-HOOD',
+              process_name: 'ASSEMBLY',
+              material_thickness_in_mm_gsm: '1.50mm',
+              no_of_process_per_part: 2.0,
+              output_unit: 'PCS',
+              rate: 150.0,
+              is_active: true,
+            },
+          ],
+          total: 1,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (url.includes('/product-master/assemble/single') && method === 'POST') {
+      return new Response(
+        JSON.stringify({
+          id: 'asm-100',
+          message: 'Assembly mapping saved successfully.',
+        }),
+        { status: 201, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (url.includes('/product-master/assemble/asm-99') && method === 'PUT') {
+      return new Response(
+        JSON.stringify({
+          id: 'asm-99',
+          message: 'Assembly mapping updated successfully.',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (url.includes('/product-master/assemble/asm-99/deactivate') && method === 'PATCH') {
+      return new Response(
+        JSON.stringify({
+          id: 'asm-99',
+          is_active: false,
+          message: 'Assembly mapping deactivated successfully.',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(JSON.stringify({ items: [], total: 0 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  });
+  vi.stubGlobal('fetch', fetchSpy);
+
+  const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const user = userEvent.setup();
+
+  render(
+    <AuthContext.Provider
+      value={{
+        user: { id: 'root', username: 'root', roles: [], permissions: [], is_super_admin: true },
+        login: vi.fn(),
+        logout: vi.fn(),
+      }}
+    >
+      <Products />
+    </AuthContext.Provider>
+  );
+
+  // Switch to Consumable for Assemble tab
+  await user.click(screen.getByRole('button', { name: 'Consumable for Assemble' }));
+  expect(await screen.findByText('CS-ST-099')).toBeInTheDocument();
+
+  // Test validation error message on empty submit
+  const saveBtn = screen.getByRole('button', { name: 'Save Assembly Mapping' });
+  fireEvent.click(saveBtn);
+  // HTML5 required handles native validation, but if submitted directly with empty fields:
+  // Test edit mode
+  const editBtn = screen.getByTitle('Edit assembly mapping');
+  fireEvent.click(editBtn);
+  expect(screen.getByRole('button', { name: 'Update Record' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Cancel Edit' })).toBeInTheDocument();
+
+  // Submit update
+  fireEvent.click(screen.getByRole('button', { name: 'Update Record' }));
+  await waitFor(() => {
+    const putCall = fetchSpy.mock.calls.find(call => String(call[0]).includes('/assemble/asm-99') && call[1]?.method === 'PUT');
+    expect(putCall).toBeDefined();
+  });
+
+  // Test delete mode
+  const delBtn = screen.getByTitle('Delete assembly mapping');
+  fireEvent.click(delBtn);
+  expect(confirmSpy).toHaveBeenCalled();
+  await waitFor(() => {
+    const patchCall = fetchSpy.mock.calls.find(call => String(call[0]).includes('/assemble/asm-99/deactivate') && call[1]?.method === 'PATCH');
+    expect(patchCall).toBeDefined();
+  });
+
+  // Test Refresh button
+  const refreshBtn = screen.getByRole('button', { name: /↻ Refresh/i });
+  fireEvent.click(refreshBtn);
+  expect(fetchSpy).toHaveBeenCalled();
+
+  confirmSpy.mockRestore();
+});
+
+

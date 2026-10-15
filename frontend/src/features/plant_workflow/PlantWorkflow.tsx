@@ -1,673 +1,57 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { apiClient, ApiError } from '../../api/client';
+import axios from 'axios';
+import {
+  Calendar,
+  CheckCircle2,
+  AlertTriangle,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import { useAuth } from '../auth/context';
-import type {
-  AdjustmentCategory,
-  AdjustmentStatus,
-  CalculatedRequirementItem,
-  ConfirmRequirementRequest,
-  FinalRequirementItemResponse,
-  PlantConfirmationResponse,
-  RequirementAdjustmentResponse,
-  ReviewAdjustmentRequest,
-  SubmitAdjustmentRequest,
-} from './types';
+import {
+  fetchPlans,
+  createPlan,
+  approvePlan,
+  bulkUploadItems,
+  createSingleLineItem,
+  updateLineItem,
+  deleteLineItem,
+  type MonthlyRequirementPlan,
+  type UpdateLineItemPayload,
+} from '../requirements/api';
+import PlanGrid from '../requirements/PlanGrid';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const ADJUSTMENT_CATEGORIES: AdjustmentCategory[] = [
-  'SPECIAL',
-  'MAINTENANCE',
-  'TRIAL',
-  'REWORK',
-  'PLANT_REQUEST',
-  'OTHER',
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
 ];
-
-const STATUS_COLOURS: Record<AdjustmentStatus, string> = {
-  PENDING: 'bg-yellow-100 text-yellow-800',
-  APPROVED: 'bg-green-100 text-green-800',
-  REJECTED: 'bg-red-100 text-red-800',
-};
-
-// ── Small shared components ────────────────────────────────────────────────────
-
-function StatusBadge({ status }: { status: AdjustmentStatus }) {
-  return (
-    <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${STATUS_COLOURS[status]}`}>
-      {status}
-    </span>
-  );
-}
-
-function AlertBox({ message, type }: { message: string; type: 'error' | 'success' }) {
-  const base = 'rounded p-3 text-sm mb-4';
-  const colour = type === 'error'
-    ? 'bg-red-50 border border-red-300 text-red-700'
-    : 'bg-green-50 border border-green-300 text-green-700';
-  return <div className={`${base} ${colour}`}>{message}</div>;
-}
-
-// ── Version selector ───────────────────────────────────────────────────────────
-
-function PlanningVersionSelector({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <div className="mb-4 flex items-center gap-3">
-      <label className="text-sm font-medium text-gray-700 whitespace-nowrap">
-        Planning Version ID
-      </label>
-      <input
-        type="text"
-        className="border rounded px-3 py-1.5 text-sm w-80 font-mono"
-        placeholder="Paste planning version UUID…"
-        value={value}
-        onChange={(e) => onChange(e.target.value.trim())}
-      />
-    </div>
-  );
-}
-
-// ── Tab 1: Confirmations ───────────────────────────────────────────────────────
-
-function ConfirmationsTab({ planningVersionId }: { planningVersionId: string }) {
-  const { user } = useAuth();
-  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
-  const hasModernFlags = user && (
-    'plant_workflow_read' in user ||
-    'plant_workflow_create' in user ||
-    'plant_workflow_update' in user ||
-    'plant_workflow_delete' in user
-  );
-  const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.plant_workflow_update : true));
-  const hasActions = Boolean(isSuperAdmin || canUpdate);
-
-  const [calcReqs, setCalcReqs] = useState<CalculatedRequirementItem[]>([]);
-  const [confirmations, setConfirmations] = useState<PlantConfirmationResponse[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [notes, setNotes] = useState<Record<string, string>>({});
-
-  const confirmedIds = new Set(confirmations.map((c) => c.calculated_requirement_id));
-
-  const fetchData = useCallback(async () => {
-    if (!planningVersionId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const [reqs, confs] = await Promise.all([
-        apiClient.get<CalculatedRequirementItem[]>(
-          `/api/v1/requirements/planning-versions/${planningVersionId}`
-        ),
-        apiClient.get<PlantConfirmationResponse[]>(
-          `/api/v1/plant-workflow/confirmations?planning_version_id=${planningVersionId}`
-        ),
-      ]);
-      setCalcReqs(reqs);
-      setConfirmations(confs);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to load requirements.');
-    } finally {
-      setLoading(false);
-    }
-  }, [planningVersionId]);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  const handleConfirm = async (calcReqId: string) => {
-    setError(null);
-    setSuccess(null);
-    try {
-      const req: ConfirmRequirementRequest = {
-        calculated_requirement_id: calcReqId,
-        notes: notes[calcReqId] || null,
-      };
-      await apiClient.post('/api/v1/plant-workflow/confirmations', req);
-      setSuccess('Requirement confirmed successfully.');
-      await fetchData();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Confirmation failed.');
-    }
-  };
-
-  const handleRetract = async (calcReqId: string) => {
-    setError(null);
-    setSuccess(null);
-    const conf = confirmations.find((c) => c.calculated_requirement_id === calcReqId);
-    if (!conf) return;
-    try {
-      await apiClient.delete(`/api/v1/plant-workflow/confirmations/${conf.id}`);
-      setSuccess('Confirmation retracted.');
-      await fetchData();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Retraction failed.');
-    }
-  };
-
-  if (!planningVersionId) {
-    return <p className="text-gray-500 text-sm">Enter a planning version ID above to load requirements.</p>;
-  }
-
-  if (loading) return <p className="text-gray-500 text-sm">Loading…</p>;
-
-  return (
-    <div>
-      {error && <AlertBox message={error} type="error" />}
-      {success && <AlertBox message={success} type="success" />}
-
-      {calcReqs.length === 0 ? (
-        <p className="text-gray-500 text-sm">No calculated requirements found for this version.</p>
-      ) : (
-        <div className="overflow-x-auto border border-ink-text/10 rounded-lg shadow-2xs bg-white">
-          <table className="min-w-full text-sm border-collapse">
-            <thead>
-              <tr className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
-                <th className="px-3 py-2 text-left font-semibold">Consumable</th>
-                <th className="px-3 py-2 text-left font-semibold">Process</th>
-                <th className="px-3 py-2 text-right font-semibold">Calc Qty</th>
-                <th className="px-3 py-2 text-left font-semibold">UOM</th>
-                <th className="px-3 py-2 text-left font-semibold">Rule</th>
-                <th className="px-3 py-2 text-left font-semibold">Status</th>
-                {hasActions && (
-                  <>
-                    <th className="px-3 py-2 text-left font-semibold">Notes</th>
-                    <th className="px-3 py-2 text-left font-semibold">Action</th>
-                  </>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {calcReqs.map((r) => {
-                const confirmed = confirmedIds.has(r.id);
-                return (
-                  <tr key={r.id} className="border-b hover:bg-gray-50">
-                    <td className="px-3 py-2">
-                      <span className="font-mono text-xs text-gray-500">{r.consumable_code}</span>
-                      <span className="ml-1">{r.consumable_name}</span>
-                    </td>
-                    <td className="px-3 py-2">{r.process_name ?? '—'}</td>
-                    {/* calculated_qty is READ-ONLY — shown as plain text, no input */}
-                    <td className="px-3 py-2 text-right font-mono">{r.calculated_qty}</td>
-                    <td className="px-3 py-2">{r.uom}</td>
-                    <td className="px-3 py-2">
-                      <span className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{r.rule_type}</span>
-                    </td>
-                    <td className="px-3 py-2">
-                      {confirmed ? (
-                        <span className="text-green-700 font-semibold text-xs">✓ Confirmed</span>
-                      ) : (
-                        <span className="text-gray-400 text-xs">Pending</span>
-                      )}
-                    </td>
-                    {hasActions && (
-                      <>
-                        <td className="px-3 py-2">
-                          {!confirmed && (
-                            <input
-                              type="text"
-                              placeholder="Optional note…"
-                              className="border rounded px-2 py-1 text-xs w-40"
-                              value={notes[r.id] ?? ''}
-                              onChange={(e) =>
-                                setNotes((prev) => ({ ...prev, [r.id]: e.target.value }))
-                              }
-                            />
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {confirmed ? (
-                            <button
-                              onClick={() => handleRetract(r.id)}
-                              className="text-xs text-red-600 hover:text-red-800 underline"
-                            >
-                              Retract
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handleConfirm(r.id)}
-                              className="text-xs bg-burnt-orange hover:bg-burnt-orange-dark text-white px-3 py-1 rounded shadow-xs transition-colors font-medium"
-                            >
-                              Confirm
-                            </button>
-                          )}
-                        </td>
-                      </>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Tab 2: Adjustments ─────────────────────────────────────────────────────────
-
-const EMPTY_FORM: SubmitAdjustmentRequest = {
-  planning_version_id: '',
-  plant_id: '',
-  consumable_id: '',
-  category: 'MAINTENANCE',
-  requested_qty: '',
-  reason: '',
-};
-
-function AdjustmentsTab({
-  planningVersionId,
-  currentUserId,
-}: {
-  planningVersionId: string;
-  currentUserId: string;
-}) {
-  const { user } = useAuth();
-  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
-  const hasModernFlags = user && (
-    'plant_workflow_read' in user ||
-    'plant_workflow_create' in user ||
-    'plant_workflow_update' in user ||
-    'plant_workflow_delete' in user
-  );
-  const canCreate = Boolean(isSuperAdmin || (hasModernFlags ? user?.plant_workflow_create : true));
-  const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.plant_workflow_update : true));
-  const canDelete = Boolean(isSuperAdmin || (hasModernFlags ? user?.plant_workflow_delete : true));
-  const hasActions = Boolean(isSuperAdmin || canUpdate || canDelete);
-
-  const [adjustments, setAdjustments] = useState<RequirementAdjustmentResponse[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState<SubmitAdjustmentRequest>({
-    ...EMPTY_FORM,
-    planning_version_id: planningVersionId,
-  });
-  const [submitting, setSubmitting] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<AdjustmentStatus | ''>('');
-
-  const fetchAdjustments = useCallback(async () => {
-    if (!planningVersionId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams({ planning_version_id: planningVersionId });
-      if (statusFilter) params.set('status', statusFilter);
-      const data = await apiClient.get<RequirementAdjustmentResponse[]>(
-        `/api/v1/plant-workflow/adjustments?${params}`
-      );
-      setAdjustments(data);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to load adjustments.');
-    } finally {
-      setLoading(false);
-    }
-  }, [planningVersionId, statusFilter]);
-
-  useEffect(() => {
-    fetchAdjustments();
-  }, [fetchAdjustments]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSuccess(null);
-    setSubmitting(true);
-    try {
-      await apiClient.post('/api/v1/plant-workflow/adjustments', form);
-      setSuccess('Additional requirement submitted.');
-      setShowForm(false);
-      setForm({ ...EMPTY_FORM, planning_version_id: planningVersionId });
-      await fetchAdjustments();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Submission failed.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleWithdraw = async (id: string) => {
-    setError(null);
-    setSuccess(null);
-    try {
-      await apiClient.delete(`/api/v1/plant-workflow/adjustments/${id}`);
-      setSuccess('Adjustment withdrawn.');
-      await fetchAdjustments();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Withdrawal failed.');
-    }
-  };
-
-  const handleReview = async (id: string, status: 'APPROVED' | 'REJECTED') => {
-    setError(null);
-    setSuccess(null);
-    const comment = window.prompt(`Optional comment for ${status.toLowerCase()}:`);
-    try {
-      const payload: ReviewAdjustmentRequest = {
-        status,
-        reviewer_comment: comment || null,
-      };
-      await apiClient.patch(`/api/v1/plant-workflow/adjustments/${id}/review`, payload);
-      setSuccess(`Adjustment ${status.toLowerCase()}.`);
-      await fetchAdjustments();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Review action failed.');
-    }
-  };
-
-  if (!planningVersionId) {
-    return <p className="text-gray-500 text-sm">Enter a planning version ID above to load adjustments.</p>;
-  }
-
-  return (
-    <div>
-      {error && <AlertBox message={error} type="error" />}
-      {success && <AlertBox message={success} type="success" />}
-
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <label className="text-sm text-gray-600">Filter by status:</label>
-          <select
-            className="border rounded px-2 py-1 text-sm"
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as AdjustmentStatus | '')}
-          >
-            <option value="">All</option>
-            <option value="PENDING">Pending</option>
-            <option value="APPROVED">Approved</option>
-            <option value="REJECTED">Rejected</option>
-          </select>
-        </div>
-        {canCreate && (
-          <button
-            onClick={() => setShowForm((v) => !v)}
-            className="text-sm bg-burnt-orange hover:bg-burnt-orange-dark text-white px-4 py-1.5 rounded shadow-xs transition-colors font-medium"
-          >
-            {showForm ? 'Cancel' : '+ Submit Additional Requirement'}
-          </button>
-        )}
-      </div>
-
-      {/* Submit Form */}
-      {canCreate && showForm && (
-        <form
-          onSubmit={handleSubmit}
-          className="bg-vanilla-surface border border-ink-text/10 rounded-lg p-4 mb-6 space-y-3 shadow-2xs"
-        >
-          <h3 className="font-semibold text-ink-text mb-2">New Additional Requirement</h3>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-gray-600 mb-1">Plant ID *</label>
-              <input
-                required
-                type="text"
-                className="border rounded px-2 py-1.5 text-sm w-full font-mono"
-                placeholder="Plant UUID"
-                value={form.plant_id}
-                onChange={(e) => setForm((f) => ({ ...f, plant_id: e.target.value.trim() }))}
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-600 mb-1">Consumable ID *</label>
-              <input
-                required
-                type="text"
-                className="border rounded px-2 py-1.5 text-sm w-full font-mono"
-                placeholder="Consumable UUID"
-                value={form.consumable_id}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, consumable_id: e.target.value.trim() }))
-                }
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-600 mb-1">Category *</label>
-              <select
-                required
-                className="border rounded px-2 py-1.5 text-sm w-full"
-                value={form.category}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, category: e.target.value as AdjustmentCategory }))
-                }
-              >
-                {ADJUSTMENT_CATEGORIES.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-gray-600 mb-1">Requested Qty *</label>
-              <input
-                required
-                type="number"
-                min="0.0001"
-                step="0.0001"
-                className="border rounded px-2 py-1.5 text-sm w-full"
-                placeholder="e.g. 50.0000"
-                value={form.requested_qty}
-                onChange={(e) => setForm((f) => ({ ...f, requested_qty: e.target.value }))}
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs text-gray-600 mb-1">Reason * (required — must not be blank)</label>
-            <textarea
-              required
-              rows={3}
-              className="border rounded px-2 py-1.5 text-sm w-full"
-              placeholder="Describe why this additional quantity is needed…"
-              value={form.reason}
-              onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))}
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={submitting}
-            className="bg-burnt-orange hover:bg-burnt-orange-dark text-white px-4 py-1.5 rounded text-sm disabled:opacity-50 shadow-xs transition-colors font-medium"
-          >
-            {submitting ? 'Submitting…' : 'Submit'}
-          </button>
-        </form>
-      )}
-
-      {/* Adjustments List */}
-      {loading ? (
-        <p className="text-gray-500 text-sm">Loading…</p>
-      ) : adjustments.length === 0 ? (
-        <p className="text-gray-500 text-sm">No adjustments found.</p>
-      ) : (
-        <div className="overflow-x-auto border border-ink-text/10 rounded-lg shadow-2xs bg-white">
-          <table className="min-w-full text-sm border-collapse">
-            <thead>
-              <tr className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
-                <th className="px-3 py-2 text-left font-semibold">Consumable</th>
-                <th className="px-3 py-2 text-left font-semibold">Category</th>
-                <th className="px-3 py-2 text-right font-semibold">Qty</th>
-                <th className="px-3 py-2 text-left font-semibold">UOM</th>
-                <th className="px-3 py-2 text-left font-semibold">Reason</th>
-                <th className="px-3 py-2 text-left font-semibold">Requested By</th>
-                <th className="px-3 py-2 text-left font-semibold">Status</th>
-                {hasActions && <th className="px-3 py-2 text-left font-semibold">Action</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {adjustments.map((adj) => (
-                <tr key={adj.id} className="border-b hover:bg-gray-50">
-                  <td className="px-3 py-2">
-                    <span className="font-mono text-xs text-gray-500">{adj.consumable_code}</span>
-                    <span className="ml-1">{adj.consumable_name}</span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{adj.category}</span>
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono">{adj.requested_qty}</td>
-                  <td className="px-3 py-2">{adj.uom}</td>
-                  <td className="px-3 py-2 max-w-xs">
-                    <span className="text-xs text-gray-700 line-clamp-2" title={adj.reason}>
-                      {adj.reason}
-                    </span>
-                    {adj.reviewer_comment && (
-                      <span className="block text-[11px] text-gray-500 italic mt-0.5">
-                        Comment: {adj.reviewer_comment}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-xs">{adj.requested_by_username ?? adj.requested_by}</td>
-                  <td className="px-3 py-2">
-                    <StatusBadge status={adj.status} />
-                  </td>
-                  {hasActions && (
-                    <td className="px-3 py-2">
-                      {canDelete && adj.status === 'PENDING' && adj.requested_by === currentUserId && (
-                        <button
-                          onClick={() => handleWithdraw(adj.id)}
-                          className="text-xs text-red-600 hover:text-red-800 underline"
-                        >
-                          Withdraw
-                        </button>
-                      )}
-                      {canUpdate && adj.status === 'PENDING' && adj.requested_by !== currentUserId && (
-                        <div className="flex gap-1">
-                          <button
-                            onClick={() => handleReview(adj.id, 'APPROVED')}
-                            className="text-xs bg-green-600 text-white px-2 py-0.5 rounded hover:bg-green-700"
-                          >
-                            Approve
-                          </button>
-                          <button
-                            onClick={() => handleReview(adj.id, 'REJECTED')}
-                            className="text-xs bg-red-600 text-white px-2 py-0.5 rounded hover:bg-red-700"
-                          >
-                            Reject
-                          </button>
-                        </div>
-                      )}
-                      {adj.status !== 'PENDING' && (
-                        <span className="text-xs text-gray-400">Reviewed</span>
-                      )}
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Tab 3: Final Requirements Handoff ──────────────────────────────────────────
-
-function FinalRequirementsTab({ planningVersionId }: { planningVersionId: string }) {
-  const [items, setItems] = useState<FinalRequirementItemResponse[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchData = useCallback(async () => {
-    if (!planningVersionId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await apiClient.get<FinalRequirementItemResponse[]>(
-        `/api/v1/plant-workflow/final-requirements?planning_version_id=${planningVersionId}`
-      );
-      setItems(data);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to load final requirements.');
-    } finally {
-      setLoading(false);
-    }
-  }, [planningVersionId]);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  if (!planningVersionId) {
-    return <p className="text-gray-500 text-sm">Enter a planning version ID above to view final requirements.</p>;
-  }
-
-  if (loading) return <p className="text-gray-500 text-sm">Calculating final requirements…</p>;
-
-  return (
-    <div>
-      {error && <AlertBox message={error} type="error" />}
-
-      {items.length === 0 ? (
-        <p className="text-gray-500 text-sm">No requirement data available for this planning version.</p>
-      ) : (
-        <div className="overflow-x-auto border border-ink-text/10 rounded-lg shadow-2xs bg-white">
-          <table className="min-w-full text-sm border-collapse">
-            <thead>
-              <tr className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
-                <th className="px-3 py-2 text-left font-semibold">Plant</th>
-                <th className="px-3 py-2 text-left font-semibold">Consumable</th>
-                <th className="px-3 py-2 text-right font-semibold">Calculated Qty</th>
-                <th className="px-3 py-2 text-right font-semibold">Approved Adjustments</th>
-                <th className="px-3 py-2 text-right font-semibold text-burnt-orange bg-burnt-orange/10">Final Requirement Qty</th>
-                <th className="px-3 py-2 text-left font-semibold">UOM</th>
-                <th className="px-3 py-2 text-left font-semibold">Confirmation Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((item, idx) => (
-                <tr key={`${item.plant_id}-${item.consumable_id}-${idx}`} className="border-b hover:bg-gray-50">
-                  <td className="px-3 py-2 font-medium">{item.plant_name ?? item.plant_id}</td>
-                  <td className="px-3 py-2">
-                    <span className="font-mono text-xs text-gray-500">{item.consumable_code}</span>
-                    <span className="ml-1">{item.consumable_name}</span>
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono">{item.calculated_qty}</td>
-                  <td className="px-3 py-2 text-right font-mono text-green-700">
-                    +{item.approved_adjustment_qty}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono font-bold text-blue-900 bg-blue-50">
-                    {item.final_required_qty}
-                  </td>
-                  <td className="px-3 py-2">{item.uom}</td>
-                  <td className="px-3 py-2">
-                    {item.is_fully_confirmed ? (
-                      <span className="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-800">
-                        Fully Confirmed
-                      </span>
-                    ) : (
-                      <span className="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-gray-100 text-gray-600">
-                        Unconfirmed / Partial
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── Main PlantWorkflow screen ──────────────────────────────────────────────────
 
-type TabKey = 'confirmations' | 'adjustments' | 'final-requirements';
+type TabKey =
+  | 'PLANT_I'
+  | 'PLANT_II'
+  | 'PLANT_III'
+  | 'PLANT_IV'
+  | 'PLANT_V';
 
 interface PlantWorkflowProps {
   currentUserId: string;
 }
 
-export default function PlantWorkflow({ currentUserId }: PlantWorkflowProps) {
+export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWorkflowProps) {
   const { user } = useAuth();
   const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const hasModernFlags = user && (
@@ -678,39 +62,233 @@ export default function PlantWorkflow({ currentUserId }: PlantWorkflowProps) {
   );
   const canRead = Boolean(isSuperAdmin || (hasModernFlags ? user?.plant_workflow_read : true));
 
-  const [activeTab, setActiveTab] = useState<TabKey>('confirmations');
-  const [planningVersionId, setPlanningVersionId] = useState('');
+  const [activeTab, setActiveTab] = useState<TabKey>('PLANT_I');
+  const [selectedMonth, setSelectedMonth] = useState<number>(() => new Date().getMonth() + 1);
+  const [selectedYear, setSelectedYear] = useState<number>(() => new Date().getFullYear());
+  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+
+  // Plant-specific plan states for 5 plant review tabs
+  const [allPlans, setAllPlans] = useState<MonthlyRequirementPlan[]>([]);
+  const [plansLoading, setPlansLoading] = useState(false);
+
+  // Modals for single intake & bulk upload within Plant Review
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [submittingAdd, setSubmittingAdd] = useState(false);
+  const [newItemCode, setNewItemCode] = useState('');
+  const [newItemDesc, setNewItemDesc] = useState('');
+  const [newItemPartNo, setNewItemPartNo] = useState('');
+  const [newItemUnit, setNewItemUnit] = useState('NOS');
+  const [newItemQty, setNewItemQty] = useState<number | string>('');
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setToast({ type, message });
+    setTimeout(() => {
+      setToast((prev) => (prev?.message === message ? null : prev));
+    }, 4500);
+  };
+
+  const loadAllPlans = useCallback(async () => {
+    setPlansLoading(true);
+    try {
+      const data = await fetchPlans(selectedMonth, selectedYear);
+      setAllPlans(data || []);
+    } catch {
+      // ignore
+    } finally {
+      setPlansLoading(false);
+    }
+  }, [selectedMonth, selectedYear]);
+
+  useEffect(() => {
+    loadAllPlans();
+  }, [loadAllPlans]);
+
+  const handleDirectApprovePlant = async (planId: string, plantName: string) => {
+    try {
+      await approvePlan(planId);
+      showToast(`Successfully approved ${plantName} plan!`, 'success');
+      await loadAllPlans();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to approve plan.';
+      showToast(msg, 'error');
+    }
+  };
+
+  const handleSingleIntakeFromReview = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newItemCode.trim()) {
+      showToast('Item ID / Code is required', 'error');
+      return;
+    }
+    const qty = Number(newItemQty);
+    if (isNaN(qty) || qty < 0) {
+      showToast('Quantity must be non-negative', 'error');
+      return;
+    }
+
+    const targetPlantId = activeTab.startsWith('PLANT_') ? activeTab : 'PLANT_I';
+    setSubmittingAdd(true);
+    try {
+      let targetPlan = allPlans.find(
+        (p) =>
+          p.plant_id.toUpperCase() === targetPlantId.toUpperCase() &&
+          p.month === selectedMonth &&
+          p.year === selectedYear
+      );
+      if (!targetPlan) {
+        targetPlan = await createPlan(targetPlantId, selectedMonth, selectedYear);
+      }
+
+      await createSingleLineItem(targetPlan.id, {
+        item_code: newItemCode.trim(),
+        item_description: newItemDesc.trim() || undefined,
+        part_no: newItemPartNo.trim() || undefined,
+        unit: newItemUnit.trim() || 'NOS',
+        requested_qty: qty,
+      });
+
+      showToast(`Added ${newItemCode.trim()} to ${targetPlantId}!`, 'success');
+      setIsAddModalOpen(false);
+      setNewItemCode('');
+      setNewItemDesc('');
+      setNewItemPartNo('');
+      setNewItemUnit('NOS');
+      setNewItemQty('');
+      await loadAllPlans();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to add item.';
+      showToast(msg, 'error');
+    } finally {
+      setSubmittingAdd(false);
+    }
+  };
 
   if (!canRead) {
     return <p role="alert" className="text-red-700">You do not have permission to view plant workflow.</p>;
   }
 
   const tabs: { key: TabKey; label: string }[] = [
-    { key: 'confirmations', label: 'Confirmations' },
-    { key: 'adjustments', label: 'Additional Requirements' },
-    { key: 'final-requirements', label: 'Final Requirements (Handoff)' },
+    { key: 'PLANT_I', label: 'Plant I' },
+    { key: 'PLANT_II', label: 'Plant II' },
+    { key: 'PLANT_III', label: 'Plant III' },
+    { key: 'PLANT_IV', label: 'Plant IV' },
+    { key: 'PLANT_V', label: 'Plant V' },
   ];
 
+  const normalizePlant = (id?: string) => {
+    if (!id) return '';
+    const clean = id.toUpperCase().replace(/\s+|-/g, '_');
+    if (clean === 'PLANT_1') return 'PLANT_I';
+    if (clean === 'PLANT_2') return 'PLANT_II';
+    if (clean === 'PLANT_3') return 'PLANT_III';
+    if (clean === 'PLANT_4') return 'PLANT_IV';
+    if (clean === 'PLANT_5') return 'PLANT_V';
+    return clean;
+  };
+
+  const currentPlantTabPlan = allPlans.find(
+    (p) =>
+      normalizePlant(p.plant_id) === normalizePlant(activeTab) &&
+      p.month === selectedMonth &&
+      p.year === selectedYear
+  ) || null;
+
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <h1 className="text-xl font-bold text-gray-800 mb-1">Plant review</h1>
-      <p className="text-sm text-gray-500 mb-5">
-        Review calculated requirements, manage additional demand, and inspect Final Requirements handoff.
-      </p>
+    <div className="font-['Plus_Jakarta_Sans',sans-serif] bg-gray-50 min-h-screen p-4 sm:p-6 flex flex-col space-y-5">
+      {/* Toast Notification */}
+      {toast && (
+        <div
+          className={`fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg border text-xs font-medium transition-all animate-in fade-in slide-in-from-top-2 ${
+            toast.type === 'success'
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : toast.type === 'error'
+              ? 'bg-red-50 text-red-800 border-red-200'
+              : 'bg-blue-50 text-blue-800 border-blue-200'
+          }`}
+        >
+          {toast.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
+          {toast.type === 'error' && <AlertTriangle className="w-4 h-4 text-red-600" />}
+          {toast.type === 'info' && <Sparkles className="w-4 h-4 text-blue-600" />}
+          <span>{toast.message}</span>
+          <button
+            onClick={() => setToast(null)}
+            className="p-1 hover:bg-black/5 rounded cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5 text-gray-500" />
+          </button>
+        </div>
+      )}
 
-      <PlanningVersionSelector value={planningVersionId} onChange={setPlanningVersionId} />
+      {/* Floating White Card Control Bar */}
+      <div className="bg-white rounded-xl shadow-xs border border-gray-200 p-5 flex flex-col gap-4">
+        {/* Module Title */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-gray-100">
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl font-bold text-gray-900 tracking-tight">Plant Review & Aggregation</h1>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Review monthly plant demands across all 5 facilities, manage line items, and approve requirements.
+            </p>
+          </div>
+        </div>
 
-      {/* Tabs */}
-      <div className="border-b mb-5">
-        <nav className="flex gap-1">
+        {/* Control Bar: Month, Year Selectors */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Month Dropdown (Strictly Month Names) */}
+            <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">
+              <Calendar className="w-4 h-4 text-gray-500" />
+              <label htmlFor="workflow-month-select" className="text-xs font-medium text-gray-600">
+                Month:
+              </label>
+              <select
+                id="workflow-month-select"
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                className="bg-transparent text-xs font-semibold text-gray-900 focus:outline-none cursor-pointer"
+              >
+                {MONTH_NAMES.map((name, idx) => (
+                  <option key={idx + 1} value={idx + 1}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Year Dropdown */}
+            <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">
+              <label htmlFor="workflow-year-select" className="text-xs font-medium text-gray-600">
+                Year:
+              </label>
+              <select
+                id="workflow-year-select"
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(Number(e.target.value))}
+                className="bg-transparent text-xs font-semibold text-gray-900 focus:outline-none cursor-pointer"
+              >
+                {[2024, 2025, 2026, 2027, 2028, 2029, 2030].map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 5 Plant Tabs */}
+      <div className="border-b border-gray-200 bg-white px-4 pt-2.5 rounded-t-xl shadow-2xs">
+        <nav className="flex flex-wrap gap-2">
           {tabs.map((tab) => (
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              className={`pb-2.5 px-3 text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer border-b-2 ${
                 activeTab === tab.key
-                  ? 'border-blue-600 text-blue-700'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
+                  ? 'border-orange-600 text-orange-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-800'
               }`}
             >
               {tab.label}
@@ -719,15 +297,196 @@ export default function PlantWorkflow({ currentUserId }: PlantWorkflowProps) {
         </nav>
       </div>
 
-      {activeTab === 'confirmations' && (
-        <ConfirmationsTab planningVersionId={planningVersionId} />
-      )}
-      {activeTab === 'adjustments' && (
-        <AdjustmentsTab planningVersionId={planningVersionId} currentUserId={currentUserId} />
-      )}
-      {activeTab === 'final-requirements' && (
-        <FinalRequirementsTab planningVersionId={planningVersionId} />
+      {/* Active Plant Tab View */}
+      <div className="space-y-4">
+        <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-bold text-gray-900">
+              {tabs.find((t) => t.key === activeTab)?.label} Review & Approval
+            </h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Status:{' '}
+              <span className="font-semibold uppercase text-gray-800">
+                {currentPlantTabPlan ? currentPlantTabPlan.status : 'DRAFT'}
+              </span>{' '}
+              • {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
+            </p>
+          </div>
+          {currentPlantTabPlan && currentPlantTabPlan.status !== 'APPROVED' && (
+            <button
+              type="button"
+              onClick={() =>
+                handleDirectApprovePlant(
+                  currentPlantTabPlan.id,
+                  tabs.find((t) => t.key === activeTab)?.label || activeTab
+                )
+              }
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>Approve {tabs.find((t) => t.key === activeTab)?.label}</span>
+            </button>
+          )}
+          {currentPlantTabPlan && currentPlantTabPlan.status === 'APPROVED' && (
+            <span className="inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              Approved & Locked
+            </span>
+          )}
+        </div>
+
+        <PlanGrid
+          key={`${activeTab}-${currentPlantTabPlan?.id || 'none'}-${selectedMonth}-${selectedYear}`}
+          plan={currentPlantTabPlan}
+          items={currentPlantTabPlan?.line_items || []}
+          loading={plansLoading}
+          uploading={false}
+          onUpload={async (f: File, uploadAll?: boolean) => {
+            let targetPlan = currentPlantTabPlan;
+            const targetPlantId = activeTab.startsWith('PLANT_') ? activeTab : 'PLANT_I';
+            if (!targetPlan) {
+              try {
+                targetPlan = await createPlan(targetPlantId, selectedMonth, selectedYear);
+              } catch (err) {
+                console.error('[BULK UPLOAD] Failed to auto-create plan:', err);
+              }
+            }
+            if (!targetPlan) {
+              showToast('No active plan found or could be created for this plant', 'error');
+              return;
+            }
+            try {
+              console.log('[BULK UPLOAD] Triggered with planId:', targetPlan.id, 'file:', f.name, 'uploadAllPlants:', Boolean(uploadAll));
+              const res = await bulkUploadItems(targetPlan.id, f, Boolean(uploadAll));
+              const plantLabel = uploadAll
+                ? res.plants_affected?.join(', ') || 'All Plants'
+                : targetPlan.plant_id;
+              showToast(`Items uploaded successfully! Processed ${res.upserted} items into ${plantLabel}.`, 'success');
+              await loadAllPlans();
+            } catch (e: unknown) {
+              let msg = 'Bulk upload failed.';
+              if (axios.isAxiosError(e)) {
+                msg = e.response?.data?.detail || e.response?.data?.message || e.message || msg;
+              } else if (e instanceof Error) {
+                msg = e.message;
+              }
+              showToast(msg, 'error');
+              throw e;
+            }
+          }}
+          onAddItem={() => setIsAddModalOpen(true)}
+          onUpdateItem={async (itemId: string, data: UpdateLineItemPayload) => {
+            if (currentPlantTabPlan) {
+              await updateLineItem(currentPlantTabPlan.id, itemId, data);
+              await loadAllPlans();
+            }
+          }}
+          onDeleteItem={async (itemId: string) => {
+            if (currentPlantTabPlan) {
+              await deleteLineItem(currentPlantTabPlan.id, itemId);
+              await loadAllPlans();
+            }
+          }}
+          canUpload={currentPlantTabPlan?.status !== 'APPROVED'}
+          canEdit={currentPlantTabPlan?.status !== 'APPROVED'}
+        />
+      </div>
+
+      {/* Single Intake Modal */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-lg w-full overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="p-5 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-gray-900">Add Item (Single Intake)</h3>
+              <button
+                onClick={() => setIsAddModalOpen(false)}
+                className="p-1 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleSingleIntakeFromReview} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  Item Id / Code <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. CON-1001 or 50000004"
+                  value={newItemCode}
+                  onChange={(e) => setNewItemCode(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">Item Description</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Synthetic Gear Oil 320"
+                  value={newItemDesc}
+                  onChange={(e) => setNewItemDesc(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Part No.</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. S-OIL-320"
+                    value={newItemPartNo}
+                    onChange={(e) => setNewItemPartNo(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Unit / UOM</label>
+                  <input
+                    type="text"
+                    placeholder="NOS, LTR, KG"
+                    value={newItemUnit}
+                    onChange={(e) => setNewItemUnit(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  Requested Quantity <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  required
+                  placeholder="e.g. 50"
+                  value={newItemQty}
+                  onChange={(e) => setNewItemQty(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 font-mono"
+                />
+              </div>
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsAddModalOpen(false)}
+                  className="px-3.5 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingAdd}
+                  className="px-4 py-1.5 text-xs font-semibold text-white bg-orange-600 hover:bg-orange-700 rounded-lg shadow-xs disabled:opacity-50"
+                >
+                  Save Line Item
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );
 }
+
