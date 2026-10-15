@@ -533,7 +533,7 @@ export default function Products() {
             Authoritative master catalog for raw consumables, sales parts, and assembly BOM mappings.
           </p>
         </div>
-        {(isAdmin || user?.masters_create) && (
+        {isAdmin && (
           <button
             type="button"
             onClick={() => setIsUploadModalOpen(true)}
@@ -1896,8 +1896,14 @@ export default function Products() {
       {/* ========================================================================= */}
       {/* BULK UPLOAD MODAL OVERLAY                                                 */}
       {/* ========================================================================= */}
-      {isUploadModalOpen && <MasterBulkWorkspace key={activeTab} category={activeTab} label={activeTabLabel}
-        onClose={() => setIsUploadModalOpen(false)} onChanged={() => { void loadData(); }}/>}
+      {isUploadModalOpen && (
+        <MasterBulkWorkspace
+          category={activeTab}
+          label={activeTabLabel}
+          onClose={() => setIsUploadModalOpen(false)}
+          onChanged={() => { void loadData(); }}
+        />
+      )}
 
       {/* Floating Success Toast */}
       {toast && (

@@ -326,8 +326,11 @@ export default function StockStatementWorkspace() {
   useEffect(() => {
     setSuccessMsg(null);
     loadData();
+  }, [loadData]);
+
+  useEffect(() => {
     loadMissingData();
-  }, [loadData, loadMissingData]);
+  }, [loadMissingData]);
 
   const handleDeleteStatement = async () => {
     if (!deleteTarget || !canDeleteStatement || deleteInProgress.current) return;
@@ -1312,7 +1315,7 @@ export default function StockStatementWorkspace() {
             data={records}
             selectedIds={selectedIds}
             onSelectionChange={setSelectedIds}
-            isLoading={isLoading}
+            isLoading={isLoading || searchQuery !== settledSearch}
             emptyMessage={
               metadata?.has_statement
                 ? 'No records match your filter criteria.'

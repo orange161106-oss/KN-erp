@@ -119,12 +119,13 @@ for (const module of ['statement', 'management'] as const) {
     const get = vi.spyOn(apiClient, 'get').mockImplementation(async () => ({ metadata: {}, summary: {}, records: [] }) as never);
     const user = { id: 'user', username: 'operator', roles: [], permissions: [], inventory_read: true };
     render(<AuthContext.Provider value={{ user, login: vi.fn(), logout: vi.fn() }}>{module === 'statement' ? <Statement /> : <Management />}</AuthContext.Provider>);
-    await waitFor(() => expect(get).toHaveBeenCalledOnce());
+    const initialCalls = module === 'statement' ? 2 : 1;
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(initialCalls));
     const search = screen.getByPlaceholderText(module === 'statement' ? 'Search items...' : 'Search items or category...');
     fireEvent.change(search, { target: { value: 'G' } });
     fireEvent.change(search, { target: { value: 'Gas' } });
-    expect(get).toHaveBeenCalledOnce();
-    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
-    expect(get.mock.calls[1][0]).toContain('search=Gas');
+    expect(get).toHaveBeenCalledTimes(initialCalls);
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(initialCalls + 1));
+    expect(get.mock.calls.at(-1)![0]).toContain('search=Gas');
   });
 }

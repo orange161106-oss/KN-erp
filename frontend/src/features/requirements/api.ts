@@ -176,6 +176,11 @@ export async function approvePlan(planId: string): Promise<MonthlyRequirementPla
   return response.data;
 }
 
+export async function reopenPlan(planId: string): Promise<MonthlyRequirementPlan> {
+  const response = await requirementsClient.patch<MonthlyRequirementPlan>(`/api/v1/requirements/plans/${planId}/reopen`);
+  return response.data;
+}
+
 export async function runAggregation(month: number, year: number): Promise<AggregationRunResponse> {
   const response = await requirementsClient.post<AggregationRunResponse>(`/api/v1/requirements/aggregate/${month}/${year}`);
   return response.data;
