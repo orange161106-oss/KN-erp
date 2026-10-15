@@ -63,6 +63,7 @@ export default function Sidebar({
   }, []);
 
   const tooltipProps = (label: string) => ({
+    title: label,
     'data-sidebar-tooltip': isCollapsed ? label : undefined,
     'aria-describedby': isCollapsed && tooltip?.label === label ? tooltipId : undefined,
   });
