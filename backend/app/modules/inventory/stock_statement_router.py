@@ -12,6 +12,11 @@ from app.db.session import get_db
 from app.schemas.auth import CurrentUser
 from app.schemas.error import ErrorResponse
 from app.schemas.stock_statements import (
+    DemoteConsumableRequest,
+    DemoteConsumableResponse,
+    MissingConsumablesResponse,
+    PromoteConsumablesRequest,
+    PromoteConsumablesResponse,
     StockStatementConfirmRequest,
     StockStatementBatchUpdateRequest,
     StockStatementDeleteRequest,
@@ -31,6 +36,7 @@ router = APIRouter(
 
 ReadUser = Annotated[CurrentUser, Depends(require_permissions("inventory.stock.read", "inventory.read"))]
 ImportUser = Annotated[CurrentUser, Depends(require_permissions("inventory.stock.import", "inventory.create", "inventory.update"))]
+PromoteUser = Annotated[CurrentUser, Depends(require_permissions("masters.consumable.create", "masters.create", "inventory.update"))]
 DeleteUser = Annotated[CurrentUser, Depends(require_feature_flag("inventory_delete"))]
 Database = Annotated[Session, Depends(get_db)]
 
@@ -43,7 +49,8 @@ def get_statement(
     month: Annotated[int, Query(ge=1, le=12, description="Statement month (1-12)")],
     year: Annotated[int, Query(ge=2000, le=2100, description="Statement year (e.g. 2026)")],
     search: Optional[str] = Query(None, description="Search item id, name, or customer part no"),
-    item_class: Optional[str] = Query("CONSUMABLE", description="Filter by item class ('CONSUMABLE', 'PRODUCT_OR_OTHER', 'UNKNOWN', or 'ALL')"),
+    store_group: Optional[str] = Query(None, description="Filter by store group"),
+    item_class: Optional[str] = Query("CONSUMABLE", description="Filter by item class ('CONSUMABLE', 'OTHER_ITEM', or 'ALL')"),
     has_warnings_only: bool = Query(False, description="Filter only records with validation warnings"),
 ) -> StockStatementResponse:
     """Retrieve the active monthly stock statement and aggregated totals."""
@@ -52,9 +59,57 @@ def get_statement(
         month=month,
         year=year,
         search=search,
+        store_group_filter=store_group,
         item_class_filter=item_class,
         has_warnings_only=has_warnings_only,
     )
+
+
+@router.get("/missing", response_model=MissingConsumablesResponse)
+def get_missing(
+    session: Database,
+    user: ReadUser,
+    month: Annotated[int, Query(ge=1, le=12)],
+    year: Annotated[int, Query(ge=2000, le=2100)],
+) -> MissingConsumablesResponse:
+    """List active consumables in Product Master that have no entry in the selected month's statement."""
+    return service.get_missing_consumables(session, month=month, year=year)
+
+
+@router.get("/missing/export")
+def export_missing(
+    session: Database,
+    user: ReadUser,
+    month: int = Query(..., ge=1, le=12),
+    year: int = Query(..., ge=2000, le=2100),
+):
+    """Download active consumables missing from the stock statement as an Excel spreadsheet."""
+    excel_bytes, filename = service.export_missing_consumables_excel(session, month=month, year=year)
+    headers = {
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
+    return StreamingResponse(io.BytesIO(excel_bytes), headers=headers)
+
+
+@router.post("/promote", response_model=PromoteConsumablesResponse)
+def promote_items(
+    session: Database,
+    user: PromoteUser,
+    payload: PromoteConsumablesRequest,
+) -> PromoteConsumablesResponse:
+    """Promote one or more statement other items into the Consumable Master."""
+    return service.promote_statement_items_to_consumables(session, payload=payload, user=user)
+
+
+@router.post("/demote", response_model=DemoteConsumableResponse)
+def demote_item(
+    session: Database,
+    user: PromoteUser,
+    payload: DemoteConsumableRequest,
+) -> DemoteConsumableResponse:
+    """Move a consumable back to other items if it has no downstream dependencies."""
+    return service.demote_consumable_item(session, payload=payload, user=user)
 
 
 @router.post("/preview", response_model=StockStatementPreviewResponse)

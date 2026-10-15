@@ -23,7 +23,14 @@ from app.models.stock_statements import StockStatementBatch, StockStatementLine
 from app.schemas.auth import CurrentUser
 from app.schemas.stock_statements import (
     ComparisonSummary,
+    DemoteConsumableRequest,
+    DemoteConsumableResponse,
     GroupedWarningResponse,
+    MissingConsumableItem,
+    MissingConsumablesResponse,
+    PromoteConsumableItem,
+    PromoteConsumablesRequest,
+    PromoteConsumablesResponse,
     RowIssue,
     StockStatementConfirmRequest,
     StockStatementBatchUpdateRequest,
@@ -85,6 +92,33 @@ MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December"
 ]
+
+UNIT_SYNONYMS = [
+    {"NOS", "PCS", "NUMBERS", "PIECES", "NO", "PC"},
+    {"KG", "KGS", "KILOGRAM", "KILOGRAMS"},
+    {"MTR", "MTRS", "METER", "METERS"},
+    {"LTR", "LTRS", "LITER", "LITERS"},
+    {"SET", "SETS"},
+    {"PKT", "PKTS", "PACKET", "PACKETS"},
+]
+
+
+def are_units_compatible(u1: Optional[str], u2: Optional[str]) -> bool:
+    if not u1 or not u2:
+        return True
+    c1 = re.sub(r"[^A-Z0-9]", "", str(u1).upper())
+    c2 = re.sub(r"[^A-Z0-9]", "", str(u2).upper())
+    if not c1 or not c2:
+        return True
+    if c1 == c2:
+        return True
+    # Ignore pure digits (e.g. legacy numeric code '1', '249')
+    if c1.isdigit() or c2.isdigit():
+        return True
+    for syn_set in UNIT_SYNONYMS:
+        if c1 in syn_set and c2 in syn_set:
+            return True
+    return False
 
 
 def normalize_header(text: Any) -> str:
@@ -228,6 +262,10 @@ def parse_and_preview_stock_statement(
         "closing qty": "closing_qty",
         "closing quantity": "closing_qty",
         "closing value": "closing_value",
+        "store group": "store_group",
+        "group": "store_group",
+        "item class": "item_class",
+        "class": "item_class",
     }
 
     errors: list[RowIssue] = []
@@ -292,39 +330,32 @@ def parse_and_preview_stock_statement(
                     severity="ERROR",
                 ))
 
-    # Pre-fetch Consumables master for verification
+    # Pre-fetch active Consumables master for verification
     consumables = session.execute(
-        select(Consumable.id, Consumable.code, Consumable.name, Consumable.unit_id)
+        select(Consumable.id, Consumable.item_id, Consumable.name, Consumable.description, Consumable.category, Consumable.unit_id, Consumable.rate)
+        .where(Consumable.is_active == True)
     ).all()
     consumable_by_code = {
-        normalize_item_id_key(c.code): c
+        normalize_item_id_key(c.item_id): c
         for c in consumables
-        if c.code
+        if c.item_id
     }
-
-    # Pre-fetch Products master to identify parts/products in whole-store statement
-    products = session.execute(
-        select(Product.id, Product.code, Product.part_number, Product.item_id)
-    ).all()
-    product_keys: set[str] = set()
-    for p in products:
-        if p.code:
-            product_keys.add(normalize_item_id_key(p.code))
-        if p.part_number:
-            product_keys.add(normalize_item_id_key(p.part_number))
-        if p.item_id:
-            product_keys.add(normalize_item_id_key(p.item_id))
 
     units = session.execute(select(Unit.id, Unit.code)).all()
     unit_code_by_id = {u.id: u.code for u in units}
 
     seen_item_ids: set[str] = set()
-    unknown_items: set[str] = set()
     parsed_lines: list[dict[str, Any]] = []
+
+    current_store_group: Optional[str] = None
+    detected_location_text: Optional[str] = None
+    groups_dict: dict[str, dict[str, Any]] = {}
+    grand_total_record: Optional[dict[str, Any]] = None
+    groups_seen = False
 
     # Iterate rows
     for r in range(header_row_idx + 1, sheet.max_row + 1):
-        # Check if entire row is empty (ignore empty string or whitespace cells)
+        # Check if entire row is empty
         row_has_data = any(
             sheet.cell(row=r, column=c).value is not None
             and str(sheet.cell(row=r, column=c).value).strip() != ""
@@ -335,40 +366,84 @@ def parse_and_preview_stock_statement(
 
         item_id_raw = sheet.cell(row=r, column=col_mapping.get("item_id", 1)).value
         item_id_str = normalize_item_id(item_id_raw)
+        item_id_upper = item_id_str.upper()
+
+        # Check other columns
+        other_cols_non_empty = [
+            c for c in range(1, sheet.max_column + 1)
+            if c != col_mapping.get("item_id", 1)
+            and sheet.cell(row=r, column=c).value is not None
+            and str(sheet.cell(row=r, column=c).value).strip() != ""
+        ]
+        has_other_data = len(other_cols_non_empty) > 0
+
+        # Check for Total rows (starts with TOTAL or is GRAND TOTAL)
+        is_total_row = (
+            item_id_upper.startswith("TOTAL")
+            or "GRAND TOTAL" in item_id_upper
+            or "SUB TOTAL" in item_id_upper
+        )
+
+        if is_total_row:
+            tot_open_qty = parse_raw_decimal(sheet.cell(row=r, column=col_mapping["opening_qty"]).value if "opening_qty" in col_mapping else None, r, "Opening Qty.", errors)
+            tot_open_val = parse_raw_decimal(sheet.cell(row=r, column=col_mapping["opening_value"]).value if "opening_value" in col_mapping else None, r, "Opening Value", errors)
+            tot_rcpt_qty = parse_raw_decimal(sheet.cell(row=r, column=col_mapping["receipt_qty"]).value if "receipt_qty" in col_mapping else None, r, "Receipt Qty.", errors)
+            tot_rcpt_val = parse_raw_decimal(sheet.cell(row=r, column=col_mapping["receipt_value"]).value if "receipt_value" in col_mapping else None, r, "Receipt Value", errors)
+            tot_iss_qty = parse_raw_decimal(sheet.cell(row=r, column=col_mapping["issue_qty"]).value if "issue_qty" in col_mapping else None, r, "Issue Qty.", errors)
+            tot_iss_val = parse_raw_decimal(sheet.cell(row=r, column=col_mapping["issue_value"]).value if "issue_value" in col_mapping else None, r, "Issue Value", errors)
+            tot_cls_qty = parse_raw_decimal(sheet.cell(row=r, column=col_mapping["closing_qty"]).value if "closing_qty" in col_mapping else None, r, "Closing Qty.", errors)
+            tot_cls_val = parse_raw_decimal(sheet.cell(row=r, column=col_mapping["closing_value"]).value if "closing_value" in col_mapping else None, r, "Closing Value", errors)
+
+            tot_data = {
+                "row": r,
+                "open_qty": tot_open_qty, "open_val": tot_open_val,
+                "rcpt_qty": tot_rcpt_qty, "rcpt_val": tot_rcpt_val,
+                "iss_qty": tot_iss_qty, "iss_val": tot_iss_val,
+                "cls_qty": tot_cls_qty, "cls_val": tot_cls_val,
+            }
+            if "GRAND TOTAL" in item_id_upper:
+                grand_total_record = tot_data
+            else:
+                if current_store_group and current_store_group in groups_dict:
+                    groups_dict[current_store_group]["total_row"] = tot_data
+            continue
+
+        if not has_other_data:
+            # Banner row or Group heading
+            if not groups_seen and ("LOC. ID" in item_id_upper or "STORE" in item_id_upper or "KNITVEL" in item_id_upper):
+                if "LOC. ID" in item_id_upper or "STORE" in item_id_upper:
+                    detected_location_text = item_id_str
+                continue
+            # Group heading
+            current_store_group = item_id_str
+            groups_seen = True
+            if current_store_group not in groups_dict:
+                groups_dict[current_store_group] = {
+                    "heading_row": r,
+                    "items": [],
+                    "total_row": None,
+                }
+            continue
+
+        # Item row
         if not item_id_str:
-            # Missing Item ID on non-empty row
             errors.append(RowIssue(row=r, column="Item Id", description="Row has data but Item Id is empty.", severity="ERROR", code="EMPTY_ITEM_ID"))
             continue
 
-        item_id_upper = item_id_str.upper()
+        effective_store_group = current_store_group
+        if "store_group" in col_mapping:
+            sg_cell = sheet.cell(row=r, column=col_mapping["store_group"]).value
+            if sg_cell is not None and str(sg_cell).strip():
+                effective_store_group = str(sg_cell).strip()
 
-        # Skip total / subtotal summary rows
-        if "TOTAL" in item_id_upper or "GRAND TOTAL" in item_id_upper or "SUB TOTAL" in item_id_upper:
-            continue
-
-        # Skip banner / section category headers (e.g. 'KNITVEL NEEDLES', 'Loc. Id. : CONSUMABLES STORE', 'Ashok Leyland - CHILD PARTS', 'BENDING TOOL', etc.)
-        # Section banners have no unit and no opening/receipt/issue/closing quantities or values
-        unit_raw = sheet.cell(row=r, column=col_mapping["unit"]).value if "unit" in col_mapping else None
-        has_unit = unit_raw is not None and str(unit_raw).strip() != ""
-        qty_val_keys = ["opening_qty", "opening_value", "receipt_qty", "receipt_value", "issue_qty", "issue_value", "closing_qty", "closing_value"]
-        has_any_qty_or_val = any(
-            (sheet.cell(row=r, column=col_mapping[k]).value is not None and str(sheet.cell(row=r, column=col_mapping[k]).value).strip() != "")
-            for k in qty_val_keys if k in col_mapping
-        )
-        if not has_unit and not has_any_qty_or_val:
-            continue
-        if item_id_upper.startswith("LOC. ID") or "KNITVEL" in item_id_upper:
-            continue
-
-        # Classify item into CONSUMABLE, PRODUCT_OR_OTHER, UNKNOWN
+        # Classify item into CONSUMABLE vs OTHER_ITEM
         master_consumable = consumable_by_code.get(item_id_upper)
         if master_consumable:
             item_class = "CONSUMABLE"
-        elif item_id_upper in product_keys:
-            item_class = "PRODUCT_OR_OTHER"
+            consumable_id = str(master_consumable.id)
         else:
-            item_class = "UNKNOWN"
-            unknown_items.add(item_id_str)
+            item_class = "OTHER_ITEM"
+            consumable_id = None
 
         # Duplicate Item ID check within file
         if item_id_upper in seen_item_ids:
@@ -384,18 +459,6 @@ def parse_and_preview_stock_statement(
         seen_item_ids.add(item_id_upper)
 
         line_issues: list[str] = []
-
-        if item_class == "UNKNOWN":
-            warnings.append(RowIssue(
-                row=r,
-                column="Item Id",
-                description=f"Item Id '{item_id_str}' was not found in Consumable Master. Classified as UNKNOWN.",
-                severity="WARNING",
-                code="ITEM_UNKNOWN_IN_MASTER",
-                item_id=item_id_str,
-                item_class=item_class,
-            ))
-            line_issues.append("ITEM_UNKNOWN_IN_MASTER")
 
         # Extract values
         desc_val = sheet.cell(row=r, column=col_mapping["item_description"]).value if "item_description" in col_mapping else None
@@ -450,10 +513,10 @@ def parse_and_preview_stock_statement(
             warnings.append(RowIssue(row=r, column="Closing Qty.", description=f"Negative Closing Qty ({cls_qty}).", severity="WARNING", code="NEGATIVE_CLOSING", item_id=item_id_str, item_class=item_class))
             line_issues.append("NEGATIVE_CLOSING")
 
-        # Unit mismatch warning (consumables only)
+        # Unit mismatch warning (consumables only, using are_units_compatible)
         if item_class == "CONSUMABLE" and master_consumable and unit_val:
             master_unit_code = unit_code_by_id.get(master_consumable.unit_id)
-            if master_unit_code and str(unit_val).strip().upper() != master_unit_code.upper():
+            if not are_units_compatible(master_unit_code, str(unit_val)):
                 warnings.append(RowIssue(
                     row=r,
                     column="Unit",
@@ -465,36 +528,12 @@ def parse_and_preview_stock_statement(
                 ))
                 line_issues.append("UNIT_MISMATCH")
 
-        # Description mismatch warning (consumables only, info)
-        if item_class == "CONSUMABLE" and master_consumable and desc_val and master_consumable.name:
-            if str(desc_val).strip().upper() != master_consumable.name.strip().upper():
-                line_issues.append("DESC_MISMATCH")
-
-        # Empty cell warning where value expected
-        for col_n, col_v in [
-            ("Opening Qty.", open_qty), ("Opening Value", open_val),
-            ("Receipt Qty.", rcpt_qty), ("Receipt Value", rcpt_val),
-            ("Issue Qty.", iss_qty), ("Issue Value", iss_val),
-            ("Closing Qty.", cls_qty), ("Closing Value", cls_val),
-        ]:
-            if col_v is None:
-                code_str = f"EMPTY_{col_n.upper().replace(' ', '_').replace('.', '')}"
-                warnings.append(RowIssue(
-                    row=r,
-                    column=col_n,
-                    description=f"Empty cell in {col_n} (treated as null).",
-                    severity="WARNING",
-                    code=code_str,
-                    item_id=item_id_str,
-                    item_class=item_class,
-                ))
-                line_issues.append(code_str)
-
-        parsed_lines.append({
+        parsed_line = {
             "source_row": r,
             "item_id": item_id_str,
             "item_class": item_class,
-            "consumable_id": str(master_consumable.id) if master_consumable else None,
+            "store_group": effective_store_group,
+            "consumable_id": consumable_id,
             "item_description": str(desc_val).strip() if desc_val else None,
             "cust_part_no": str(cust_part_val).strip() if cust_part_val else None,
             "unit": str(unit_val).strip() if unit_val else None,
@@ -509,12 +548,99 @@ def parse_and_preview_stock_statement(
             "diff_closing_qty": diff_qty,
             "diff_closing_value": diff_val,
             "warning_codes": line_issues,
+        }
+        parsed_lines.append(parsed_line)
+        if current_store_group and current_store_group in groups_dict:
+            groups_dict[current_store_group]["items"].append(parsed_line)
+
+    # Reconcile group totals
+    store_groups_found: list[dict[str, Any]] = []
+    for g_name, g_info in groups_dict.items():
+        g_items = g_info["items"]
+        tot = g_info["total_row"]
+        sum_open_qty = sum((it["opening_qty"] or Decimal(0)) for it in g_items)
+        sum_open_val = sum((it["opening_value"] or Decimal(0)) for it in g_items)
+        sum_rcpt_qty = sum((it["receipt_qty"] or Decimal(0)) for it in g_items)
+        sum_rcpt_val = sum((it["receipt_value"] or Decimal(0)) for it in g_items)
+        sum_iss_qty = sum((it["issue_qty"] or Decimal(0)) for it in g_items)
+        sum_iss_val = sum((it["issue_value"] or Decimal(0)) for it in g_items)
+        sum_cls_qty = sum((it["closing_qty"] or Decimal(0)) for it in g_items)
+        sum_cls_val = sum((it["closing_value"] or Decimal(0)) for it in g_items)
+
+        reconciled = True
+        if tot:
+            checks = [
+                ("Opening Qty.", sum_open_qty, tot["open_qty"], Decimal("0.0001")),
+                ("Opening Value", sum_open_val, tot["open_val"], Decimal("1.0000")),
+                ("Receipt Qty.", sum_rcpt_qty, tot["rcpt_qty"], Decimal("0.0001")),
+                ("Receipt Value", sum_rcpt_val, tot["rcpt_val"], Decimal("1.0000")),
+                ("Issue Qty.", sum_iss_qty, tot["iss_qty"], Decimal("0.0001")),
+                ("Issue Value", sum_iss_val, tot["iss_val"], Decimal("1.0000")),
+                ("Closing Qty.", sum_cls_qty, tot["cls_qty"], Decimal("0.0001")),
+                ("Closing Value", sum_cls_val, tot["cls_val"], Decimal("1.0000")),
+            ]
+            for col_lbl, s_val, t_val, tol in checks:
+                if t_val is not None:
+                    diff = abs(s_val - t_val)
+                    if diff > tol:
+                        reconciled = False
+                        errors.append(RowIssue(
+                            row=tot["row"],
+                            column=col_lbl,
+                            description=f"Group '{g_name}' total mismatch in {col_lbl}: sum of {len(g_items)} item rows ({s_val}) != Total row ({t_val}). Diff: {s_val - t_val:+f}",
+                            severity="ERROR",
+                            code="GROUP_TOTAL_MISMATCH",
+                        ))
+        store_groups_found.append({
+            "group_name": g_name,
+            "item_count": len(g_items),
+            "reconciled": reconciled,
+            "total_closing_qty": str(sum_cls_qty),
+            "total_closing_value": str(sum_cls_val),
         })
+
+    # Reconcile grand total
+    if grand_total_record:
+        all_open_qty = sum((it["opening_qty"] or Decimal(0)) for it in parsed_lines)
+        all_open_val = sum((it["opening_value"] or Decimal(0)) for it in parsed_lines)
+        all_rcpt_qty = sum((it["receipt_qty"] or Decimal(0)) for it in parsed_lines)
+        all_rcpt_val = sum((it["receipt_value"] or Decimal(0)) for it in parsed_lines)
+        all_iss_qty = sum((it["issue_qty"] or Decimal(0)) for it in parsed_lines)
+        all_iss_val = sum((it["issue_value"] or Decimal(0)) for it in parsed_lines)
+        all_cls_qty = sum((it["closing_qty"] or Decimal(0)) for it in parsed_lines)
+        all_cls_val = sum((it["closing_value"] or Decimal(0)) for it in parsed_lines)
+
+        gt_checks = [
+            ("Opening Qty.", all_open_qty, grand_total_record["open_qty"], Decimal("0.0001")),
+            ("Opening Value", all_open_val, grand_total_record["open_val"], Decimal("1.0000")),
+            ("Receipt Qty.", all_rcpt_qty, grand_total_record["rcpt_qty"], Decimal("0.0001")),
+            ("Receipt Value", all_rcpt_val, grand_total_record["rcpt_val"], Decimal("1.0000")),
+            ("Issue Qty.", all_iss_qty, grand_total_record["iss_qty"], Decimal("0.0001")),
+            ("Issue Value", all_iss_val, grand_total_record["iss_val"], Decimal("1.0000")),
+            ("Closing Qty.", all_cls_qty, grand_total_record["cls_qty"], Decimal("0.0001")),
+            ("Closing Value", all_cls_val, grand_total_record["cls_val"], Decimal("1.0000")),
+        ]
+        for col_lbl, s_val, t_val, tol in gt_checks:
+            if t_val is not None:
+                diff = abs(s_val - t_val)
+                if diff > tol:
+                    errors.append(RowIssue(
+                        row=grand_total_record["row"],
+                        column=col_lbl,
+                        description=f"Grand Total mismatch in {col_lbl}: sum of all {len(parsed_lines)} items ({s_val}) != Grand Total row ({t_val}). Diff: {s_val - t_val:+f}",
+                        severity="ERROR",
+                        code="GRAND_TOTAL_MISMATCH",
+                    ))
+
+    # Missing consumables from statement
+    missing_consumables = [
+        c for c in consumables
+        if c.item_id and normalize_item_id_key(c.item_id) not in seen_item_ids
+    ]
 
     # Class counts
     consumable_count = sum(1 for p in parsed_lines if p["item_class"] == "CONSUMABLE")
-    product_or_other_count = sum(1 for p in parsed_lines if p["item_class"] == "PRODUCT_OR_OTHER")
-    unknown_count = sum(1 for p in parsed_lines if p["item_class"] == "UNKNOWN")
+    other_items_count = len(parsed_lines) - consumable_count
 
     # Group warnings by code
     grouped_map: dict[str, dict[str, Any]] = {}
@@ -562,6 +688,7 @@ def parse_and_preview_stock_statement(
         "year": selected_year,
         "date": statement_end,
         "filename": filename,
+        "location_text": detected_location_text or "CONSUMABLES STORE",
         "file_hash": file_hash,
         "lines": parsed_lines,
         "issues": all_issues,
@@ -570,8 +697,10 @@ def parse_and_preview_stock_statement(
         "warnings_count": len(warnings),
         "errors_count": len(errors),
         "consumable_count": consumable_count,
-        "product_or_other_count": product_or_other_count,
-        "unknown_count": unknown_count,
+        "product_or_other_count": other_items_count,
+        "unknown_count": 0,
+        "missing_consumables_count": len(missing_consumables),
+        "store_groups_found": store_groups_found,
         "can_confirm": can_confirm,
         "created_at": time.time(),
     }
@@ -582,6 +711,7 @@ def parse_and_preview_stock_statement(
             item_id=p["item_id"],
             consumable_id=p["consumable_id"],
             item_class=p["item_class"],
+            store_group=p["store_group"],
             item_description=p["item_description"],
             cust_part_no=p["cust_part_no"],
             unit=p["unit"],
@@ -607,6 +737,7 @@ def parse_and_preview_stock_statement(
         statement_date=statement_end.isoformat(),
         detected_title=title_text,
         source_filename=filename,
+        location_text=detected_location_text or "CONSUMABLES STORE",
         file_token=token,
         is_existing_batch=existing is not None,
         existing_batch_filename=existing.source_filename if existing else None,
@@ -614,12 +745,14 @@ def parse_and_preview_stock_statement(
         errors=errors,
         warnings=warnings,
         grouped_warnings=grouped_warnings,
-        unknown_items=sorted(list(unknown_items)),
+        unknown_items=[],
         total_rows=len(parsed_lines),
         warning_count=len(warnings),
         consumable_count=consumable_count,
-        product_or_other_count=product_or_other_count,
-        unknown_count=unknown_count,
+        product_or_other_count=other_items_count,
+        unknown_count=0,
+        missing_consumables_count=len(missing_consumables),
+        store_groups_found=store_groups_found,
         lines_preview=preview_lines,
         can_confirm=can_confirm,
     )
@@ -701,6 +834,7 @@ def confirm_stock_statement_import(
             statement_year=req.statement_year,
             statement_date=token_data["date"],
             source_filename=token_data["filename"],
+            location_text=token_data.get("location_text"),
             file_hash=token_data["file_hash"],
             status="active",
             row_count=len(token_data["lines"]),
@@ -721,8 +855,9 @@ def confirm_stock_statement_import(
             line_obj = StockStatementLine(
                 batch_id=new_batch.id,
                 item_id=line["item_id"],
-                consumable_id=uuid.UUID(line["consumable_id"]) if line["consumable_id"] else None,
+                consumable_id=uuid.UUID(line["consumable_id"]) if line.get("consumable_id") else None,
                 item_class=line.get("item_class", "CONSUMABLE"),
+                store_group=line.get("store_group"),
                 item_description=line["item_description"],
                 cust_part_no=line["cust_part_no"],
                 unit=line["unit"],
@@ -766,7 +901,6 @@ def confirm_stock_statement_import(
     finally:
         # Consume token so it cannot be re-used to submit duplicate batches
         _PREVIEW_STORE.pop(req.file_token, None)
-
     return get_stock_statement(session, req.statement_month, req.statement_year)
 
 
@@ -868,10 +1002,11 @@ def get_stock_statement(
     year: int,
     search: Optional[str] = None,
     unit_filter: Optional[str] = None,
+    store_group_filter: Optional[str] = None,
     item_class_filter: Optional[str] = "CONSUMABLE",
     has_warnings_only: bool = False,
 ) -> StockStatementResponse:
-    """Retrieve the active stock statement for the specified month and year."""
+    """Retrieve the active stock statement for the specified month and year, deriving item class live from Consumable Master."""
     statement_end = get_statement_end_date(year, month)
 
     batch = session.scalar(
@@ -893,6 +1028,7 @@ def get_stock_statement(
             consumable_count=0,
             product_or_other_count=0,
             unknown_count=0,
+            missing_consumables_count=0,
         )
         summary = StockStatementSummary()
         return StockStatementResponse(metadata=meta, summary=summary, records=[])
@@ -900,50 +1036,128 @@ def get_stock_statement(
     creator = session.get(User, batch.created_by) if batch.created_by else None
     updater = session.get(User, batch.updated_by) if batch.updated_by else None
 
-    # Calculate class counts across the whole batch
-    class_count_rows = session.execute(
-        select(StockStatementLine.item_class, func.count(StockStatementLine.id))
-        .where(StockStatementLine.batch_id == batch.id)
-        .group_by(StockStatementLine.item_class)
+    # Fetch all active Consumable item_ids for live class derivation
+    active_consumable_items = session.execute(
+        select(Consumable.id, Consumable.item_id).where(Consumable.is_active == True)
     ).all()
-    class_counts = {c: count for c, count in class_count_rows}
-    consumable_count = class_counts.get("CONSUMABLE", 0)
-    product_or_other_count = class_counts.get("PRODUCT_OR_OTHER", 0)
-    unknown_count = class_counts.get("UNKNOWN", 0)
+    active_consumable_map = {
+        normalize_item_id_key(c.item_id): str(c.id)
+        for c in active_consumable_items
+        if c.item_id
+    }
 
-    # Query lines
-    stmt = select(StockStatementLine).where(StockStatementLine.batch_id == batch.id)
-    if item_class_filter and item_class_filter.upper() != "ALL":
-        stmt = stmt.where(StockStatementLine.item_class == item_class_filter.upper())
+    # Fetch all lines for the batch
+    all_lines = session.scalars(
+        select(StockStatementLine)
+        .where(StockStatementLine.batch_id == batch.id)
+        .order_by(StockStatementLine.source_row)
+    ).all()
 
-    if search and search.strip():
-        term = f"%{search.strip()}%"
-        stmt = stmt.where(
-            (StockStatementLine.item_id.ilike(term))
-            | (StockStatementLine.item_description.ilike(term))
-            | (StockStatementLine.cust_part_no.ilike(term))
-        )
-    if unit_filter and unit_filter.strip():
-        stmt = stmt.where(StockStatementLine.unit == unit_filter.strip())
+    # Pre-calculate batch totals and counts across the whole batch
+    batch_item_keys = set()
+    consumable_count = 0
+    other_items_count = 0
+    grand_open_val = Decimal("0.0000")
+    grand_rcpt_val = Decimal("0.0000")
+    grand_iss_val = Decimal("0.0000")
+    grand_cls_val = Decimal("0.0000")
+    grand_warnings_count = 0
+    store_groups_set = set()
 
-    stmt = stmt.order_by(StockStatementLine.source_row)
-    lines = session.scalars(stmt).all()
+    for l in all_lines:
+        k = normalize_item_id_key(l.item_id)
+        batch_item_keys.add(k)
+        if k in active_consumable_map:
+            consumable_count += 1
+        else:
+            other_items_count += 1
 
-    # Calculate summary over all lines in batch
-    totals = session.execute(
-        select(
-            func.count(StockStatementLine.id),
-            func.coalesce(func.sum(StockStatementLine.opening_value), 0),
-            func.coalesce(func.sum(StockStatementLine.receipt_value), 0),
-            func.coalesce(func.sum(StockStatementLine.issue_value), 0),
-            func.coalesce(func.sum(StockStatementLine.closing_value), 0),
-        ).where(StockStatementLine.batch_id == batch.id)
-    ).one()
+        if l.store_group and l.store_group.strip():
+            store_groups_set.add(l.store_group.strip())
 
-    warning_rows_count = sum(1 for l in lines if l.warning_codes and len(l.warning_codes) > 0)
+        if l.opening_value:
+            grand_open_val += l.opening_value
+        if l.receipt_value:
+            grand_rcpt_val += l.receipt_value
+        if l.issue_value:
+            grand_iss_val += l.issue_value
+        if l.closing_value:
+            grand_cls_val += l.closing_value
+
+        clean_w = [
+            w for w in (l.warning_codes or [])
+            if not w.startswith("EMPTY_RECEIPT")
+            and not w.startswith("EMPTY_ISSUE")
+            and w != "ITEM_UNKNOWN_IN_MASTER"
+            and not w.startswith("EMPTY_CUST_PART")
+        ]
+        if clean_w:
+            grand_warnings_count += 1
+
+    missing_consumables_count = sum(1 for k in active_consumable_map if k not in batch_item_keys)
+    store_groups_found = sorted(store_groups_set)
+
+    # Filter lines
+    filtered_lines: list[StockStatementLine] = []
+    norm_class_filter = (item_class_filter or "CONSUMABLE").upper()
+
+    for l in all_lines:
+        k = normalize_item_id_key(l.item_id)
+        is_cons = k in active_consumable_map
+
+        # Apply class filter
+        if norm_class_filter == "CONSUMABLE" and not is_cons:
+            continue
+        elif norm_class_filter in ("OTHER_ITEM", "PRODUCT_OR_OTHER", "OTHER") and is_cons:
+            continue
+
+        # Apply search filter
+        if search and search.strip():
+            term = search.strip().lower()
+            match_search = (
+                term in (l.item_id or "").lower()
+                or term in (l.item_description or "").lower()
+                or term in (l.cust_part_no or "").lower()
+                or term in (l.store_group or "").lower()
+            )
+            if not match_search:
+                continue
+
+        # Apply unit filter
+        if unit_filter and unit_filter.strip():
+            if (l.unit or "").strip() != unit_filter.strip():
+                continue
+
+        # Apply store_group filter
+        if store_group_filter and store_group_filter.strip():
+            if (l.store_group or "").strip() != store_group_filter.strip():
+                continue
+
+        filtered_lines.append(l)
+
+    # Summary calculated dynamically over the active filtered view
+    tot_open_val = Decimal("0.0000")
+    tot_rcpt_val = Decimal("0.0000")
+    tot_iss_val = Decimal("0.0000")
+    tot_cls_val = Decimal("0.0000")
+    warning_rows_count = 0
 
     records: list[StockStatementLineResponse] = []
-    for l in lines:
+    for l in filtered_lines:
+        k = normalize_item_id_key(l.item_id)
+        is_cons = k in active_consumable_map
+        live_class = "CONSUMABLE" if is_cons else "OTHER_ITEM"
+        cons_id = active_consumable_map.get(k) or (str(l.consumable_id) if l.consumable_id else None)
+
+        if l.opening_value:
+            tot_open_val += l.opening_value
+        if l.receipt_value:
+            tot_rcpt_val += l.receipt_value
+        if l.issue_value:
+            tot_iss_val += l.issue_value
+        if l.closing_value:
+            tot_cls_val += l.closing_value
+
         diff_q = None
         if l.opening_qty is not None and l.receipt_qty is not None and l.issue_qty is not None and l.closing_qty is not None:
             diff_q = l.closing_qty - (l.opening_qty + l.receipt_qty - l.issue_qty)
@@ -951,29 +1165,40 @@ def get_stock_statement(
         if l.opening_value is not None and l.receipt_value is not None and l.issue_value is not None and l.closing_value is not None:
             diff_v = l.closing_value - (l.opening_value + l.receipt_value - l.issue_value)
 
-        records.append(
-            StockStatementLineResponse(
-                id=str(l.id),
-                item_id=l.item_id,
-                consumable_id=str(l.consumable_id) if l.consumable_id else None,
-                item_class=l.item_class,
-                item_description=l.item_description,
-                cust_part_no=l.cust_part_no,
-                unit=l.unit,
-                opening_qty=l.opening_qty,
-                opening_value=l.opening_value,
-                receipt_qty=l.receipt_qty,
-                receipt_value=l.receipt_value,
-                issue_qty=l.issue_qty,
-                issue_value=l.issue_value,
-                closing_qty=l.closing_qty,
-                closing_value=l.closing_value,
-                source_row=l.source_row,
-                warning_codes=l.warning_codes or [],
-                diff_closing_qty=diff_q,
-                diff_closing_value=diff_v,
-            )
+        # Filter noise from stored warning codes
+        clean_warnings = [
+            w for w in (l.warning_codes or [])
+            if not w.startswith("EMPTY_RECEIPT")
+            and not w.startswith("EMPTY_ISSUE")
+            and w != "ITEM_UNKNOWN_IN_MASTER"
+            and not w.startswith("EMPTY_CUST_PART")
+        ]
+        if clean_warnings:
+            warning_rows_count += 1
+
+        rec = StockStatementLineResponse(
+            id=str(l.id),
+            item_id=l.item_id,
+            consumable_id=cons_id,
+            item_class=live_class,
+            store_group=l.store_group,
+            item_description=l.item_description,
+            cust_part_no=l.cust_part_no,
+            unit=l.unit,
+            opening_qty=l.opening_qty,
+            opening_value=l.opening_value,
+            receipt_qty=l.receipt_qty,
+            receipt_value=l.receipt_value,
+            issue_qty=l.issue_qty,
+            issue_value=l.issue_value,
+            closing_qty=l.closing_qty,
+            closing_value=l.closing_value,
+            source_row=l.source_row,
+            warning_codes=clean_warnings,
+            diff_closing_qty=diff_q,
+            diff_closing_value=diff_v,
         )
+        records.append(rec)
 
     if has_warnings_only:
         records = [r for r in records if r.warning_codes and len(r.warning_codes) > 0]
@@ -985,31 +1210,316 @@ def get_stock_statement(
         statement_year=year,
         statement_date=batch.statement_date.isoformat(),
         source_filename=batch.source_filename,
+        location_text=batch.location_text,
         status=batch.status,
         created_at=batch.created_at,
         created_by_name=creator.full_name or creator.username if creator else None,
         updated_at=batch.updated_at,
         updated_by_name=updater.full_name or updater.username if updater else None,
         row_count=batch.row_count,
-        warning_count=batch.warning_count,
+        warning_count=warning_rows_count,
         consumable_count=consumable_count,
-        product_or_other_count=product_or_other_count,
-        unknown_count=unknown_count,
+        product_or_other_count=other_items_count,
+        unknown_count=0,
+        missing_consumables_count=missing_consumables_count,
+        grand_total_opening_value=grand_open_val,
+        grand_total_receipt_value=grand_rcpt_val,
+        grand_total_issue_value=grand_iss_val,
+        grand_total_closing_value=grand_cls_val,
+        grand_total_warnings_count=grand_warnings_count,
+        store_groups_found=store_groups_found,
     )
 
     summary = StockStatementSummary(
-        item_count=int(totals[0]),
+        item_count=len(records),
         consumable_count=consumable_count,
-        product_or_other_count=product_or_other_count,
-        unknown_count=unknown_count,
-        total_opening_value=Decimal(str(totals[1])),
-        total_receipt_value=Decimal(str(totals[2])),
-        total_issue_value=Decimal(str(totals[3])),
-        total_closing_value=Decimal(str(totals[4])),
+        product_or_other_count=other_items_count,
+        unknown_count=0,
+        total_opening_value=tot_open_val,
+        total_receipt_value=tot_rcpt_val,
+        total_issue_value=tot_iss_val,
+        total_closing_value=tot_cls_val,
         warning_rows_count=warning_rows_count,
     )
 
     return StockStatementResponse(metadata=meta, summary=summary, records=records)
+
+
+def get_missing_consumables(
+    session: Session,
+    month: int,
+    year: int,
+) -> MissingConsumablesResponse:
+    """List all active consumables in Product Master that have no entry in the selected month's statement."""
+    batch = session.scalar(
+        select(StockStatementBatch).where(
+            StockStatementBatch.statement_month == month,
+            StockStatementBatch.statement_year == year,
+            StockStatementBatch.status == "active",
+        )
+    )
+    if not batch:
+        return MissingConsumablesResponse(statement_month=month, statement_year=year, count=0, items=[])
+
+    present_item_keys = set(
+        session.scalars(
+            select(func.upper(func.btrim(StockStatementLine.item_id)))
+            .where(StockStatementLine.batch_id == batch.id)
+        ).all()
+    )
+
+    active_consumables = session.scalars(
+        select(Consumable)
+        .where(Consumable.is_active == True)
+        .order_by(Consumable.item_id)
+    ).all()
+
+    units = session.execute(select(Unit.id, Unit.code)).all()
+    unit_map = {u.id: u.code for u in units}
+
+    missing_items: list[MissingConsumableItem] = []
+    for c in active_consumables:
+        if c.item_id and normalize_item_id_key(c.item_id) not in present_item_keys:
+            missing_items.append(
+                MissingConsumableItem(
+                    item_id=c.item_id,
+                    name=c.name or c.description,
+                    description=c.description,
+                    category=c.category,
+                    unit_code=unit_map.get(c.unit_id) or c.output_unit,
+                    rate=c.rate,
+                )
+            )
+
+    return MissingConsumablesResponse(
+        statement_month=month,
+        statement_year=year,
+        count=len(missing_items),
+        items=missing_items,
+    )
+
+
+def export_missing_consumables_excel(
+    session: Session,
+    month: int,
+    year: int,
+) -> tuple[bytes, str]:
+    """Export consumables missing from the active statement to an Excel workbook."""
+    res = get_missing_consumables(session, month, year)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Missing Consumables"
+
+    ws.append([f"KNL Consumables Missing from Stock Statement - {MONTH_NAMES[month - 1]} {year}"])
+    ws.merge_cells("A1:E1")
+    ws.cell(row=1, column=1).font = Font(name="Calibri", size=13, bold=True, color="1F4E79")
+
+    headers = ["Item Id", "Description", "Category", "Unit", "Rate (₹)"]
+    ws.append(headers)
+
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    for c_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=2, column=c_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    thin_border = Border(
+        left=Side(style="thin", color="D9D9D9"),
+        right=Side(style="thin", color="D9D9D9"),
+        top=Side(style="thin", color="D9D9D9"),
+        bottom=Side(style="thin", color="D9D9D9"),
+    )
+
+    for item in res.items:
+        ws.append([
+            item.item_id,
+            item.name or item.description or "",
+            item.category or "",
+            item.unit_code or "",
+            float(item.rate) if item.rate is not None else "",
+        ])
+        curr_row = ws.max_row
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=curr_row, column=col_idx)
+            cell.border = thin_border
+            if col_idx == 5:
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+                cell.number_format = "#,##0.00"
+            elif col_idx in (1, 4):
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for col in ws.columns:
+        max_len = max(len(str(cell.value or "")) for cell in col)
+        col_letter = get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = max(max_len + 3, 14)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    filename = f"KNL_Missing_Consumables_{year}_{month:02d}.xlsx"
+    return buf.getvalue(), filename
+
+
+def promote_statement_items_to_consumables(
+    session: Session,
+    payload: PromoteConsumablesRequest,
+    user: CurrentUser,
+) -> PromoteConsumablesResponse:
+    """Promote one or more statement items into the Consumable Master in a single atomic transaction."""
+    now_utc = datetime.now(timezone.utc)
+    promoted_ids: list[str] = []
+
+    units = session.execute(select(Unit.id, Unit.code)).all()
+    unit_map = {u.code.upper(): u.id for u in units}
+
+    for item in payload.items:
+        clean_id = normalize_item_id(item.item_id)
+        if not clean_id:
+            continue
+        clean_upper = clean_id.upper()
+
+        u_code = (item.unit_code or "NOS").strip().upper()
+        unit_id = unit_map.get(u_code)
+        if not unit_id:
+            new_u = Unit(code=u_code, name=u_code, is_active=True)
+            session.add(new_u)
+            session.flush()
+            unit_id = new_u.id
+            unit_map[u_code] = unit_id
+
+        existing = session.scalar(
+            select(Consumable).where(
+                func.upper(func.btrim(Consumable.item_id)) == clean_upper
+            )
+        )
+
+        item_desc = item.description or item.name or clean_id
+        item_cat = item.category or "General Consumables"
+
+        if existing:
+            existing.is_active = True
+            existing.description = item_desc
+            existing.name = item.name or existing.name or item_desc
+            existing.category = item_cat
+            if item.type_of_material:
+                existing.type_of_material = item.type_of_material
+            if item.rate is not None:
+                existing.rate = item.rate
+            existing.unit_id = unit_id
+            existing.source = "stock_statement"
+            existing.updated_at = now_utc
+            c_obj = existing
+            action_name = "REACTIVATE" if not existing.is_active else "UPDATE"
+        else:
+            new_c = Consumable(
+                item_id=clean_id,
+                name=item.name or item_desc,
+                description=item_desc,
+                category=item_cat,
+                type_of_material=item.type_of_material,
+                rate=item.rate,
+                unit_id=unit_id,
+                output_unit=u_code,
+                is_active=True,
+                source="stock_statement",
+                created_at=now_utc,
+                updated_at=now_utc,
+            )
+            session.add(new_c)
+            session.flush()
+            c_obj = new_c
+            action_name = "CREATE"
+
+        promoted_ids.append(clean_id)
+
+        log_audit_event(
+            session=session,
+            entity_type="Consumable",
+            entity_id=c_obj.id,
+            action=action_name,
+            actor_id=user.id,
+            old_values=None,
+            new_values={
+                "item_id": clean_id,
+                "name": c_obj.name,
+                "category": c_obj.category,
+                "unit": u_code,
+                "rate": str(c_obj.rate) if c_obj.rate else None,
+                "source": "stock_statement",
+            },
+            reason="Promoted item from Stock Statement to Consumable Master",
+        )
+
+    session.commit()
+
+    return PromoteConsumablesResponse(
+        promoted_count=len(promoted_ids),
+        promoted_items=promoted_ids,
+        message=f"Successfully promoted {len(promoted_ids)} item(s) to Consumable Master.",
+    )
+
+
+def demote_consumable_item(
+    session: Session,
+    payload: DemoteConsumableRequest,
+    user: CurrentUser,
+) -> DemoteConsumableResponse:
+    """Move a consumable back to other items (deactivate) only if no downstream dependencies exist."""
+    clean_id = normalize_item_id(payload.item_id)
+    c = session.scalar(
+        select(Consumable).where(
+            func.upper(func.btrim(Consumable.item_id)) == clean_id.upper(),
+            Consumable.is_active == True,
+        )
+    )
+    if not c:
+        raise ApplicationError("NOT_FOUND", f"Active consumable '{clean_id}' was not found in Consumable Master.", 404)
+
+    # Dependency checks
+    from app.models.mappings import ProductProcessConsumable
+    from app.models.stock_statements import StockParameter
+
+    norms_count = session.scalar(
+        select(func.count(ProductProcessConsumable.id)).where(ProductProcessConsumable.consumable_id == c.id)
+    ) or 0
+
+    params_count = session.scalar(
+        select(func.count(StockParameter.id)).where(StockParameter.consumable_id == c.id)
+    ) or 0
+
+    deps: list[str] = []
+    if norms_count > 0:
+        deps.append(f"{norms_count} consumption norm(s)")
+    if params_count > 0:
+        deps.append(f"{params_count} stock management parameter(s)")
+
+    if deps:
+        raise ApplicationError(
+            "CONSUMABLE_HAS_DEPENDENCIES",
+            f"Cannot demote item '{clean_id}' because it has active dependencies: {', '.join(deps)}. Remove dependencies first before demoting.",
+            409,
+        )
+
+    c.is_active = False
+    c.updated_at = datetime.now(timezone.utc)
+    log_audit_event(
+        session=session,
+        entity_type="Consumable",
+        entity_id=c.id,
+        action="DEACTIVATE",
+        actor_id=user.id,
+        old_values={"is_active": True},
+        new_values={"is_active": False},
+        reason=payload.reason or "Demoted from Consumable Master back to other items.",
+    )
+    session.commit()
+
+    return DemoteConsumableResponse(
+        item_id=clean_id,
+        demoted=True,
+        message=f"Consumable '{clean_id}' has been deactivated and moved back to other items.",
+    )
 
 
 def list_stock_statement_history(
@@ -1052,7 +1562,7 @@ def export_stock_statement_excel(
     month: int,
     year: int,
 ) -> tuple[bytes, str]:
-    """Export the active stock statement to an Excel workbook matching KNL columns."""
+    """Export the active stock statement to an Excel workbook matching KNL columns plus Store group and Item class."""
     res = get_stock_statement(session, month, year, item_class_filter="ALL")
     if not res.metadata.has_statement:
         raise ApplicationError("NOT_FOUND", f"No stock statement found for {MONTH_NAMES[month - 1]} {year}.", 404)
@@ -1060,6 +1570,8 @@ def export_stock_statement_excel(
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = f"Stock Statement {month}-{year}"
+
+    export_columns = EXPECTED_STATEMENT_COLUMNS + ["Store Group", "Item Class"]
 
     # Header styling
     header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
@@ -1075,12 +1587,12 @@ def export_stock_statement_excel(
 
     # Title line
     ws.append([f"KNL Stock Statement for the month of {MONTH_NAMES[month - 1]} {year} (As of {res.metadata.statement_date})"])
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(EXPECTED_STATEMENT_COLUMNS))
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(export_columns))
     ws.cell(row=1, column=1).font = Font(name="Calibri", size=13, bold=True, color="1F4E79")
 
     # Header row
-    ws.append(EXPECTED_STATEMENT_COLUMNS)
-    for col_idx in range(1, len(EXPECTED_STATEMENT_COLUMNS) + 1):
+    ws.append(export_columns)
+    for col_idx in range(1, len(export_columns) + 1):
         cell = ws.cell(row=2, column=col_idx)
         cell.font = header_font
         cell.fill = header_fill
@@ -1101,15 +1613,17 @@ def export_stock_statement_excel(
             float(r.issue_value) if r.issue_value is not None else "",
             float(r.closing_qty) if r.closing_qty is not None else "",
             float(r.closing_value) if r.closing_value is not None else "",
+            r.store_group or "",
+            r.item_class or "",
         ])
         curr_row = ws.max_row
-        for col_idx in range(1, len(EXPECTED_STATEMENT_COLUMNS) + 1):
+        for col_idx in range(1, len(export_columns) + 1):
             cell = ws.cell(row=curr_row, column=col_idx)
             cell.border = thin_border
             if col_idx in (5, 6, 7, 8, 9, 10, 11, 12):
                 cell.alignment = num_alignment
                 cell.number_format = "#,##0.0000" if col_idx % 2 != 0 else "#,##0.00"
-            elif col_idx in (1, 4):
+            elif col_idx in (1, 4, 14):
                 cell.alignment = center_alignment
 
     # Auto column width

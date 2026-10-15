@@ -554,6 +554,7 @@ def parse_and_preview_stock_parameters(
     # Pre-fetch Consumables master
     consumables = session.execute(
         select(Consumable.id, Consumable.code, Consumable.name, Consumable.description, Consumable.category, Consumable.type_of_material)
+        .where(Consumable.is_active == True)
     ).all()
     consumable_by_code = {
         normalize_item_id_key(c.code): c
@@ -1253,6 +1254,7 @@ def confirm_stock_parameters_import(
     # Pre-fetch Consumable Master for validating ASSIGN_ITEM_ID
     consumables = session.execute(
         select(Consumable.id, Consumable.code, Consumable.name, Consumable.description, Consumable.category, Consumable.type_of_material)
+        .where(Consumable.is_active == True)
     ).all()
     consumable_by_code = {
         normalize_item_id_key(c.code): c
@@ -1830,7 +1832,6 @@ def get_stock_management(
     return StockManagementResponse(metadata=meta, summary=summary, records=records)
 
 
-<<<<<<< HEAD
 def batch_update_stock_parameters(
     session: Session,
     request: Optional[StockParameterBatchUpdateRequest] = None,
@@ -1910,47 +1911,6 @@ def batch_update_stock_parameters(
 
     session.commit()
     return get_stock_management(session, req.month, req.year)
-=======
-def batch_update_stock_parameters(session: Session, request: StockParameterBatchUpdateRequest,
-                                  current_user: CurrentUser) -> StockManagementResponse:
-    try:
-        batch = session.scalar(select(StockParameterBatch).where(
-            StockParameterBatch.month == request.month, StockParameterBatch.year == request.year,
-            StockParameterBatch.status == "active",
-        ).with_for_update().execution_options(populate_existing=True))
-        if batch is None:
-            raise ApplicationError("NOT_FOUND", "No active parameter batch for this period.", 404)
-        if request.batch_id is not None and request.batch_id != batch.id:
-            raise ApplicationError("PARAMETERS_CHANGED", "Parameters were replaced. Refresh before saving.", 409)
-        for update in request.updates:
-            param = session.get(StockParameter, update.id)
-            if param is None or param.batch_id != batch.id:
-                raise ApplicationError("INVALID_PARAMETER_ROW", "A row does not belong to the selected parameters.", 422)
-            changes = update.model_dump(exclude_unset=True, exclude={"id"})
-            if not changes:
-                continue
-            minimum = changes.get("min_stock_level", param.min_stock_level)
-            maximum = changes.get("max_stock_level", param.max_stock_level)
-            if minimum is not None and maximum is not None and minimum > maximum:
-                raise ApplicationError("VALIDATION_ERROR", f"Min stock level exceeds Max for {param.item_id}.", 422)
-            before = {key: str(getattr(param, key)) if getattr(param, key) is not None else None for key in changes}
-            for key, value in changes.items():
-                setattr(param, key, value)
-            param.edited_after_import = True
-            param.updated_at = datetime.now(timezone.utc)
-            param.updated_by = current_user.id
-            log_audit_event(session=session, entity_type="StockParameter", entity_id=param.id,
-                action="UPDATE", actor_id=current_user.id, old_values=before,
-                new_values={key: str(value) if value is not None else None for key, value in changes.items()},
-                reason=f"Reviewed stock parameter correction for {request.month}/{request.year}.")
-        batch.updated_at = datetime.now(timezone.utc)
-        batch.updated_by = current_user.id
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    return get_stock_management(session, request.month, request.year)
->>>>>>> 362c115b98d983cd87509f7de4c16cdbe1e4c33f
 
 
 def list_stock_parameter_history(

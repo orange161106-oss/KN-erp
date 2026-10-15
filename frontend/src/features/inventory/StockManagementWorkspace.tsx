@@ -264,11 +264,9 @@ export default function StockManagementWorkspace() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [showComparisonDetails, setShowComparisonDetails] = useState(false);
 
-<<<<<<< HEAD
   // Issue filter & row resolutions inside the upload modal
   const [issueTypeFilter, setIssueTypeFilter] = useState<string>('ALL');
   const [resolutions, setResolutions] = useState<Record<number, RowResolutionInput>>({});
-=======
   const [deleteTarget, setDeleteTarget] = useState<ParameterDeleteTarget | null>(null);
   const [deleteReason, setDeleteReason] = useState('');
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -281,7 +279,6 @@ export default function StockManagementWorkspace() {
   const canDeleteParameters = user ? canPerform(user, 'inventory', 'delete') : false;
   const selectedParametersLoaded = Boolean(metadata?.has_parameters && metadata.batch_id
     && metadata.month === selectedMonth && metadata.year === selectedYear);
->>>>>>> 362c115b98d983cd87509f7de4c16cdbe1e4c33f
 
   const canUpload = user ? canPerform(user, 'inventory', 'import') || canPerform(user, 'inventory', 'create') : false;
   const canEdit = user ? canPerform(user, 'inventory', 'update') : false;
@@ -1101,9 +1098,6 @@ export default function StockManagementWorkspace() {
         />
       </div>
 
-<<<<<<< HEAD
-      {/* 5. Upload, Validation & Interactive Resolution Modal */}
-=======
       <ConfirmDialog
         isOpen={Boolean(deleteTarget)}
         title={`Delete ${deleteTarget ? `${MONTH_NAMES[deleteTarget.month - 1]} ${deleteTarget.year}` : ''} stock parameters?`}
@@ -1127,7 +1121,6 @@ export default function StockManagementWorkspace() {
       />
 
       {/* 5. Upload & Preview Modal */}
->>>>>>> 362c115b98d983cd87509f7de4c16cdbe1e4c33f
       {showUploadModal && (
         <div className="fixed inset-0 z-[10000] bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-5xl w-full p-6 shadow-2xl border border-stone-200 flex flex-col max-h-[92vh]">
