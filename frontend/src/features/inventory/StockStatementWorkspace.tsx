@@ -298,15 +298,9 @@ export default function StockStatementWorkspace() {
     try {
       const classParam = activeTab === 'MISSING' ? 'CONSUMABLE' : activeTab;
       const res = await apiClient.get<StockStatementResponse>(
-<<<<<<< HEAD
-        `/api/v1/inventory/statement?month=${selectedMonth}&year=${selectedYear}&item_class=${itemClassFilter}&has_warnings_only=${warningsOnly}${
-          settledSearch ? `&search=${encodeURIComponent(settledSearch)}` : ''
-        }`
-=======
         `/api/v1/inventory/statement?month=${selectedMonth}&year=${selectedYear}&item_class=${classParam}&has_warnings_only=${warningsOnly}${
-          searchQuery ? `&search=${encodeURIComponent(searchQuery)}` : ''
+          settledSearch ? `&search=${encodeURIComponent(settledSearch)}` : ''
         }${storeGroupFilter ? `&store_group=${encodeURIComponent(storeGroupFilter)}` : ''}`
->>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
       );
       if (requestId !== loadRequestId.current) return;
       setRecords(res.records || []);
@@ -327,17 +321,16 @@ export default function StockStatementWorkspace() {
     } finally {
       if (requestId === loadRequestId.current) setIsLoading(false);
     }
-<<<<<<< HEAD
-  }, [selectedMonth, selectedYear, itemClassFilter, warningsOnly, settledSearch]);
-=======
-  }, [selectedMonth, selectedYear, activeTab, warningsOnly, searchQuery, storeGroupFilter]);
->>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
+  }, [selectedMonth, selectedYear, activeTab, warningsOnly, settledSearch, storeGroupFilter]);
 
   useEffect(() => {
     setSuccessMsg(null);
     loadData();
+  }, [loadData]);
+
+  useEffect(() => {
     loadMissingData();
-  }, [loadData, loadMissingData]);
+  }, [loadMissingData]);
 
   const handleDeleteStatement = async () => {
     if (!deleteTarget || !canDeleteStatement || deleteInProgress.current) return;
@@ -1233,38 +1226,6 @@ export default function StockStatementWorkspace() {
       )}
 
       {/* 4. Table Area */}
-<<<<<<< HEAD
-      <div className="flex-1 min-h-0 bg-white rounded-xl border border-stone-200 shadow-xs overflow-hidden flex flex-col">
-        <DataTable
-          virtualize
-          key={`${metadata?.batch_id || `${selectedYear}-${selectedMonth}`}:${draftVersion}`}
-          originalData={originalRecords}
-          onCellChange={handleCellChange}
-          onSave={handleSave}
-          saveStatus={saveStatus}
-          columns={columns}
-          headerGroups={headerGroups}
-          data={records}
-          selectedIds={selectedIds}
-          onSelectionChange={setSelectedIds}
-          isLoading={isLoading || searchQuery !== settledSearch}
-          emptyMessage={
-            metadata?.has_statement
-              ? 'No records match your filter criteria.'
-              : `No stock statement recorded for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Use the upload button above to import the statement.`
-          }
-          storageKey="knl_stock_statement_grid"
-          canCreate={false}
-          canUpdate={canEdit && !isDeleting && !deleteTarget && saveStatus !== 'saving'}
-          canDelete={false}
-          getRowClassName={row =>
-            row.warning_codes && row.warning_codes.length > 0
-              ? 'bg-amber-50/50 hover:bg-amber-100/50'
-              : ''
-          }
-        />
-      </div>
-=======
       {activeTab === 'MISSING' ? (
         <div className="flex-1 min-h-0 bg-white rounded-xl border border-stone-200 shadow-xs overflow-hidden flex flex-col">
           <div className="p-4 bg-amber-50/60 border-b border-amber-200 flex flex-wrap items-center justify-between gap-3">
@@ -1354,7 +1315,7 @@ export default function StockStatementWorkspace() {
             data={records}
             selectedIds={selectedIds}
             onSelectionChange={setSelectedIds}
-            isLoading={isLoading}
+            isLoading={isLoading || searchQuery !== settledSearch}
             emptyMessage={
               metadata?.has_statement
                 ? 'No records match your filter criteria.'
@@ -1372,7 +1333,6 @@ export default function StockStatementWorkspace() {
           />
         </div>
       )}
->>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
 
       <ConfirmDialog
         isOpen={Boolean(deleteTarget)}

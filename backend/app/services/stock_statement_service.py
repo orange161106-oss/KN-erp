@@ -1047,21 +1047,6 @@ def get_stock_statement(
     creator = batch.creator
     updater = batch.updater
 
-<<<<<<< HEAD
-    # Calculate class counts across the whole batch
-    totals = session.execute(
-        select(
-            func.count(StockStatementLine.id),
-            func.coalesce(func.sum(StockStatementLine.opening_value), 0),
-            func.coalesce(func.sum(StockStatementLine.receipt_value), 0),
-            func.coalesce(func.sum(StockStatementLine.issue_value), 0),
-            func.coalesce(func.sum(StockStatementLine.closing_value), 0),
-            *(func.count(case((StockStatementLine.item_class == item_class, 1)))
-              for item_class in ("CONSUMABLE", "PRODUCT_OR_OTHER", "UNKNOWN")),
-        ).where(StockStatementLine.batch_id == batch.id)
-    ).one()
-    consumable_count, product_or_other_count, unknown_count = totals[5:8]
-=======
     # Fetch all active Consumable item_ids for live class derivation
     active_consumable_items = session.execute(
         select(Consumable.id, Consumable.item_id).where(Consumable.is_active == True)
@@ -1071,7 +1056,6 @@ def get_stock_statement(
         for c in active_consumable_items
         if c.item_id
     }
->>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
 
     # Fetch all lines for the batch
     all_lines = session.scalars(
@@ -1099,9 +1083,6 @@ def get_stock_statement(
         else:
             other_items_count += 1
 
-<<<<<<< HEAD
-    warning_rows_count = sum(1 for l in lines if l.warning_codes and len(l.warning_codes) > 0)
-=======
         if l.store_group and l.store_group.strip():
             store_groups_set.add(l.store_group.strip())
 
@@ -1171,7 +1152,6 @@ def get_stock_statement(
     tot_iss_val = Decimal("0.0000")
     tot_cls_val = Decimal("0.0000")
     warning_rows_count = 0
->>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
 
     records: list[StockStatementLineResponse] = []
     for l in filtered_lines:

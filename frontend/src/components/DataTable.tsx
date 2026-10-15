@@ -65,6 +65,7 @@ export interface DataTableProps<T extends { id: string; row_index?: number | nul
   onExport?: (mode: 'ALL' | 'FILTERED' | 'SELECTED') => void;
   customRowActions?: (row: T) => Array<{ label: string; onClick: (row?: T) => void; icon?: React.ReactNode; disabled?: boolean; className?: string }>;
   onSaveRow?: (rowId: string, updates: Record<string, any>) => Promise<void>;
+  virtualize?: boolean;
 }
 
 // Convert column width specifications (e.g. 'w-44', '180px', or 180) to pure pixel numbers
@@ -119,6 +120,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   lastModifiedText,
   customRowActions,
   onSaveRow,
+  virtualize = false,
 }: DataTableProps<T>) {
   // --- Persistent Layout State ---
   const persistentKey = storageKey ? `knl_grid_layout_${storageKey}` : null;
