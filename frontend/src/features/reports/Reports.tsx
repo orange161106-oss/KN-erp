@@ -246,15 +246,19 @@ export default function Reports() {
     setTimeout(() => setFeedback(null), 3000);
   };
 
-  const handleDownloadPDF = () => {
-    downloadPDF(
-      reportConfig.title,
-      reportConfig.columns,
-      reportConfig.data,
-      reportConfig.filename
-    );
-    setFeedback('PDF report generated and downloaded.');
-    setTimeout(() => setFeedback(null), 3000);
+  const handleDownloadPDF = async () => {
+    try {
+      await downloadPDF(
+        reportConfig.title,
+        reportConfig.columns,
+        reportConfig.data,
+        reportConfig.filename
+      );
+      setFeedback('PDF report generated and downloaded.');
+      setTimeout(() => setFeedback(null), 3000);
+    } catch {
+      setFeedback('Failed to generate PDF document.');
+    }
   };
 
   const handleDownloadWord = async () => {

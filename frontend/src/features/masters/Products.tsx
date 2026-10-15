@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import axios from 'axios';
-import type { AxiosProgressEvent } from 'axios';
-import { apiClient, getAccessToken, getApiBaseUrl } from '../../api/client';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { apiClient } from '../../api/client';
+import MasterBulkWorkspace from './MasterBulkWorkspace';
 import { useAuth } from '../auth/context';
 import { TableSkeletonRows } from '../../components/ui/Skeleton';
 
@@ -82,14 +81,10 @@ export default function Products() {
   // Loading & Notification states
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Bulk Upload Modal & Progress states
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadPhase, setUploadPhase] = useState<'idle' | 'uploading' | 'parsing'>('idle');
-  const [uploadError, setUploadError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const activeTabLabel = useMemo(() => {
@@ -179,8 +174,6 @@ export default function Products() {
   });
 
   // File Upload Drag & Drop State
-  const [dragActive, setDragActive] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ---------------------------------------------------------------------------
   // Data Fetching
@@ -483,110 +476,6 @@ export default function Products() {
   };
 
   // ---------------------------------------------------------------------------
-  // Bulk Excel File Upload & Header Hunter Execution
-  // ---------------------------------------------------------------------------
-
-  const handleFileUpload = async (file: File) => {
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.xlsx')) {
-      const err = 'Please select a valid Excel (.xlsx) file.';
-      setUploadError(err);
-      setFeedback({ type: 'error', message: err });
-      return;
-    }
-
-    setUploading(true);
-    setUploadProgress(0);
-    setUploadPhase('uploading');
-    setUploadError(null);
-    setFeedback(null);
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    let endpoint = '/api/v1/masters/product-master/consumables/bulk';
-    if (activeTab === 'assemble') {
-      endpoint = '/api/v1/masters/product-master/assemble/bulk';
-    } else if (activeTab === 'sales_parts') {
-      endpoint = '/api/v1/masters/product-master/sales-parts/bulk';
-    }
-
-    try {
-      const token = getAccessToken();
-      const headers: Record<string, string> = {};
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
-
-      const response = await axios.post<{
-        total_rows: number;
-        upserted: number;
-        errors: string[];
-      }>(`${getApiBaseUrl()}${endpoint}`, formData, {
-        headers,
-        timeout: 60000,
-        onUploadProgress: (progressEvent: AxiosProgressEvent) => {
-          if (progressEvent.total) {
-            const percent = Math.round((progressEvent.loaded / progressEvent.total) * 100);
-            setUploadProgress(percent);
-            if (percent >= 100) {
-              setUploadPhase('parsing');
-            } else {
-              setUploadPhase('uploading');
-            }
-          }
-        },
-      });
-
-      const res = response.data;
-      const msg = `Bulk upload complete: ${res.upserted} records successfully upserted out of ${res.total_rows} evaluated rows.`;
-      setFeedback({ type: 'success', message: msg });
-      setToast({ type: 'success', message: msg });
-      if (res.errors && res.errors.length > 0) {
-        console.warn('Bulk upload row notices:', res.errors);
-      }
-
-      // Auto-close modal and refresh data table immediately on 200 OK
-      setIsUploadModalOpen(false);
-      setUploading(false);
-      setUploadProgress(0);
-      setUploadPhase('idle');
-      await loadData();
-    } catch (e: any) {
-      const errMsg =
-        e?.response?.data?.detail ||
-        e?.response?.data?.message ||
-        e?.message ||
-        'Bulk upload failed.';
-      setUploadError(errMsg);
-      setFeedback({ type: 'error', message: errMsg });
-      setUploading(false);
-    } finally {
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  };
-
-  // Drag and drop handlers
-  const handleDrag = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActive(true);
-    } else if (e.type === 'dragleave') {
-      setDragActive(false);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFileUpload(e.dataTransfer.files[0]);
-    }
-  };
-
-  // ---------------------------------------------------------------------------
   // Localized Inline Column Search Filters
   // ---------------------------------------------------------------------------
 
@@ -655,13 +544,8 @@ export default function Products() {
         </div>
         <button
           type="button"
-          onClick={() => {
-            setUploadError(null);
-            setUploadProgress(0);
-            setUploadPhase('idle');
-            setIsUploadModalOpen(true);
-          }}
-          disabled={!canCreate}
+          onClick={() => setIsUploadModalOpen(true)}
+          disabled={!canRead}
           className="inline-flex items-center gap-2 bg-erp-orange hover:bg-erp-tenne text-white text-xs sm:text-sm font-semibold px-4 py-2.5 rounded-lg shadow-sm hover:shadow transition-all disabled:opacity-50"
         >
           Bulk Import ☁️
@@ -2005,136 +1889,8 @@ export default function Products() {
       {/* ========================================================================= */}
       {/* BULK UPLOAD MODAL OVERLAY                                                 */}
       {/* ========================================================================= */}
-      {isUploadModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in duration-200"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="bulk-upload-modal-title"
-        >
-          {/* Backdrop dismiss */}
-          <div
-            className="fixed inset-0 -z-10"
-            onClick={() => !uploading && setIsUploadModalOpen(false)}
-          />
-
-          <div className="bg-white border border-erp-dark-vanilla/30 rounded-2xl max-w-lg w-full p-6 shadow-2xl relative">
-            <div className="flex items-start justify-between pb-3 border-b border-erp-dark-vanilla/20 mb-4">
-              <div>
-                <h2 id="bulk-upload-modal-title" className="text-lg font-bold text-erp-chocolate">
-                  Bulk Excel Intake
-                </h2>
-                <p className="text-xs text-erp-chocolate/70 mt-0.5">
-                  Target: <span className="font-semibold text-erp-orange">{activeTabLabel}</span>
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={uploading}
-                onClick={() => setIsUploadModalOpen(false)}
-                className="text-erp-chocolate/60 hover:text-erp-chocolate p-1.5 rounded hover:bg-erp-vanilla/40 transition-colors disabled:opacity-30 text-sm font-bold"
-                aria-label="Close modal"
-              >
-                ✕
-              </button>
-            </div>
-
-            <p className="text-xs text-erp-chocolate/75 mb-4 leading-relaxed">
-              Upload an unformatted Excel file. The Header Hunter engine will scan top rows, drop banners, and upsert records into <span className="font-semibold text-erp-chocolate">{activeTabLabel}</span>.
-            </p>
-
-            {uploadError && (
-              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-900 rounded-md text-xs">
-                {uploadError}
-              </div>
-            )}
-
-            <div
-              onDragEnter={handleDrag}
-              onDragLeave={handleDrag}
-              onDragOver={handleDrag}
-              onDrop={handleDrop}
-              onClick={() => !uploading && fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
-                uploading
-                  ? 'pointer-events-none opacity-60 border-erp-orange bg-erp-orange/5'
-                  : dragActive
-                  ? 'border-erp-orange bg-erp-orange/10'
-                  : 'border-erp-dark-vanilla/40 hover:border-erp-orange bg-erp-vanilla/15 hover:bg-erp-vanilla/30'
-              }`}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx"
-                className="hidden"
-                disabled={uploading}
-                onChange={(e) => {
-                  if (e.target.files && e.target.files[0]) {
-                    handleFileUpload(e.target.files[0]);
-                  }
-                }}
-              />
-              <div className="space-y-1.5">
-                <div className="text-3xl">📥</div>
-                <p className="text-xs font-bold text-erp-chocolate">
-                  {uploading ? 'Processing File…' : `Drag & drop ${activeTabLabel} Excel here`}
-                </p>
-                <p className="text-[11px] text-erp-chocolate/60">
-                  or click to browse from device (.xlsx up to 15MB)
-                </p>
-              </div>
-            </div>
-
-            {/* Task 2 & 3: Progress Bar & Processing States */}
-            {uploading && (
-              <div className="mt-4 p-3 bg-white rounded-lg border border-erp-dark-vanilla/25 space-y-2">
-                <div className="flex justify-between items-center text-xs font-semibold text-erp-chocolate">
-                  <span className="flex items-center gap-1.5">
-                    {uploadPhase !== 'parsing' && uploadProgress < 100 ? (
-                      `Uploading: ${uploadProgress}%`
-                    ) : (
-                      <>
-                        <svg className="animate-spin h-3.5 w-3.5 text-erp-orange" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
-                        </svg>
-                        <span>Parsing Data... Please wait</span>
-                      </>
-                    )}
-                  </span>
-                  <span className="font-mono text-erp-orange font-bold">{uploadProgress}%</span>
-                </div>
-
-                <div className="w-full bg-erp-vanilla/60 rounded-full h-2.5 overflow-hidden border border-erp-dark-vanilla/30">
-                  <div
-                    className="bg-erp-orange h-2.5 rounded-full transition-all duration-300 ease-out"
-                    style={{ width: `${uploadProgress}%` }}
-                  />
-                </div>
-
-                {(uploadPhase === 'parsing' || uploadProgress === 100) && (
-                  <p className="text-[11px] text-erp-chocolate/60 italic pt-0.5">
-                    Network upload complete. FastAPI backend is actively scanning rows and committing records...
-                  </p>
-                )}
-              </div>
-            )}
-
-            <div className="mt-4 pt-3 border-t border-erp-dark-vanilla/20 flex items-center justify-between text-[11px] text-erp-chocolate/60">
-              <span className="font-mono text-erp-topaz font-semibold">Header Hunter v2.0</span>
-              <button
-                type="button"
-                disabled={uploading}
-                onClick={() => setIsUploadModalOpen(false)}
-                className="text-xs px-3 py-1.5 border border-erp-dark-vanilla/40 rounded-lg hover:bg-erp-vanilla/40 transition-colors disabled:opacity-40 text-erp-chocolate"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {isUploadModalOpen && <MasterBulkWorkspace category={activeTab} label={activeTabLabel}
+        onClose={() => setIsUploadModalOpen(false)} onChanged={() => { void loadData(); }}/>}
 
       {/* Floating Success Toast */}
       {toast && (

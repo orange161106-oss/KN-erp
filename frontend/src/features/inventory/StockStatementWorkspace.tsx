@@ -181,6 +181,7 @@ export default function StockStatementWorkspace() {
   const [selectedMonth, setSelectedMonth] = useState<number>(initialMonth);
   const [selectedYear, setSelectedYear] = useState<number>(initialYear);
   const [searchQuery, setSearchQuery] = useState('');
+  const settledSearch = useDebouncedValue(searchQuery);
   const [warningsOnly, setWarningsOnly] = useState(false);
   const [itemClassFilter, setItemClassFilter] = useState<'CONSUMABLE' | 'ALL'>('CONSUMABLE');
 
@@ -228,7 +229,7 @@ export default function StockStatementWorkspace() {
     try {
       const res = await apiClient.get<StockStatementResponse>(
         `/api/v1/inventory/statement?month=${selectedMonth}&year=${selectedYear}&item_class=${itemClassFilter}&has_warnings_only=${warningsOnly}${
-          searchQuery ? `&search=${encodeURIComponent(searchQuery)}` : ''
+          settledSearch ? `&search=${encodeURIComponent(settledSearch)}` : ''
         }`
       );
       if (requestId !== loadRequestId.current) return;
@@ -250,7 +251,7 @@ export default function StockStatementWorkspace() {
     } finally {
       if (requestId === loadRequestId.current) setIsLoading(false);
     }
-  }, [selectedMonth, selectedYear, itemClassFilter, warningsOnly, searchQuery]);
+  }, [selectedMonth, selectedYear, itemClassFilter, warningsOnly, settledSearch]);
 
   useEffect(() => {
     setSuccessMsg(null);
@@ -842,6 +843,7 @@ export default function StockStatementWorkspace() {
       {/* 4. Table Area */}
       <div className="flex-1 min-h-0 bg-white rounded-xl border border-stone-200 shadow-xs overflow-hidden flex flex-col">
         <DataTable
+          virtualize
           key={`${metadata?.batch_id || `${selectedYear}-${selectedMonth}`}:${draftVersion}`}
           originalData={originalRecords}
           onCellChange={handleCellChange}
@@ -852,7 +854,7 @@ export default function StockStatementWorkspace() {
           data={records}
           selectedIds={selectedIds}
           onSelectionChange={setSelectedIds}
-          isLoading={isLoading}
+          isLoading={isLoading || searchQuery !== settledSearch}
           emptyMessage={
             metadata?.has_statement
               ? 'No records match your filter criteria.'
@@ -1141,3 +1143,4 @@ export default function StockStatementWorkspace() {
     </div>
   );
 }
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';

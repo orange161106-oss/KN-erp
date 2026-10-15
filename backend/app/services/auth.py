@@ -1,10 +1,11 @@
 import logging
 
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.errors import ApplicationError
+from app.db.reliability import database_failure as _database_failure, database_unavailable, read_only
 from app.repositories.auth import find_user_by_username, find_user_with_permissions
 from app.schemas.auth import CurrentUser, LoginRequest, TokenResponse
 from app.security.passwords import PasswordService
@@ -22,39 +23,8 @@ def authentication_required() -> ApplicationError:
     )
 
 
-def _database_failure(error: SQLAlchemyError | None) -> tuple[str, str]:
-    state = getattr(getattr(error, 'orig', None), 'sqlstate', None)
-    state = state if isinstance(state, str) and len(state) == 5 and state.isalnum() else 'none'
-    category = ('schema' if state in {'42703', '42P01'} else
-                'credentials' if state.startswith('28') else
-                'connection' if state.startswith('08') or
-                (isinstance(error, OperationalError) and state == 'none') else 'other')
-    return category, state
-
-
-def database_unavailable(error: SQLAlchemyError | None = None) -> ApplicationError:
-    category, state = _database_failure(error)
-    # Log diagnostic codes only: raw exceptions can contain connection secrets.
-    logger.warning('authentication_database_unavailable category=%s sqlstate=%s', category, state)
-    return ApplicationError("DATABASE_UNAVAILABLE", "Database is unavailable.", 503)
-
-
 def _read_authentication(session: Session, operation):
-    """Retry only a read, once, after a transient connection failure."""
-    for attempt in range(2):
-        try:
-            return operation()
-        except SQLAlchemyError as error:
-            category, state = _database_failure(error)
-            if attempt == 0 and isinstance(error, OperationalError) and category == 'connection':
-                logger.warning('authentication_database_reconnecting sqlstate=%s', state)
-                try:
-                    # Release the failed transaction before acquiring a new connection.
-                    session.rollback()
-                except SQLAlchemyError as rollback_error:
-                    raise database_unavailable(rollback_error) from None
-                continue
-            raise database_unavailable(error) from None
+    return read_only(session, operation)
 
 
 def login(

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.db.reliability import database_unavailable
 from app.core.errors import ApplicationError
 from app.domain.inventory_engine.ledger import signed_change, stock_quantity
 from app.models.audit import AuditLog
@@ -102,9 +103,9 @@ def import_source(session: Session, data: SourceImport, actor_id: UUID, *, enabl
     except IntegrityError:
         session.rollback()
         raise ApplicationError("SOURCE_CONFLICT", "Source identifiers or snapshot timestamps conflict with stored history.", 409) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as error:
         session.rollback()
-        raise ApplicationError("DATABASE_UNAVAILABLE", "Database is unavailable.", 503) from None
+        raise database_unavailable(error) from None
     except Exception:
         session.rollback()
         raise
@@ -122,8 +123,8 @@ def list_balances(session: Session, **filters):
                          availability="NOT_IMPORTED" if snapshot is None else "REPORTED")
                  for material, unit_code, snapshot, batch in rows]
         return {"items": items, "total": total, "limit": filters["limit"], "offset": filters["offset"]}
-    except SQLAlchemyError:
-        raise ApplicationError("DATABASE_UNAVAILABLE", "Database is unavailable.", 503) from None
+    except SQLAlchemyError as error:
+        raise database_unavailable(error) from None
 
 
 def get_balance(session: Session, consumable_id: UUID):
@@ -149,5 +150,5 @@ def list_transactions(session: Session, **filters):
             imported_by=batch.imported_by, source_export_id=batch.export_id)
                  for entry, code, name, unit_code, source_unit_code, batch in rows]
         return {"items": items, "total": total, "limit": filters["limit"], "offset": filters["offset"]}
-    except SQLAlchemyError:
-        raise ApplicationError("DATABASE_UNAVAILABLE", "Database is unavailable.", 503) from None
+    except SQLAlchemyError as error:
+        raise database_unavailable(error) from None

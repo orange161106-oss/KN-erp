@@ -1,7 +1,6 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import axios from 'axios';
 import { setAccessToken } from '../api/client';
 import { AuthContext } from '../features/auth/context';
 import Products from '../features/masters/Products';
@@ -17,6 +16,9 @@ afterEach(() => {
 
 test('renders Product Master with 3 tabs and split-screen intake for consumables', async () => {
   vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async input => {
+    if (String(input).endsWith('/workspace')) {
+      return new Response(JSON.stringify({ category: 'consumables', review_token: 'a'.repeat(64), row_count: 0, filename: null, report: {}, records: [] }), { status: 200 });
+    }
     if (String(input).includes('/product-master/consumables')) {
       return new Response(JSON.stringify({
         items: [
@@ -61,7 +63,8 @@ test('renders Product Master with 3 tabs and split-screen intake for consumables
   fireEvent.click(screen.getByRole('button', { name: /Bulk Import ☁️/i }));
   expect(screen.getByRole('heading', { name: 'Bulk Excel Intake' })).toBeInTheDocument();
   // Close the modal
-  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Close bulk import' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Close bulk import' }));
   expect(screen.queryByRole('heading', { name: 'Bulk Excel Intake' })).not.toBeInTheDocument();
 
   // Check Aligned Table Headers
@@ -176,61 +179,35 @@ test('localized inline search dynamically filters table records', async () => {
   expect(screen.getByText('CS-AL-002')).toBeInTheDocument();
 });
 
-test('bulk upload tracks axios onUploadProgress, transitions to parsing, auto-closes modal on 200, and displays toast', async () => {
-  vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async () => {
-    return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-  }));
-
-  let progressCallback: any = null;
-  const axiosPostSpy = vi.spyOn(axios, 'post').mockImplementation(async (_url, _data, config: any) => {
-    progressCallback = config?.onUploadProgress;
-    // simulate progress event 45%
-    if (progressCallback) {
-      progressCallback({ loaded: 45, total: 100 });
-    }
-    // simulate progress event 100%
-    if (progressCallback) {
-      progressCallback({ loaded: 100, total: 100 });
-    }
-    return {
-      status: 200,
-      data: {
-        total_rows: 10,
-        upserted: 10,
-        errors: [],
-      },
-    };
+test('bulk upload previews the workbook then saves explicitly without month/year controls', async () => {
+  const empty = { category: 'consumables', review_token: 'a'.repeat(64), row_count: 0, filename: null, report: {}, records: [] };
+  const saved = { ...empty, row_count: 1, filename: 'consumables.xlsx', records: [{ id: 'c-1', item_id: 'TEST-MAT-1', description: 'Synthetic material', output_unit: 'PCS' }] };
+  const fetchSpy = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+    const url = String(input);
+    if (url.endsWith('/workspace/preview')) return new Response(JSON.stringify(saved), { status: 200 });
+    if (url.endsWith('/workspace')) return new Response(JSON.stringify(init?.method === 'POST' ? saved : empty), { status: 200 });
+    return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200 });
   });
-
-  render(
-    <AuthContext.Provider value={{ user: { id: 'root', username: 'root', roles: [], permissions: [], is_super_admin: true }, login: vi.fn(), logout: vi.fn() }}>
-      <Products />
-    </AuthContext.Provider>
-  );
-
-  // Click Bulk Import to open modal
-  fireEvent.click(screen.getByRole('button', { name: /Bulk Import ☁️/i }));
-  expect(screen.getByRole('heading', { name: 'Bulk Excel Intake' })).toBeInTheDocument();
-
-  // Create dummy file and select it
-  const file = new File(['dummy content'], 'consumables.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
-  expect(fileInput).not.toBeNull();
-
-  fireEvent.change(fileInput, { target: { files: [file] } });
-
-  expect(axiosPostSpy).toHaveBeenCalled();
-
-  // Modal should auto-close on 200 OK
-  await waitFor(() => {
-    expect(screen.queryByRole('heading', { name: 'Bulk Excel Intake' })).not.toBeInTheDocument();
-  });
-
-  // Success toast and feedback are displayed
-  const toastElements = await screen.findAllByText(/Bulk upload complete: 10 records successfully upserted/i);
-  expect(toastElements.length).toBeGreaterThan(0);
-
-  axiosPostSpy.mockRestore();
+  vi.stubGlobal('fetch', fetchSpy);
+  render(<AuthContext.Provider value={{ user: { id: 'root', username: 'root', roles: [], permissions: [], is_super_admin: true }, login: vi.fn(), logout: vi.fn() }}>
+    <Products />
+  </AuthContext.Provider>);
+  fireEvent.click(screen.getByRole('button', { name: /Bulk Import/i }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Upload data' })).toBeEnabled());
+  expect(screen.queryByLabelText('Upload month')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('Upload year')).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Master Excel file'), { target: { files: [new File(['synthetic'], 'consumables.xlsx')] } });
+  expect(await screen.findByText(/1 unique items ready for review/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  expect(await screen.findByText('1 items saved successfully.')).toBeInTheDocument();
+  const posted = fetchSpy.mock.calls.filter(([, init]) => init?.method === 'POST');
+  expect(posted).toHaveLength(2);
+  expect(String(posted[0][0])).toContain('/consumables/workspace/preview');
+  expect(String(posted[1][0])).toContain('/consumables/workspace');
+  expect(posted[1][1]?.body).toBeInstanceOf(FormData);
+  expect(screen.getByRole('button', { name: 'Delete data' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: 'Export Excel' })).toBeEnabled();
 });
 
 test('edit action populates intake form, changes button to Update Record, and submits PUT', async () => {

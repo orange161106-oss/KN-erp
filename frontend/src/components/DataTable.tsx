@@ -63,6 +63,8 @@ export interface DataTableProps<T extends { id: string; row_index?: number | nul
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
   lastModifiedText?: string;
   onExport?: (mode: 'ALL' | 'FILTERED' | 'SELECTED') => void;
+  /** Fixed-height spreadsheet rows; all records remain available to edit/export. */
+  virtualize?: boolean;
 }
 
 // Convert column width specifications (e.g. 'w-44', '180px', or 180) to pure pixel numbers
@@ -115,6 +117,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   storageKey,
   saveStatus = 'idle',
   lastModifiedText,
+  virtualize = false,
 }: DataTableProps<T>) {
   // --- Persistent Layout State ---
   const persistentKey = storageKey ? `knl_grid_layout_${storageKey}` : null;
@@ -343,6 +346,24 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   const groupHeaderRef = useRef<HTMLTableRowElement>(null);
   const [groupHeaderHeight, setGroupHeaderHeight] = useState<number>(32);
   const [isScrolledLeft, setIsScrolledLeft] = useState<boolean>(false);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(540);
+  const [headerHeight, setHeaderHeight] = useState(56);
+  const ROW_HEIGHT = 28;
+
+  useLayoutEffect(() => {
+    const container = tableContainerRef.current;
+    if (!container || !virtualize) return;
+    const measure = () => {
+      setViewportHeight(container.clientHeight || 540);
+      setHeaderHeight(container.querySelector('thead')?.getBoundingClientRect().height || 56);
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [virtualize, heightMode, isFullscreen, columns, hiddenColumns, headerGroups]);
 
   useLayoutEffect(() => {
     if (!editingCell) return;
@@ -366,8 +387,9 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   const handleScroll = useCallback(() => {
     if (tableContainerRef.current) {
       setIsScrolledLeft(tableContainerRef.current.scrollLeft > 2);
+      if (virtualize) setScrollTop(tableContainerRef.current.scrollTop);
     }
-  }, []);
+  }, [virtualize]);
 
   // Filter visible columns
   const visibleColumns = useMemo(
@@ -496,6 +518,41 @@ export default function DataTable<T extends { id: string; row_index?: number | n
 
     return result;
   }, [data, columnFilters, sortConfig]);
+
+  const windowed = virtualize && processedData.length > 200;
+  let windowStart = windowed
+    ? Math.min(Math.max(0, processedData.length - 1), Math.max(0, Math.floor((scrollTop - headerHeight) / ROW_HEIGHT) - 8))
+    : 0;
+  let windowEnd = windowed
+    ? Math.min(processedData.length, windowStart + Math.ceil(viewportHeight / ROW_HEIGHT) + 24)
+    : processedData.length;
+  // Keep an open input mounted while the user scrolls; all operations still
+  // address processedData, never just the rendered window.
+  if (windowed && editingCell) {
+    const editingIndex = processedData.findIndex(row => row.id === editingCell.rowId);
+    if (editingIndex >= 0) {
+      windowStart = Math.min(windowStart, editingIndex);
+      windowEnd = Math.max(windowEnd, editingIndex + 1);
+    }
+  }
+  const renderedData = processedData.slice(windowStart, windowEnd);
+  const pendingCellFocus = useRef<{ rowIndex: number; colKey: string } | null>(null);
+  useLayoutEffect(() => {
+    const target = pendingCellFocus.current;
+    if (!target) return;
+    const row = tableContainerRef.current?.querySelector(`[data-row-index="${target.rowIndex}"]`);
+    const cell = Array.from(row?.querySelectorAll<HTMLElement>('td') || [])
+      .find(item => item.dataset.columnKey === target.colKey);
+    if (cell) {
+      cell.focus({ preventScroll: true });
+      pendingCellFocus.current = null;
+    }
+  }, [selectedCell, windowStart, windowEnd]);
+
+  useEffect(() => {
+    if (tableContainerRef.current) tableContainerRef.current.scrollTop = 0;
+    setScrollTop(0);
+  }, [sortConfig, columnFilters]);
 
   // Track modified dirty cells
   const modifiedCells = useMemo(() => {
@@ -741,6 +798,15 @@ export default function DataTable<T extends { id: string; row_index?: number | n
       const targetRow = processedData[nextRow];
       const targetCol = visibleColumns[nextCol];
       if (targetRow && targetCol) {
+        if (windowed && tableContainerRef.current) {
+          const container = tableContainerRef.current;
+          const top = nextRow * ROW_HEIGHT;
+          if (top < container.scrollTop || top + ROW_HEIGHT > container.scrollTop + viewportHeight - headerHeight) {
+            container.scrollTop = top;
+            setScrollTop(top);
+          }
+          pendingCellFocus.current = { rowIndex: nextRow, colKey: targetCol.key };
+        }
         setSelectedCell({ rowId: targetRow.id, colKey: targetCol.key });
         onSelectionChange(new Set([targetRow.id]));
       }
@@ -1135,6 +1201,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
         className="flex-1 overflow-auto bg-white relative min-h-0"
       >
         <table
+          aria-rowcount={processedData.length + (headerGroups?.length ? 2 : 1)}
           style={{ width: `${totalTableWidth}px`, minWidth: `${totalTableWidth}px` }}
           className="border-collapse table-fixed text-left text-xs select-none"
         >
@@ -1304,7 +1371,11 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                 </td>
               </tr>
             ) : (
-              processedData.map((row, rIdx) => {
+              <>
+              {windowStart > 0 && <tr aria-hidden="true"><td colSpan={visibleColumns.length + 2}
+                style={{ height: windowStart * ROW_HEIGHT, padding: 0, border: 0 }} /></tr>}
+              {renderedData.map((row, windowIndex) => {
+                const rIdx = windowStart + windowIndex;
                 const isRowSelected = selectedIds.has(row.id);
                 const customRowClass = getRowClassName ? getRowClassName(row) : '';
                 const isZebra = rIdx % 2 === 1;
@@ -1312,6 +1383,8 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                 return (
                   <tr
                     key={row.id}
+                    data-row-index={rIdx}
+                    aria-rowindex={rIdx + (headerGroups?.length ? 3 : 2)}
                     onClick={() => {
                       const next = new Set(selectedIds);
                       if (next.has(row.id)) next.delete(row.id);
@@ -1373,6 +1446,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                       return (
                         <td
                           key={col.key}
+                          data-column-key={col.key}
                           tabIndex={0}
                           title={cellValue !== null && cellValue !== undefined ? String(cellValue) : ''}
                           style={{
@@ -1454,7 +1528,10 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                     })}
                   </tr>
                 );
-              })
+              })}
+              {windowEnd < processedData.length && <tr aria-hidden="true"><td colSpan={visibleColumns.length + 2}
+                style={{ height: (processedData.length - windowEnd) * ROW_HEIGHT, padding: 0, border: 0 }} /></tr>}
+              </>
             )}
           </tbody>
         </table>

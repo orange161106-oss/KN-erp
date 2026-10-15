@@ -616,6 +616,7 @@ export default function PRDPlanning() {
         {/* Excel Data Grid with Resizable Height and Section 9A presets */}
         <div className="flex-1 min-h-0">
           <DataTable
+            virtualize
             columns={columns}
             data={filteredRecords}
             originalData={originalMap}

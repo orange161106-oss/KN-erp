@@ -10,6 +10,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
+from app.db.reliability import database_unavailable
 from app.core.errors import ApplicationError
 from app.domain.purchase_engine.orders import pending_quantity
 from app.models.grn import GRN, GRNItem, GoodsReceiptRecord
@@ -42,7 +43,7 @@ def transaction(function):
             session.rollback()
             if getattr(getattr(error, 'orig', None), 'sqlstate', None) in ('40001', '40P01'):
                 raise ApplicationError('GRN_RETRY_REQUIRED', 'A concurrent receipt changed this order. Retry the unchanged export.', 409) from None
-            raise ApplicationError('DATABASE_UNAVAILABLE', 'Database is unavailable.', 503) from None
+            raise database_unavailable(error) from None
         except Exception:
             session.rollback()
             raise

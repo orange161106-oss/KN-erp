@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     database_url: SecretStr
     db_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
+    # Per worker: keep the hosted PostgreSQL connection budget bounded.
+    db_pool_size: int = Field(default=5, ge=1, le=50)
+    db_max_overflow: int = Field(default=5, ge=0, le=50)
+    db_pool_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    db_pool_recycle_seconds: int = Field(default=1800, ge=60, le=86400)
+    db_warmup_on_startup: bool = True
+    http_slow_request_ms: int = Field(default=1000, ge=1, le=60000)
     inventory_import_enabled: bool = False
     projection_import_enabled: bool = False
     # Schema-only Alembic operations do not need the application's signing key.

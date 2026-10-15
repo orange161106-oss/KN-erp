@@ -123,21 +123,15 @@ export default function ConsumptionNorms() {
   }
 
   async function loadMasters() {
-    try {
-      const consRes = await apiClient.get<{ items: MasterItem[] }>('/api/v1/masters/consumables?limit=100');
-      if (consRes?.items) setConsumablesList(consRes.items);
-    } catch {
-      // Non-blocking if permissions restrict master access
-    }
-
-    try {
-      const unitRes = await apiClient.get<{ items: MasterItem[] }>('/api/v1/masters/units?limit=100');
-      if (unitRes?.items) {
-        setUnitsList(unitRes.items);
-        if (unitRes.items.length > 0) setFormUnitId(unitRes.items[0].id);
-      }
-    } catch {
-      // Non-blocking
+    const [materials, units] = await Promise.allSettled([
+      apiClient.get<{ items: MasterItem[] }>('/api/v1/masters/consumables?limit=100'),
+      apiClient.get<{ items: MasterItem[] }>('/api/v1/masters/units?limit=100'),
+    ]);
+    // Each lookup remains independent when master access is restricted.
+    if (materials.status === 'fulfilled' && materials.value?.items) setConsumablesList(materials.value.items);
+    if (units.status === 'fulfilled' && units.value?.items) {
+      setUnitsList(units.value.items);
+      if (units.value.items.length > 0) setFormUnitId(units.value.items[0].id);
     }
   }
 

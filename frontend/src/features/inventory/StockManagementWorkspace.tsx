@@ -150,6 +150,7 @@ export default function StockManagementWorkspace() {
   const [selectedMonth, setSelectedMonth] = useState<number>(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState<number>(now.getFullYear());
   const [searchQuery, setSearchQuery] = useState('');
+  const settledSearch = useDebouncedValue(searchQuery);
 
   const [records, setRecords] = useState<StockParameterRecord[]>([]);
   const [originalRecords, setOriginalRecords] = useState<Map<string, StockParameterRecord>>(new Map());
@@ -199,7 +200,7 @@ export default function StockManagementWorkspace() {
     try {
       const res = await apiClient.get<StockManagementResponse>(
         `/api/v1/inventory/management?month=${selectedMonth}&year=${selectedYear}${
-          searchQuery ? `&search=${encodeURIComponent(searchQuery)}` : ''
+          settledSearch ? `&search=${encodeURIComponent(settledSearch)}` : ''
         }`
       );
       if (requestId !== loadRequestId.current) return;
@@ -222,7 +223,7 @@ export default function StockManagementWorkspace() {
     } finally {
       if (requestId === loadRequestId.current) setIsLoading(false);
     }
-  }, [selectedMonth, selectedYear, searchQuery]);
+  }, [selectedMonth, selectedYear, settledSearch]);
 
   useEffect(() => {
     setSuccessMsg(null);
@@ -717,13 +718,14 @@ export default function StockManagementWorkspace() {
       {/* 4. Table Area */}
       <div className="flex-1 min-h-0 bg-white rounded-xl border border-stone-200 shadow-xs overflow-hidden flex flex-col">
         <DataTable
+          virtualize
           key={`${metadata?.batch_id || `${selectedYear}-${selectedMonth}`}:${draftVersion}`}
           originalData={originalRecords}
           columns={columns}
           data={records}
           selectedIds={selectedIds}
           onSelectionChange={setSelectedIds}
-          isLoading={isLoading}
+          isLoading={isLoading || searchQuery !== settledSearch}
           onCellChange={handleCellChange}
           onSave={handleSave}
           saveStatus={saveStatus}
@@ -1004,3 +1006,4 @@ export default function StockManagementWorkspace() {
     </div>
   );
 }
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';

@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from app.db.reliability import database_unavailable
 from app.core.errors import ApplicationError
 from app.domain.inventory_engine.projection import Event, Floor, calculate, condition
 from app.models.audit import AuditLog
@@ -121,9 +122,9 @@ def import_inputs(session, data: ProjectionInputs, actor_id, *, enabled):
     except IntegrityError:
         session.rollback()
         raise ApplicationError('PROJECTION_SOURCE_CONFLICT', 'A concurrent source import conflicts; retry the unchanged source set.', 409) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as error:
         session.rollback()
-        raise ApplicationError('DATABASE_UNAVAILABLE', 'Database is unavailable.', 503) from None
+        raise database_unavailable(error) from None
     except Exception:
         session.rollback()
         raise
@@ -132,8 +133,8 @@ def import_inputs(session, data: ProjectionInputs, actor_id, *, enabled):
 def report(session, material_id, version_id, cutoff, source_set_id=None):
     try:
         return _report(session, material_id, version_id, cutoff, source_set_id)
-    except SQLAlchemyError:
-        raise ApplicationError('DATABASE_UNAVAILABLE', 'Database is unavailable.', 503) from None
+    except SQLAlchemyError as error:
+        raise database_unavailable(error) from None
 
 
 def _report(session, material_id, version_id, cutoff, source_set_id):

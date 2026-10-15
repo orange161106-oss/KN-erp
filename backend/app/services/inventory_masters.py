@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.db.reliability import database_unavailable
 from app.core.errors import ApplicationError
 from app.models.audit import AuditLog
 from app.models.inventory_masters import Consumable, Supplier, SupplierConsumable, Unit
@@ -38,8 +39,8 @@ RESOURCES = (
 def get_record(session: Session, resource: Resource, entity_id: UUID, *, lock=False):
     try:
         record = repository.find(session, resource.model, entity_id, lock=lock)
-    except SQLAlchemyError:
-        raise ApplicationError("DATABASE_UNAVAILABLE", "Database is unavailable.", 503) from None
+    except SQLAlchemyError as error:
+        raise database_unavailable(error) from None
     if record is None:
         raise ApplicationError("MASTER_NOT_FOUND", "Master record does not exist.", 404)
     return record
@@ -48,8 +49,8 @@ def get_record(session: Session, resource: Resource, entity_id: UUID, *, lock=Fa
 def list_records(session: Session, resource: Resource, **filters):
     try:
         items, total = repository.list_records(session, resource.model, **filters)
-    except SQLAlchemyError:
-        raise ApplicationError("DATABASE_UNAVAILABLE", "Database is unavailable.", 503) from None
+    except SQLAlchemyError as error:
+        raise database_unavailable(error) from None
     return {"items": items, "total": total, "limit": filters["limit"], "offset": filters["offset"]}
 
 
@@ -63,9 +64,9 @@ def mutation(session: Session):
     except IntegrityError:
         session.rollback()
         raise ApplicationError("MASTER_CONFLICT", "Code, mapping, or reference conflicts with an existing record.", 409) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as error:
         session.rollback()
-        raise ApplicationError("DATABASE_UNAVAILABLE", "Database is unavailable.", 503) from None
+        raise database_unavailable(error) from None
     except Exception:
         session.rollback()
         raise

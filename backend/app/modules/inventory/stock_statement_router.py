@@ -58,7 +58,7 @@ def get_statement(
 
 
 @router.post("/preview", response_model=StockStatementPreviewResponse)
-async def preview_statement(
+def preview_statement(
     session: Database,
     user: ImportUser,
     file: UploadFile = File(...),
@@ -66,7 +66,7 @@ async def preview_statement(
     statement_year: int = Form(...),
 ) -> StockStatementPreviewResponse:
     """Upload and validate an Excel file for Stock Statement without committing to DB."""
-    content = await file.read()
+    content = file.file.read()
     filename = file.filename or "stock_statement.xlsx"
     return service.parse_and_preview_stock_statement(
         session,

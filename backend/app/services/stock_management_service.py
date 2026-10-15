@@ -10,8 +10,8 @@ import uuid
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import case, func, select
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.errors import ApplicationError
 from app.models.audit import AuditLog
@@ -739,6 +739,9 @@ def get_stock_management(
             StockParameterBatch.month == month,
             StockParameterBatch.year == year,
             StockParameterBatch.status == "active",
+        ).options(
+            joinedload(StockParameterBatch.creator).load_only(User.full_name, User.username),
+            joinedload(StockParameterBatch.updater).load_only(User.full_name, User.username),
         )
     )
 
@@ -753,8 +756,8 @@ def get_stock_management(
         summary = StockManagementSummary()
         return StockManagementResponse(metadata=meta, summary=summary, records=[])
 
-    creator = session.get(User, batch.created_by) if batch.created_by else None
-    updater = session.get(User, batch.updated_by) if batch.updated_by else None
+    creator = batch.creator
+    updater = batch.updater
 
     stmt = select(StockParameter).where(StockParameter.batch_id == batch.id)
     if search and search.strip():
@@ -770,22 +773,17 @@ def get_stock_management(
     stmt = stmt.order_by(StockParameter.source_row)
     params = session.scalars(stmt).all()
 
-    missing_limits = session.scalar(
-        select(func.count(StockParameter.id)).where(
-            StockParameter.batch_id == batch.id,
-            (StockParameter.min_stock_level.is_(None))
-            | (StockParameter.max_stock_level.is_(None))
-            | (StockParameter.min_order_qty.is_(None))
-            | (StockParameter.lead_time_days.is_(None)),
-        )
-    ) or 0
-
-    min_gt_max = session.scalar(
-        select(func.count(StockParameter.id)).where(
-            StockParameter.batch_id == batch.id,
-            StockParameter.min_stock_level > StockParameter.max_stock_level,
-        )
-    ) or 0
+    missing_limits, min_gt_max = session.execute(
+        select(
+            func.count(case((
+                StockParameter.min_stock_level.is_(None)
+                | StockParameter.max_stock_level.is_(None)
+                | StockParameter.min_order_qty.is_(None)
+                | StockParameter.lead_time_days.is_(None), 1,
+            ))),
+            func.count(case((StockParameter.min_stock_level > StockParameter.max_stock_level, 1))),
+        ).where(StockParameter.batch_id == batch.id)
+    ).one()
 
     records = [
         StockParameterRecord(
@@ -840,8 +838,14 @@ def batch_update_stock_parameters(session: Session, request: StockParameterBatch
             raise ApplicationError("NOT_FOUND", "No active parameter batch for this period.", 404)
         if request.batch_id is not None and request.batch_id != batch.id:
             raise ApplicationError("PARAMETERS_CHANGED", "Parameters were replaced. Refresh before saving.", 409)
+        parameters_by_id = {param.id: param for param in session.scalars(
+            select(StockParameter).where(
+                StockParameter.batch_id == batch.id,
+                StockParameter.id.in_([update.id for update in request.updates]),
+            ).execution_options(populate_existing=True)
+        )}
         for update in request.updates:
-            param = session.get(StockParameter, update.id)
+            param = parameters_by_id.get(update.id)
             if param is None or param.batch_id != batch.id:
                 raise ApplicationError("INVALID_PARAMETER_ROW", "A row does not belong to the selected parameters.", 422)
             changes = update.model_dump(exclude_unset=True, exclude={"id"})
@@ -883,11 +887,12 @@ def list_stock_parameter_history(
             StockParameterBatch.year == year,
         )
         .order_by(StockParameterBatch.created_at.desc())
+        .options(joinedload(StockParameterBatch.uploader).load_only(User.full_name, User.username))
     ).all()
 
     items: list[StockParameterHistoryItem] = []
     for b in batches:
-        uploader = session.get(User, b.uploaded_by) if b.uploaded_by else None
+        uploader = b.uploader
         items.append(
             StockParameterHistoryItem(
                 batch_id=str(b.id),

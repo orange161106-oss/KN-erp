@@ -26,12 +26,12 @@ def create_single_consumable(
 
 
 @router.post("/consumables/bulk")
-async def bulk_upload_consumables(
+def bulk_upload_consumables(
     file: UploadFile = File(...),
     session: Annotated[Session, Depends(get_db)] = None,
     current_user: Annotated[CurrentUser, Depends(get_current_user)] = None,
 ):
-    contents = await file.read(15 * 1024 * 1024 + 1)
+    contents = file.file.read(15 * 1024 * 1024 + 1)
     return service.bulk_upsert_consumables(session, contents, current_user.id)
 
 
@@ -60,12 +60,12 @@ def create_single_sales_part(
 
 
 @router.post("/sales-parts/bulk")
-async def bulk_upload_sales_parts(
+def bulk_upload_sales_parts(
     file: UploadFile = File(...),
     session: Annotated[Session, Depends(get_db)] = None,
     current_user: Annotated[CurrentUser, Depends(get_current_user)] = None,
 ):
-    contents = await file.read(15 * 1024 * 1024 + 1)
+    contents = file.file.read(15 * 1024 * 1024 + 1)
     return service.bulk_upsert_sales_parts(session, contents, current_user.id)
 
 
@@ -94,12 +94,12 @@ def create_single_assemble(
 
 
 @router.post("/assemble/bulk")
-async def bulk_upload_assemble(
+def bulk_upload_assemble(
     file: UploadFile = File(...),
     session: Annotated[Session, Depends(get_db)] = None,
     current_user: Annotated[CurrentUser, Depends(get_current_user)] = None,
 ):
-    contents = await file.read(15 * 1024 * 1024 + 1)
+    contents = file.file.read(15 * 1024 * 1024 + 1)
     return service.bulk_upsert_assemble(session, contents, current_user.id)
 
 
