@@ -638,6 +638,116 @@ def _to_line_item_response(item: RequirementLineItem) -> RequirementLineItemResp
     )
 
 
+def _normalize_plant_key(name: str) -> Optional[str]:
+    """Map plant sheet name variations (e.g. 'Plant 1', 'PLANT I', 'Plant-1', 'PLANT_5') to standard ID."""
+    if not name:
+        return None
+    clean = str(name).strip().upper().replace(" ", "").replace("_", "").replace("-", "")
+    mapping = {
+        "PLANT1": "PLANT_I",
+        "PLANTI": "PLANT_I",
+        "PLANT2": "PLANT_II",
+        "PLANTII": "PLANT_II",
+        "PLANT3": "PLANT_III",
+        "PLANTIII": "PLANT_III",
+        "PLANT4": "PLANT_IV",
+        "PLANTIV": "PLANT_IV",
+        "PLANT5": "PLANT_V",
+        "PLANTV": "PLANT_V",
+    }
+    if clean in mapping:
+        return mapping[clean]
+    for digit, roman in [
+        ("1", "PLANT_I"),
+        ("I", "PLANT_I"),
+        ("2", "PLANT_II"),
+        ("II", "PLANT_II"),
+        ("3", "PLANT_III"),
+        ("III", "PLANT_III"),
+        ("4", "PLANT_IV"),
+        ("IV", "PLANT_IV"),
+        ("5", "PLANT_V"),
+        ("V", "PLANT_V"),
+    ]:
+        if clean == digit or f"PLANT{digit}" in clean:
+            return roman
+    return None
+
+
+def _find_matching_sheet_name(sheet_names: list[str], target_plant_id: str) -> Optional[str]:
+    """Find sheet name matching target_plant_id from sheet_names."""
+    plant_candidates_map = {
+        "PLANT_I": ["Plant 1", "Plant I", "PLANT_I", "Plant-1", "PLANT1", "PLANTI", "Plant1", "PlantI"],
+        "PLANT_II": ["Plant 2", "Plant II", "PLANT_II", "Plant-2", "PLANT2", "PLANTII", "Plant2", "PlantII"],
+        "PLANT_III": ["Plant 3", "Plant III", "PLANT_III", "Plant-3", "PLANT3", "PLANTIII", "Plant3", "PlantIII"],
+        "PLANT_IV": ["Plant 4", "Plant IV", "PLANT_IV", "Plant-4", "PLANT4", "PLANTIV", "Plant4", "PlantIV"],
+        "PLANT_V": ["Plant 5", "Plant V", "PLANT_V", "Plant-5", "PLANT5", "PLANTV", "Plant5", "PlantV"],
+    }
+    candidates = plant_candidates_map.get(target_plant_id, [target_plant_id])
+    for s in sheet_names:
+        s_clean = s.strip()
+        for cand in candidates:
+            if s_clean.lower() == cand.lower():
+                return s
+
+    for s in sheet_names:
+        norm = _normalize_plant_key(s)
+        if norm == target_plant_id:
+            return s
+
+    return None
+
+
+def _rollover_catalog_items(db: Session, target_plan: MonthlyRequirementPlan) -> int:
+    """Auto-rollover line items from another plan of the same plant if target_plan has no items.
+    Preserves consumable_id, serial_no, and part_no, setting starting requested_qty to 0.0.
+    """
+    existing_count = db.execute(
+        select(func.count(RequirementLineItem.id)).where(RequirementLineItem.plan_id == target_plan.id)
+    ).scalar() or 0
+    if existing_count > 0:
+        return 0
+
+    # Find the most relevant source plan for this plant that has line items (preferring latest plan)
+    source_plan = db.execute(
+        select(MonthlyRequirementPlan)
+        .join(RequirementLineItem, RequirementLineItem.plan_id == MonthlyRequirementPlan.id)
+        .where(
+            MonthlyRequirementPlan.plant_id == target_plan.plant_id,
+            MonthlyRequirementPlan.id != target_plan.id,
+        )
+        .order_by(MonthlyRequirementPlan.year.desc(), MonthlyRequirementPlan.month.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+    if not source_plan:
+        return 0
+
+    source_items = db.execute(
+        select(RequirementLineItem)
+        .where(RequirementLineItem.plan_id == source_plan.id)
+        .order_by(RequirementLineItem.serial_no.asc().nullslast(), RequirementLineItem.created_at.asc())
+    ).scalars().all()
+
+    seen_consumables = set()
+    copied_count = 0
+    for item in source_items:
+        if item.consumable_id in seen_consumables:
+            continue
+        seen_consumables.add(item.consumable_id)
+        new_item = RequirementLineItem(
+            plan_id=target_plan.id,
+            consumable_id=item.consumable_id,
+            serial_no=item.serial_no,
+            part_no=item.part_no,
+            requested_qty=0.0,
+        )
+        db.add(new_item)
+        copied_count += 1
+
+    return copied_count
+
+
 def _to_plan_response(plan: MonthlyRequirementPlan) -> MonthlyRequirementPlanResponse:
     status_str = plan.status.value if hasattr(plan.status, "value") else str(plan.status)
     items = sorted(
@@ -663,7 +773,8 @@ def get_monthly_plans(
     year: Optional[int] = None,
 ) -> list[MonthlyRequirementPlanResponse]:
     """Fetch monthly requirement plans.
-    Auto-provisions missing plant plans in DRAFT status when month and year are specified.
+    Auto-provisions missing plant plans in DRAFT status when month and year are specified,
+    and rolls over annual consumable catalog items defaulting requested_qty to 0.0.
     """
     ALL_PLANTS = ["PLANT_I", "PLANT_II", "PLANT_III", "PLANT_IV", "PLANT_V"]
 
@@ -673,24 +784,30 @@ def get_monthly_plans(
             target_plants = ALL_PLANTS
         else:
             assigned = getattr(user, "assigned_plant", None)
-            target_plants = [assigned] if assigned else []
+            canonical_assigned = _normalize_plant_key(assigned) or assigned if assigned else None
+            target_plants = [canonical_assigned] if canonical_assigned else []
 
         for p_id in target_plants:
+            canonical_pid = _normalize_plant_key(p_id) or p_id
             existing = db.execute(
                 select(MonthlyRequirementPlan).where(
-                    MonthlyRequirementPlan.plant_id == p_id,
+                    MonthlyRequirementPlan.plant_id == canonical_pid,
                     MonthlyRequirementPlan.month == month,
                     MonthlyRequirementPlan.year == year,
                 )
             ).scalar_one_or_none()
             if not existing:
                 new_plan = MonthlyRequirementPlan(
-                    plant_id=p_id,
+                    plant_id=canonical_pid,
                     month=month,
                     year=year,
                     status=RequirementStatus.DRAFT,
                 )
                 db.add(new_plan)
+                db.flush()
+                _rollover_catalog_items(db, new_plan)
+            elif existing and existing.status == RequirementStatus.DRAFT:
+                _rollover_catalog_items(db, existing)
         db.commit()
 
     stmt = (
@@ -707,7 +824,8 @@ def get_monthly_plans(
 
     if not is_admin_or_planner_user(user):
         assigned_plant = getattr(user, "assigned_plant", None)
-        stmt = stmt.where(MonthlyRequirementPlan.plant_id == assigned_plant)
+        canonical_assigned = _normalize_plant_key(assigned_plant) if assigned_plant else None
+        stmt = stmt.where(MonthlyRequirementPlan.plant_id == canonical_assigned)
 
     plans = db.scalars(stmt).all()
     return [_to_plan_response(p) for p in plans]
@@ -718,9 +836,10 @@ def create_monthly_plan(
     payload: MonthlyRequirementPlanCreate,
     user: CurrentUser,
 ) -> MonthlyRequirementPlanResponse:
+    canonical_pid = _normalize_plant_key(payload.plant_id) or payload.plant_id
     existing = db.execute(
         select(MonthlyRequirementPlan).where(
-            MonthlyRequirementPlan.plant_id == payload.plant_id,
+            MonthlyRequirementPlan.plant_id == canonical_pid,
             MonthlyRequirementPlan.month == payload.month,
             MonthlyRequirementPlan.year == payload.year,
         )
@@ -728,17 +847,19 @@ def create_monthly_plan(
     if existing:
         raise ApplicationError(
             "DUPLICATE_PLAN",
-            f"Monthly requirement plan already exists for plant '{payload.plant_id}', month {payload.month}, year {payload.year}.",
+            f"Monthly requirement plan already exists for plant '{canonical_pid}', month {payload.month}, year {payload.year}.",
             409,
         )
 
     plan = MonthlyRequirementPlan(
-        plant_id=payload.plant_id,
+        plant_id=canonical_pid,
         month=payload.month,
         year=payload.year,
         status=RequirementStatus.DRAFT,
     )
     db.add(plan)
+    db.flush()
+    _rollover_catalog_items(db, plan)
     db.commit()
     db.refresh(plan)
     return _to_plan_response(plan)
@@ -906,67 +1027,6 @@ def delete_single_line_item(
         pass
 
     return {"message": "Line item deleted successfully", "id": str(item_id)}
-
-
-def _normalize_plant_key(name: str) -> Optional[str]:
-    """Map plant sheet name variations (e.g. 'Plant 1', 'PLANT I', 'Plant-1') to standard ID."""
-    clean = name.strip().upper().replace(" ", "").replace("_", "").replace("-", "")
-    mapping = {
-        "PLANT1": "PLANT_I",
-        "PLANTI": "PLANT_I",
-        "PLANT2": "PLANT_II",
-        "PLANTII": "PLANT_II",
-        "PLANT3": "PLANT_III",
-        "PLANTIII": "PLANT_III",
-        "PLANT4": "PLANT_IV",
-        "PLANTIV": "PLANT_IV",
-        "PLANT5": "PLANT_V",
-        "PLANTV": "PLANT_V",
-    }
-    if clean in mapping:
-        return mapping[clean]
-    # Check if string contains plant variations
-    for plant_num, std_id in [
-        ("1", "PLANT_I"),
-        ("I", "PLANT_I"),
-        ("2", "PLANT_II"),
-        ("II", "PLANT_II"),
-        ("3", "PLANT_III"),
-        ("III", "PLANT_III"),
-        ("4", "PLANT_IV"),
-        ("IV", "PLANT_IV"),
-        ("5", "PLANT_V"),
-        ("V", "PLANT_V"),
-    ]:
-        if f"PLANT{plant_num}" in clean or f"PLANT-{plant_num}" in clean:
-            return std_id
-    return None
-
-
-def _find_matching_sheet_name(sheet_names: list[str], target_plant_id: str) -> Optional[str]:
-    """Find sheet name matching target_plant_id from sheet_names."""
-    # Direct candidate matching
-    plant_candidates_map = {
-        "PLANT_I": ["Plant 1", "Plant I", "PLANT_I", "Plant-1", "PLANT1", "PLANTI", "Plant1", "PlantI"],
-        "PLANT_II": ["Plant 2", "Plant II", "PLANT_II", "Plant-2", "PLANT2", "PLANTII", "Plant2", "PlantII"],
-        "PLANT_III": ["Plant 3", "Plant III", "PLANT_III", "Plant-3", "PLANT3", "PLANTIII", "Plant3", "PlantIII"],
-        "PLANT_IV": ["Plant 4", "Plant IV", "PLANT_IV", "Plant-4", "PLANT4", "PLANTIV", "Plant4", "PlantIV"],
-        "PLANT_V": ["Plant 5", "Plant V", "PLANT_V", "Plant-5", "PLANT5", "PLANTV", "Plant5", "PlantV"],
-    }
-    candidates = plant_candidates_map.get(target_plant_id, [target_plant_id])
-    for s in sheet_names:
-        s_clean = s.strip()
-        for cand in candidates:
-            if s_clean.lower() == cand.lower():
-                return s
-
-    # Normalized comparison fallback
-    for s in sheet_names:
-        norm = _normalize_plant_key(s)
-        if norm == target_plant_id:
-            return s
-
-    return None
 
 
 def _parse_and_ingest_sheet(

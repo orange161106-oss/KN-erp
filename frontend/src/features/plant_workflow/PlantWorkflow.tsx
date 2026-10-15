@@ -175,9 +175,20 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
     { key: 'PLANT_V', label: 'Plant V' },
   ];
 
+  const normalizePlant = (id?: string) => {
+    if (!id) return '';
+    const clean = id.toUpperCase().replace(/\s+|-/g, '_');
+    if (clean === 'PLANT_1') return 'PLANT_I';
+    if (clean === 'PLANT_2') return 'PLANT_II';
+    if (clean === 'PLANT_3') return 'PLANT_III';
+    if (clean === 'PLANT_4') return 'PLANT_IV';
+    if (clean === 'PLANT_5') return 'PLANT_V';
+    return clean;
+  };
+
   const currentPlantTabPlan = allPlans.find(
     (p) =>
-      p.plant_id.toUpperCase() === activeTab.toUpperCase() &&
+      normalizePlant(p.plant_id) === normalizePlant(activeTab) &&
       p.month === selectedMonth &&
       p.year === selectedYear
   ) || null;

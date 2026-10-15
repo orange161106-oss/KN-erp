@@ -221,9 +221,9 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
             <button
               type="button"
               onClick={onAddItem}
-              disabled={!plan || !canEdit || loading}
+              disabled={plan?.status === 'APPROVED' || !canEdit || loading}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer ${
-                !plan || !canEdit || loading
+                plan?.status === 'APPROVED' || !canEdit || loading
                   ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed shadow-none'
                   : 'bg-white hover:bg-gray-50 text-gray-800 border border-gray-300'
               }`}
@@ -237,16 +237,16 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
           <button
             type="button"
             onClick={() => setIsUploadModalOpen(true)}
-            disabled={!plan || !canUpload || uploading || loading}
+            disabled={plan?.status === 'APPROVED' || !canUpload || uploading || loading}
             title={
-              !plan
-                ? 'Create a plan first to upload items'
+              plan?.status === 'APPROVED'
+                ? 'Plan is APPROVED and locked'
                 : !canUpload
                 ? 'Plan must be in DRAFT status to upload items'
                 : 'Upload CSV or Excel plan'
             }
             className={`inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer ${
-              !plan || !canUpload || uploading || loading
+              plan?.status === 'APPROVED' || !canUpload || uploading || loading
                 ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed shadow-none'
                 : 'bg-orange-600 hover:bg-orange-700 text-white border border-transparent hover:shadow'
             }`}
