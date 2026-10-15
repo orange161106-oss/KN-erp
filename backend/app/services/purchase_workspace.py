@@ -31,6 +31,7 @@ from app.schemas.purchase_workspace import (
 )
 from app.services.purchase_approval import submit_purchase_approval
 from app.services.requirements_workspace import get_monthly_plan_metadata
+from app.services.stock_management_service import resolve_stock_parameter_for_item
 
 
 def _q4(value: Decimal | int | str | None) -> Decimal:
@@ -99,6 +100,7 @@ def list_purchase_workspace(
     year: int,
     search: Optional[str] = None,
     status_filter: Optional[str] = None,
+    category: Optional[str] = None,
 ) -> PurchaseWorkspaceResponse:
     planning_period = f"{year:04d}-{month:02d}"
     meta = get_monthly_plan_metadata(session, month, year)
@@ -143,13 +145,15 @@ def list_purchase_workspace(
             StockParameterBatch.status == "active",
         )
     )
-    param_map: dict[str, StockParameter] = {}
+    params_by_item: dict[str, list[StockParameter]] = {}
     if current_param_batch:
         params = session.scalars(
-            select(StockParameter).where(StockParameter.batch_id == current_param_batch.id)
+            select(StockParameter)
+            .where(StockParameter.batch_id == current_param_batch.id)
+            .order_by(StockParameter.source_row)
         ).all()
         for p in params:
-            param_map[p.item_id.strip().upper()] = p
+            params_by_item.setdefault(p.item_id.strip().upper(), []).append(p)
 
     grouped: dict[str, dict[str, object]] = {}
     for row in rows:
@@ -230,8 +234,28 @@ def list_purchase_workspace(
 
         if not current_param_batch:
             flags.append(f"No stock parameters for {month:02d}/{year}")
-        elif item_key not in param_map:
-            flags.append("No stock parameters set for item")
+        else:
+            item_params = params_by_item.get(item_key, [])
+            resolved_param, param_flag = resolve_stock_parameter_for_item(
+                item_params,
+                category=category,
+            )
+            if param_flag:
+                flags.append(param_flag)
+            elif resolved_param is not None:
+                if (
+                    recommended > Decimal("0")
+                    and resolved_param.min_order_qty is not None
+                    and recommended < resolved_param.min_order_qty
+                ):
+                    recommended = _q4(resolved_param.min_order_qty)
+                flags.append(
+                    f"Limits ({resolved_param.category or 'Default'}): "
+                    f"Min={_q4(resolved_param.min_stock_level)}, "
+                    f"Max={_q4(resolved_param.max_stock_level)}, "
+                    f"MOQ={_q4(resolved_param.min_order_qty)}, "
+                    f"Lead={resolved_param.lead_time_days if resolved_param.lead_time_days is not None else 0}d"
+                )
 
         if flags:
             remarks = f"{remarks} [{'; '.join(flags)}]" if remarks else "; ".join(flags)

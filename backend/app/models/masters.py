@@ -10,7 +10,10 @@ from app.db.base import Base
 
 class Product(Base):
     __tablename__ = "products"
-    __table_args__ = (Index("ix_products_code", "code"),)
+    __table_args__ = (
+        Index("ix_products_code", "code"),
+        UniqueConstraint("part_number", "item_id", name="uq_products_part_number_item_id"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     code: Mapped[str] = mapped_column(String(128), nullable=False)

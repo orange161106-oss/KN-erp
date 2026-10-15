@@ -157,7 +157,7 @@ def test_valid_item_id_matches_consumable_master(stock_statement_db):
 
 
 def test_unknown_item_id_classified_as_unknown_and_produces_warning(stock_statement_db):
-    """Row with Item Id not present in Consumable Master is classified as UNKNOWN with a review warning (does not block confirm)."""
+    """Row with Item Id not present in Consumable Master is classified as OTHER_ITEM without warning noise (does not block confirm)."""
     with Session(stock_statement_db) as session:
         missing_id = "LRM120307QQ"
         excel_bytes = create_sample_stock_statement_wb([
@@ -174,18 +174,14 @@ def test_unknown_item_id_classified_as_unknown_and_produces_warning(stock_statem
 
         assert len(preview.errors) == 0
         assert preview.can_confirm is True
-        assert preview.unknown_count == 1
-        assert missing_id in preview.unknown_items
-        assert len(preview.warnings) == 1
-        assert preview.warnings[0].severity == "WARNING"
-        assert preview.warnings[0].code == "ITEM_UNKNOWN_IN_MASTER"
-        assert preview.warnings[0].item_class == "UNKNOWN"
+        assert preview.product_or_other_count == 1
+        assert preview.lines_preview[0].item_class == "OTHER_ITEM"
 
         # Token must still be stored so user can download error report
         assert preview.file_token in service._PREVIEW_STORE
         stored = service._PREVIEW_STORE[preview.file_token]
         assert stored["can_confirm"] is True
-        assert len(stored["issues"]) >= 1
+        assert len(stored["issues"]) == 0
 
 
 def test_empty_item_id_triggers_blocking_error(stock_statement_db):

@@ -1,22 +1,32 @@
 import io
+import itertools
+import logging
 import re
+import time
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional, Union
 from uuid import UUID, uuid4
 
 import numpy as np
+import openpyxl
 import pandas as pd
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, or_, select
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.errors import ApplicationError
+from app.db.session import session_scope
 from app.models.audit import AuditLog
 from app.models.inventory_masters import Consumable, Supplier, Unit
 from app.models.mappings import ProductProcessConsumable
 from app.models.masters import Product
 from app.models.production import Process
+
+logger = logging.getLogger("kn.product_master")
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +64,108 @@ class AssembleSingleCreate(BaseModel):
     no_of_process_per_part: Optional[Decimal] = Decimal("1.0000")
     output_unit: Optional[str] = "PCS"
     rate: Optional[Decimal] = None
+
+
+class AssembleRowIssue(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    row: int
+    column: Optional[str] = None
+    error_code: str
+    message: str
+    raw_value: Optional[str] = None
+    suggested_action: Optional[str] = None
+
+
+class AssembleImportPreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    file_token: str
+    source_filename: str
+    detected_header_row: int
+    columns_matched: list[str]
+    total_rows: int
+    rows_to_add: int
+    rows_to_update: int
+    errors: list[AssembleRowIssue] = []
+    warning_count: int = 0
+    error_count: int = 0
+    can_confirm: bool = True
+
+
+class AssembleImportConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    file_token: str
+
+
+class AssembleImportJobResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    job_id: str
+    status: str  # "queued", "running", "completed", "failed"
+    stage: str
+    progress_percent: int
+    total_rows: int
+    upserted: int
+    rows_added: int
+    rows_updated: int
+    errors: list[AssembleRowIssue] = []
+    error_message: Optional[str] = None
+    created_at: str
+    completed_at: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# In-Memory Preview & Background Job Stores
+# ---------------------------------------------------------------------------
+
+_ASSEMBLE_PREVIEW_STORE: dict[str, dict[str, Any]] = {}
+_ASSEMBLE_IMPORT_JOBS: dict[str, dict[str, Any]] = {}
+ASSEMBLE_PREVIEW_TTL_SECONDS = 1800  # 30 minutes
+
+
+def _is_sqlite(db: Session) -> bool:
+    try:
+        return bool(db.bind and "sqlite" in db.bind.dialect.name.lower())
+    except Exception:
+        return False
+
+
+def _get_insert_fn(db: Session):
+    return sqlite_insert if _is_sqlite(db) else pg_insert
+
+
+insert = pg_insert
+
+
+def execute_with_db_retry(operation, max_retries: int = 1):
+    """Executes a database operation with automatic retry on transient OperationalError."""
+    for attempt in range(max_retries + 1):
+        try:
+            return operation()
+        except (OperationalError, DBAPIError) as e:
+            logger.warning(
+                "Database connection error (attempt %d/%d): %s",
+                attempt + 1,
+                max_retries + 1,
+                str(e),
+            )
+            if attempt < max_retries:
+                time.sleep(1.0)
+                continue
+            raise ApplicationError(
+                "DATABASE_UNAVAILABLE",
+                "Database connection lost or timed out. Please try again.",
+                503,
+            ) from e
+
+
+def _cleanup_stale_assemble_previews() -> None:
+    now = time.time()
+    stale = [
+        k
+        for k, v in _ASSEMBLE_PREVIEW_STORE.items()
+        if now - v.get("created_at", 0) > ASSEMBLE_PREVIEW_TTL_SECONDS
+    ]
+    for k in stale:
+        _ASSEMBLE_PREVIEW_STORE.pop(k, None)
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +419,8 @@ def upsert_single_consumable(
     supplier_id_val = supplier.id if supplier else None
     supplier_name_val = data.supplier_name.strip() if data.supplier_name else (supplier.name if supplier else None)
 
-    stmt = insert(Consumable).values({
+    insert_fn = _get_insert_fn(db)
+    stmt = insert_fn(Consumable).values({
         "id": uuid4(),
         "item_id": clean_item_id,
         "supplier_id": supplier_id_val,
@@ -408,7 +521,8 @@ def bulk_upsert_consumables(
                 supplier_id_val = supplier.id if supplier else None
                 supplier_name_val = supp_name or (supplier.name if supplier else None)
 
-                stmt = insert(Consumable).values({
+                insert_fn = _get_insert_fn(db)
+                stmt = insert_fn(Consumable).values({
                     "id": uuid4(),
                     "item_id": clean_item_id,
                     "supplier_id": supplier_id_val,
@@ -490,7 +604,8 @@ def upsert_single_sales_part(
 
     composite_code = f"{clean_part_no}_{clean_item_id}"[:128]
 
-    stmt = insert(Product).values({
+    insert_fn = _get_insert_fn(db)
+    stmt = insert_fn(Product).values({
         "id": uuid4(),
         "code": composite_code,
         "part_number": clean_part_no,
@@ -501,17 +616,30 @@ def upsert_single_sales_part(
         "is_active": True,
     })
 
-    upsert_stmt = stmt.on_conflict_do_update(
-        constraint="uq_products_part_number_item_id",
-        set_={
-            "code": stmt.excluded.code,
-            "name": stmt.excluded.name,
-            "description": stmt.excluded.description,
-            "uom": stmt.excluded.uom,
-            "is_active": True,
-            "updated_at": func.now(),
-        },
-    ).returning(Product)
+    if _is_sqlite(db):
+        upsert_stmt = stmt.on_conflict_do_update(
+            index_elements=["part_number", "item_id"],
+            set_={
+                "code": stmt.excluded.code,
+                "name": stmt.excluded.name,
+                "description": stmt.excluded.description,
+                "uom": stmt.excluded.uom,
+                "is_active": True,
+                "updated_at": func.now(),
+            },
+        ).returning(Product)
+    else:
+        upsert_stmt = stmt.on_conflict_do_update(
+            constraint="uq_products_part_number_item_id",
+            set_={
+                "code": stmt.excluded.code,
+                "name": stmt.excluded.name,
+                "description": stmt.excluded.description,
+                "uom": stmt.excluded.uom,
+                "is_active": True,
+                "updated_at": func.now(),
+            },
+        ).returning(Product)
 
     record = db.scalars(upsert_stmt).first()
     db.add(AuditLog(
@@ -575,7 +703,8 @@ def bulk_upsert_sales_parts(
             try:
                 ensure_unit(db, uom)
 
-                stmt = insert(Product).values({
+                insert_fn = _get_insert_fn(db)
+                stmt = insert_fn(Product).values({
                     "id": uuid4(),
                     "code": composite_code,
                     "part_number": part_no,
@@ -585,17 +714,30 @@ def bulk_upsert_sales_parts(
                     "uom": uom,
                     "is_active": True,
                 })
-                upsert_stmt = stmt.on_conflict_do_update(
-                    constraint="uq_products_part_number_item_id",
-                    set_={
-                        "code": stmt.excluded.code,
-                        "name": stmt.excluded.name,
-                        "description": stmt.excluded.description,
-                        "uom": stmt.excluded.uom,
-                        "is_active": True,
-                        "updated_at": func.now(),
-                    },
-                )
+                if _is_sqlite(db):
+                    upsert_stmt = stmt.on_conflict_do_update(
+                        index_elements=["part_number", "item_id"],
+                        set_={
+                            "code": stmt.excluded.code,
+                            "name": stmt.excluded.name,
+                            "description": stmt.excluded.description,
+                            "uom": stmt.excluded.uom,
+                            "is_active": True,
+                            "updated_at": func.now(),
+                        },
+                    )
+                else:
+                    upsert_stmt = stmt.on_conflict_do_update(
+                        constraint="uq_products_part_number_item_id",
+                        set_={
+                            "code": stmt.excluded.code,
+                            "name": stmt.excluded.name,
+                            "description": stmt.excluded.description,
+                            "uom": stmt.excluded.uom,
+                            "is_active": True,
+                            "updated_at": func.now(),
+                        },
+                    )
                 db.execute(upsert_stmt)
                 db.commit()
                 upserted_count += 1
@@ -712,7 +854,8 @@ def upsert_single_assemble(
     consumable = _resolve_or_create_consumable(db, data.consumable_item, data.output_unit or "PCS")
     process = _resolve_or_create_process(db, data.process_name)
 
-    stmt = insert(ProductProcessConsumable).values({
+    insert_fn = _get_insert_fn(db)
+    stmt = insert_fn(ProductProcessConsumable).values({
         "id": uuid4(),
         "product_id": product.id,
         "consumable_id": consumable.id,
@@ -730,7 +873,7 @@ def upsert_single_assemble(
     })
 
     upsert_stmt = stmt.on_conflict_do_update(
-        constraint="uq_product_process_consumables_product_id_process_id_consumable_id",
+        index_elements=["product_id", "process_id", "consumable_id"],
         set_={
             "consumable_item": stmt.excluded.consumable_item,
             "part_no_saleable_item": stmt.excluded.part_no_saleable_item,
@@ -764,118 +907,824 @@ def upsert_single_assemble(
     return record
 
 
+# ---------------------------------------------------------------------------
+# Fast Streaming Openpyxl Parser & Batch Engine for Consumable for Assemble
+# ---------------------------------------------------------------------------
+
+ASSEMBLE_FIELD_MAPPINGS: dict[str, list[str]] = {
+    "consumable_item": [
+        "consumable_description", "consumable description",
+        "consumable_item", "consumable item", "consumable", "item id", "item_id", "description",
+    ],
+    "part_no_saleable_item": [
+        "part_no_of_saleable_item", "part no of saleable item", "part no. of saleable item",
+        "part_no_saleable_item", "saleable part no", "part no", "finished part no", "part_no",
+    ],
+    "used_for_name_of_saleable_part": [
+        "used_for_name_of_saleable_part", "used for – name of saleable part", "used for - name of saleable part",
+        "used for name of saleable part", "saleable part name", "part name", "used for",
+    ],
+    "used_part_no_prd_order": [
+        "used_part_no_prd_order", "used part no. (prd order)", "used part no (prd order)", "used part no prd order",
+        "prd part no",
+    ],
+    "process_name": [
+        "process_name", "process name", "process",
+    ],
+    "material_thickness_in_mm_gsm": [
+        "material_thickness_in_mm_gsm", "material thickness in mm / gsm", "material thickness in mm/gsm",
+        "material thickness in mm gsm", "thickness (mm/gsm)", "thickness",
+    ],
+    "no_of_process_per_part": [
+        "no_of_processes_per_part", "no. of processes per part", "no of processes per part",
+        "no_of_process_per_part", "no. of process per part", "no of process per part",
+        "qty / part", "qty", "process count", "quantity",
+    ],
+    "output_unit": [
+        "output_unit", "output / unit", "output/unit", "output unit", "unit", "uom",
+    ],
+    "rate": [
+        "rate", "cost", "unit rate", "price",
+    ],
+}
+
+
+def _clean_str(val: Any) -> str:
+    if val is None:
+        return ""
+    s = str(val).strip()
+    if s.lower() in ("nan", "none", "null", "undefined"):
+        return ""
+    return re.sub(r"[\s\u00a0\ufeff]+", " ", s).strip()
+
+
+def _clean_header_cell(val: Any) -> str:
+    if val is None:
+        return ""
+    return re.sub(r"[^a-z0-9]", "", str(val).lower())
+
+
+def fast_parse_assemble_excel(
+    file_bytes: bytes,
+    filename: str = "upload.xlsx",
+) -> tuple[int, list[str], list[dict[str, Any]], list[AssembleRowIssue]]:
+    """Fast, memory-efficient Excel parser using openpyxl streaming (read_only=True).
+    
+    Drops decorative banner rows, maps approved KNL columns, validates row-level fields,
+    and applies early termination on consecutive empty rows.
+    """
+    if not file_bytes:
+        raise ApplicationError("EMPTY_FILE", "Uploaded Excel file is empty.", 422)
+
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    except Exception as e:
+        raise ApplicationError("INVALID_EXCEL_FILE", f"Failed to parse Excel workbook: {str(e)}", 422) from None
+
+    try:
+        ws = wb.active or wb.worksheets[0]
+    except Exception:
+        wb.close()
+        raise ApplicationError("INVALID_EXCEL_FILE", "No active worksheet found in workbook.", 422)
+
+    # Prepared normalized targets for fast header matching
+    norm_targets = {
+        field: [_clean_header_cell(alias) for alias in aliases]
+        for field, aliases in ASSEMBLE_FIELD_MAPPINGS.items()
+    }
+
+    detected_header_row: Optional[int] = None
+    col_idx_to_field: dict[int, str] = {}
+    matched_columns: list[str] = []
+
+    # 1. Scan up to first 30 rows to detect table header
+    row_generator = ws.iter_rows(values_only=True)
+    scanned_rows: list[tuple[Any, ...]] = []
+
+    for r_idx in range(1, 31):
+        try:
+            row_vals = next(row_generator)
+        except StopIteration:
+            break
+        scanned_rows.append(row_vals)
+
+        # Attempt to match this row as the header
+        temp_col_map: dict[int, str] = {}
+        for c_idx, cell_val in enumerate(row_vals):
+            clean_val = _clean_header_cell(cell_val)
+            if not clean_val:
+                continue
+            for field, aliases in norm_targets.items():
+                if clean_val in aliases and field not in temp_col_map.values():
+                    temp_col_map[c_idx] = field
+                    break
+
+        # A valid header must at least contain consumable_item and part_no_saleable_item (or >= 2 anchors)
+        has_consumable = "consumable_item" in temp_col_map.values()
+        has_part_no = "part_no_saleable_item" in temp_col_map.values()
+        if (has_consumable and has_part_no) or len(temp_col_map) >= 2:
+            detected_header_row = r_idx
+            col_idx_to_field = temp_col_map
+            matched_columns = list(temp_col_map.values())
+            break
+
+    if detected_header_row is None:
+        wb.close()
+        raise ApplicationError(
+            "HEADER_NOT_FOUND",
+            "Could not detect valid table headers in the first 30 rows. Expected columns such as 'Consumable Description' and 'Part No. of Saleable Item'.",
+            422,
+        )
+
+    parsed_rows: list[dict[str, Any]] = []
+    issues: list[AssembleRowIssue] = []
+    consecutive_empty = 0
+    max_row_limit = 5000
+
+    # Process remaining rows from scanned rows (after header row)
+    rows_stream = itertools.chain(
+        scanned_rows[detected_header_row:],
+        row_generator,
+    )
+
+    current_row_idx = detected_header_row
+    for row_vals in rows_stream:
+        current_row_idx += 1
+        if not row_vals:
+            consecutive_empty += 1
+            if consecutive_empty >= 20:
+                break
+            continue
+
+        # Extract values for mapped columns
+        extracted: dict[str, Any] = {}
+        row_has_any_val = False
+        for c_idx, field in col_idx_to_field.items():
+            val = row_vals[c_idx] if c_idx < len(row_vals) else None
+            cleaned = _clean_str(val)
+            if cleaned:
+                row_has_any_val = True
+            extracted[field] = cleaned
+
+        if not row_has_any_val:
+            consecutive_empty += 1
+            if consecutive_empty >= 20:
+                break
+            continue
+
+        consecutive_empty = 0
+
+        part_no = extracted.get("part_no_saleable_item", "")
+        consumable_item = extracted.get("consumable_item", "")
+
+        # Check required primary keys
+        if not part_no and not consumable_item:
+            continue  # Blank line spacer
+
+        if not part_no:
+            issues.append(AssembleRowIssue(
+                row=current_row_idx,
+                column="part_no_saleable_item",
+                error_code="MISSING_PART_NO",
+                message=f"Row {current_row_idx}: Part No. of Saleable Item is missing.",
+                raw_value="",
+                suggested_action="Specify a valid saleable part number.",
+            ))
+            continue
+
+        if not consumable_item:
+            issues.append(AssembleRowIssue(
+                row=current_row_idx,
+                column="consumable_item",
+                error_code="MISSING_CONSUMABLE",
+                message=f"Row {current_row_idx}: Consumable Description is missing.",
+                raw_value="",
+                suggested_action="Specify a valid consumable description.",
+            ))
+            continue
+
+        # Parse numeric quantity
+        raw_qty = extracted.get("no_of_process_per_part")
+        qty_val = Decimal("1.0000")
+        if raw_qty:
+            parsed_q = _parse_decimal(raw_qty, default=None)
+            if parsed_q is not None:
+                qty_val = parsed_q
+            else:
+                issues.append(AssembleRowIssue(
+                    row=current_row_idx,
+                    column="no_of_process_per_part",
+                    error_code="INVALID_QTY",
+                    message=f"Row {current_row_idx}: Invalid quantity '{raw_qty}'. Defaulted to 1.0000.",
+                    raw_value=str(raw_qty),
+                    suggested_action="Ensure quantity is a valid positive number.",
+                ))
+
+        # Parse numeric rate
+        raw_rate = extracted.get("rate")
+        rate_val: Optional[Decimal] = None
+        if raw_rate:
+            parsed_r = _parse_decimal(raw_rate, default=None)
+            if parsed_r is not None:
+                rate_val = parsed_r
+            else:
+                issues.append(AssembleRowIssue(
+                    row=current_row_idx,
+                    column="rate",
+                    error_code="INVALID_RATE",
+                    message=f"Row {current_row_idx}: Invalid rate '{raw_rate}'. Rate left empty.",
+                    raw_value=str(raw_rate),
+                    suggested_action="Ensure rate is a valid decimal number.",
+                ))
+
+        parsed_rows.append({
+            "row_idx": current_row_idx,
+            "consumable_item": consumable_item,
+            "part_no": part_no,
+            "used_name": extracted.get("used_for_name_of_saleable_part") or None,
+            "prd_part": extracted.get("used_part_no_prd_order") or None,
+            "process_name": (extracted.get("process_name") or "ASSEMBLY").strip().upper(),
+            "thickness": extracted.get("material_thickness_in_mm_gsm") or None,
+            "qty": qty_val,
+            "uom": (extracted.get("output_unit") or "PCS").strip().upper(),
+            "rate": rate_val,
+        })
+
+        if len(parsed_rows) >= max_row_limit:
+            issues.append(AssembleRowIssue(
+                row=current_row_idx,
+                error_code="MAX_ROWS_REACHED",
+                message=f"File exceeds maximum batch limit of {max_row_limit} rows. Remaining rows truncated.",
+                suggested_action="Split larger workbooks into smaller batches.",
+            ))
+            break
+
+    wb.close()
+    return detected_header_row, matched_columns, parsed_rows, issues
+
+
+def preview_assemble_import(
+    db: Session,
+    file_bytes: bytes,
+    filename: str,
+    actor_id: UUID,
+) -> AssembleImportPreviewResponse:
+    """Parses and validates an Excel workbook for Consumable for Assemble without committing."""
+    _cleanup_stale_assemble_previews()
+
+    detected_header_row, matched_columns, parsed_rows, parse_issues = fast_parse_assemble_excel(file_bytes, filename)
+    if not parsed_rows:
+        raise ApplicationError("EMPTY_DATA", "No valid data rows found in uploaded Excel file.", 422)
+
+    # In-memory deduplication & duplicate detection
+    seen_keys: set[tuple[str, str, str]] = set()
+    duplicate_count = 0
+    issues = list(parse_issues)
+
+    for r in parsed_rows:
+        key = (r["part_no"].upper(), r["process_name"].upper(), r["consumable_item"].upper())
+        if key in seen_keys:
+            duplicate_count += 1
+            issues.append(AssembleRowIssue(
+                row=r["row_idx"],
+                column="part_no_saleable_item",
+                error_code="DUPLICATE_ROW_IN_FILE",
+                message=f"Row {r['row_idx']}: Duplicate mapping for Part '{r['part_no']}' and Consumable '{r['consumable_item']}'. Last row in file will overwrite earlier ones.",
+                raw_value=r["part_no"],
+                suggested_action="Review duplicate rows in file.",
+            ))
+        seen_keys.add(key)
+
+    # Batch check additions vs updates against DB
+    part_nos = {r["part_no"] for r in parsed_rows}
+    cons_codes = {r["consumable_item"].upper() for r in parsed_rows}
+    proc_names = {r["process_name"].upper() for r in parsed_rows}
+
+    existing_prods = db.scalars(
+        select(Product).where(or_(Product.part_number.in_(list(part_nos)), Product.code.in_(list(part_nos))))
+    ).all()
+    existing_prod_ids = {p.id for p in existing_prods}
+
+    existing_cons = db.scalars(
+        select(Consumable).where(or_(Consumable.item_id.in_(list(cons_codes)), Consumable.name.in_(list(cons_codes))))
+    ).all()
+    existing_cons_ids = {c.id for c in existing_cons}
+
+    existing_procs = db.scalars(
+        select(Process).where(func.upper(Process.name).in_(list(proc_names)))
+    ).all()
+    existing_proc_ids = {p.id for p in existing_procs}
+
+    existing_mappings_set: set[tuple[UUID, UUID, UUID]] = set()
+    if existing_prod_ids and existing_cons_ids and existing_proc_ids:
+        mappings = db.scalars(
+            select(ProductProcessConsumable).where(
+                ProductProcessConsumable.product_id.in_(list(existing_prod_ids)),
+                ProductProcessConsumable.consumable_id.in_(list(existing_cons_ids)),
+                ProductProcessConsumable.process_id.in_(list(existing_proc_ids)),
+            )
+        ).all()
+        for m in mappings:
+            existing_mappings_set.add((m.product_id, m.process_id, m.consumable_id))
+
+    # Map part_no -> id, cons -> id, proc -> id
+    prod_id_map: dict[str, UUID] = {}
+    for p in existing_prods:
+        if p.part_number:
+            prod_id_map[p.part_number.upper()] = p.id
+        if p.code:
+            prod_id_map[p.code.upper()] = p.id
+
+    cons_id_map: dict[str, UUID] = {}
+    for c in existing_cons:
+        if c.item_id:
+            cons_id_map[c.item_id.upper()] = c.id
+        if c.name:
+            cons_id_map[c.name.upper()] = c.id
+
+    proc_id_map: dict[str, UUID] = {}
+    for pr in existing_procs:
+        proc_id_map[pr.name.upper()] = pr.id
+
+    rows_to_update = 0
+    rows_to_add = 0
+    unique_deduped_rows = len(seen_keys)
+
+    for key in seen_keys:
+        p_no_key, proc_key, c_key = key
+        p_id = prod_id_map.get(p_no_key)
+        c_id = cons_id_map.get(c_key)
+        pr_id = proc_id_map.get(proc_key)
+        if p_id and c_id and pr_id and (p_id, pr_id, c_id) in existing_mappings_set:
+            rows_to_update += 1
+        else:
+            rows_to_add += 1
+
+    file_token = uuid4().hex
+    _ASSEMBLE_PREVIEW_STORE[file_token] = {
+        "file_token": file_token,
+        "filename": filename,
+        "parsed_rows": parsed_rows,
+        "issues": issues,
+        "detected_header_row": detected_header_row,
+        "columns_matched": matched_columns,
+        "total_rows": len(parsed_rows),
+        "rows_to_add": rows_to_add,
+        "rows_to_update": rows_to_update,
+        "created_at": time.time(),
+        "actor_id": actor_id,
+    }
+
+    warning_count = sum(1 for iss in issues if iss.error_code in ("DUPLICATE_ROW_IN_FILE", "INVALID_QTY", "INVALID_RATE"))
+    error_count = sum(1 for iss in issues if iss.error_code not in ("DUPLICATE_ROW_IN_FILE", "INVALID_QTY", "INVALID_RATE"))
+
+    return AssembleImportPreviewResponse(
+        file_token=file_token,
+        source_filename=filename,
+        detected_header_row=detected_header_row,
+        columns_matched=matched_columns,
+        total_rows=len(parsed_rows),
+        rows_to_add=rows_to_add,
+        rows_to_update=rows_to_update,
+        errors=issues[:50],
+        warning_count=warning_count,
+        error_count=error_count,
+        can_confirm=len(parsed_rows) > 0,
+    )
+
+
+def execute_assemble_import_batch(
+    db: Session,
+    parsed_rows: list[dict[str, Any]],
+    actor_id: UUID,
+    job: Optional[dict[str, Any]] = None,
+    username: Optional[str] = None,
+) -> dict[str, Any]:
+    """Constant O(1) batched upsert engine for Consumable for Assemble.
+    
+    Resolves/auto-provisions units, processes, consumables, and products in single batch
+    queries, then executes set-based upserts in chunks of 500 rows.
+    """
+    if not parsed_rows:
+        return {"total_rows": 0, "upserted": 0, "errors": []}
+
+    # 1. In-memory deduplication: keep last occurrence for identical (part_no, process_name, consumable_item)
+    deduped_map: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for r in parsed_rows:
+        p_no = str(r["part_no"]).strip()
+        proc = (str(r.get("process_name") or "ASSEMBLY")).strip().upper()
+        c_item = str(r["consumable_item"]).strip()
+        key = (p_no.upper(), proc, c_item.upper())
+        deduped_map[key] = r
+
+    deduped_rows = list(deduped_map.values())
+    total_to_upsert = len(deduped_rows)
+
+    if job:
+        job["stage"] = "Resolving master references"
+        job["progress_percent"] = 10
+
+    # 2. Collect unique values for batch lookups
+    all_uoms = {
+        (r.get("uom") or "PCS").strip().upper()
+        for r in deduped_rows
+        if r.get("uom")
+    }
+    all_uoms.add("PCS")
+
+    all_procs = {
+        (r.get("process_name") or "ASSEMBLY").strip().upper()
+        for r in deduped_rows
+    }
+    all_procs.add("ASSEMBLY")
+
+    all_consumable_codes = {r["consumable_item"].strip().upper() for r in deduped_rows}
+    all_part_nos = {r["part_no"].strip() for r in deduped_rows}
+
+    # 3. Batch resolve/provision Units
+    existing_units = db.scalars(select(Unit).where(Unit.code.in_(list(all_uoms)))).all()
+    unit_map = {u.code.upper(): u for u in existing_units}
+    missing_uoms = [u for u in all_uoms if u not in unit_map]
+    if missing_uoms:
+        new_units = [Unit(id=uuid4(), code=u, name=u, is_active=True) for u in missing_uoms]
+        db.add_all(new_units)
+        db.flush()
+        for u in new_units:
+            unit_map[u.code.upper()] = u
+
+    # 4. Batch resolve/provision Processes
+    existing_procs = db.scalars(select(Process).where(func.upper(Process.name).in_(list(all_procs)))).all()
+    proc_map = {p.name.upper(): p for p in existing_procs}
+    fallback_proc = db.scalars(select(Process).where(Process.is_active == True)).first()
+    missing_procs = [p for p in all_procs if p not in proc_map]
+    if missing_procs:
+        new_procs = [Process(id=uuid4(), name=p, is_active=True) for p in missing_procs]
+        db.add_all(new_procs)
+        db.flush()
+        for p in new_procs:
+            proc_map[p.name.upper()] = p
+
+    # 5. Batch resolve/provision Consumables
+    existing_consumables = db.scalars(
+        select(Consumable).where(
+            or_(
+                Consumable.item_id.in_(list(all_consumable_codes)),
+                Consumable.name.in_(list(all_consumable_codes)),
+            )
+        )
+    ).all()
+    cons_map: dict[str, Consumable] = {}
+    for c in existing_consumables:
+        if c.item_id:
+            cons_map[c.item_id.upper()] = c
+        if c.name:
+            cons_map[c.name.upper()] = c
+
+    missing_cons_codes = [c for c in all_consumable_codes if c not in cons_map]
+    if missing_cons_codes:
+        new_cons_list = []
+        for code in missing_cons_codes:
+            u_code = "PCS"
+            u_obj = unit_map.get(u_code)
+            new_c = Consumable(
+                id=uuid4(),
+                item_id=code,
+                name=code[:255],
+                description=code,
+                output_unit=u_code,
+                unit_id=u_obj.id if u_obj else None,
+                is_active=True,
+            )
+            new_cons_list.append(new_c)
+        db.add_all(new_cons_list)
+        db.flush()
+        for c in new_cons_list:
+            cons_map[c.item_id.upper()] = c
+            cons_map[c.name.upper()] = c
+
+    # 6. Batch resolve/provision Products
+    existing_products = db.scalars(
+        select(Product).where(
+            or_(
+                Product.part_number.in_(list(all_part_nos)),
+                Product.code.in_(list(all_part_nos)),
+            )
+        )
+    ).all()
+    prod_map: dict[str, Product] = {}
+    for p in existing_products:
+        if p.part_number:
+            prod_map[p.part_number.upper()] = p
+        if p.code:
+            prod_map[p.code.upper()] = p
+
+    part_meta: dict[str, dict[str, Any]] = {}
+    for r in deduped_rows:
+        p_no = r["part_no"].strip()
+        if p_no.upper() not in part_meta:
+            part_meta[p_no.upper()] = {
+                "name": r.get("used_name") or p_no,
+                "uom": (r.get("uom") or "PCS").strip().upper(),
+            }
+
+    missing_part_nos = [p for p in all_part_nos if p.upper() not in prod_map]
+    if missing_part_nos:
+        new_prods = []
+        for p_no in missing_part_nos:
+            meta = part_meta.get(p_no.upper(), {})
+            clean_name = meta.get("name") or p_no
+            clean_uom = meta.get("uom") or "PCS"
+            new_p = Product(
+                id=uuid4(),
+                code=f"{p_no}_{p_no}"[:128],
+                part_number=p_no,
+                item_id=p_no,
+                name=clean_name[:255],
+                description=clean_name,
+                uom=clean_uom,
+                is_active=True,
+            )
+            new_prods.append(new_p)
+        db.add_all(new_prods)
+        db.flush()
+        for p in new_prods:
+            prod_map[p.part_number.upper()] = p
+            prod_map[p.code.upper()] = p
+
+    # 7. Upsert ProductProcessConsumable in chunks of 500
+    if job:
+        job["stage"] = f"Saving 0 of {total_to_upsert}"
+        job["progress_percent"] = 30
+
+    chunk_size = 500
+    upserted_count = 0
+    is_sqlite = _is_sqlite(db)
+
+    for i in range(0, total_to_upsert, chunk_size):
+        chunk = deduped_rows[i : i + chunk_size]
+        values_chunk = []
+        for row in chunk:
+            p_no_key = row["part_no"].strip().upper()
+            c_key = row["consumable_item"].strip().upper()
+            proc_key = (row.get("process_name") or "ASSEMBLY").strip().upper()
+
+            prod = prod_map.get(p_no_key)
+            cons = cons_map.get(c_key)
+            proc = proc_map.get(proc_key) or fallback_proc
+
+            if not prod or not cons or not proc:
+                continue
+
+            values_chunk.append({
+                "id": uuid4(),
+                "product_id": prod.id,
+                "consumable_id": cons.id,
+                "process_id": proc.id,
+                "consumable_item": row["consumable_item"].strip(),
+                "part_no_saleable_item": row["part_no"].strip(),
+                "used_for_name_of_saleable_part": (row.get("used_name") or "").strip() or None,
+                "used_part_no_prd_order": (row.get("prd_part") or "").strip() or None,
+                "process_name": proc.name,
+                "material_thickness_in_mm_gsm": (row.get("thickness") or "").strip() or None,
+                "no_of_process_per_part": row.get("qty") or Decimal("1.0000"),
+                "output_unit": (row.get("uom") or "PCS").strip().upper(),
+                "rate": row.get("rate"),
+                "is_active": True,
+            })
+
+        if values_chunk:
+            insert_fn = _get_insert_fn(db)
+            stmt = insert_fn(ProductProcessConsumable).values(values_chunk)
+            upsert_stmt = stmt.on_conflict_do_update(
+                index_elements=["product_id", "process_id", "consumable_id"],
+                set_={
+                    "consumable_item": stmt.excluded.consumable_item,
+                    "part_no_saleable_item": stmt.excluded.part_no_saleable_item,
+                    "used_for_name_of_saleable_part": stmt.excluded.used_for_name_of_saleable_part,
+                    "used_part_no_prd_order": stmt.excluded.used_part_no_prd_order,
+                    "process_name": stmt.excluded.process_name,
+                    "material_thickness_in_mm_gsm": stmt.excluded.material_thickness_in_mm_gsm,
+                    "no_of_process_per_part": stmt.excluded.no_of_process_per_part,
+                    "output_unit": stmt.excluded.output_unit,
+                    "rate": stmt.excluded.rate,
+                    "is_active": True,
+                    "updated_at": func.now(),
+                },
+            )
+            db.execute(upsert_stmt)
+            upserted_count += len(values_chunk)
+
+        if job:
+            pct = 30 + int((min(i + chunk_size, total_to_upsert) / total_to_upsert) * 60)
+            job["stage"] = f"Saving {min(i + chunk_size, total_to_upsert)} of {total_to_upsert}"
+            job["progress_percent"] = pct
+            job["upserted"] = upserted_count
+
+    # 8. Audit log and commit
+    db.add(AuditLog(
+        actor_id=actor_id,
+        user_id=actor_id,
+        username=username,
+        action="BULK_IMPORT",
+        entity_type="product_process_consumables",
+        entity_id=uuid4(),
+        new_values={"total_evaluated": len(parsed_rows), "upserted": upserted_count},
+        reason="Bulk Excel BOM Assemble Header Hunter fast batch ingestion",
+    ))
+    db.commit()
+
+    if job:
+        job["stage"] = "Completed successfully"
+        job["progress_percent"] = 100
+        job["status"] = "completed"
+        job["upserted"] = upserted_count
+        job["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+    return {
+        "total_rows": len(parsed_rows),
+        "upserted": upserted_count,
+        "errors": [],
+    }
+
+
+def run_assemble_import_job(
+    job_id: str,
+    file_token: str,
+    actor_id: UUID,
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Background task worker for processing assemble imports exceeding 200 rows."""
+    job = _ASSEMBLE_IMPORT_JOBS.get(job_id)
+    if not job:
+        logger.error("Assemble import job %s not found in registry.", job_id)
+        return
+
+    preview_entry = _ASSEMBLE_PREVIEW_STORE.get(file_token)
+    if not preview_entry:
+        job["status"] = "failed"
+        job["error_message"] = "Preview token expired or invalid."
+        job["completed_at"] = datetime.now(timezone.utc).isoformat()
+        return
+
+    job["status"] = "running"
+    job["stage"] = "Starting import..."
+
+    try:
+        with session_scope(session_factory) as db:
+            execute_with_db_retry(
+                lambda: execute_assemble_import_batch(db, preview_entry["parsed_rows"], actor_id, job=job)
+            )
+        # Cleanup preview store entry on successful import
+        _ASSEMBLE_PREVIEW_STORE.pop(file_token, None)
+    except Exception as e:
+        logger.exception("Failed background assemble import job %s: %s", job_id, str(e))
+        job["status"] = "failed"
+        job["stage"] = "Import failed"
+        job["error_message"] = str(e)
+        job["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def confirm_assemble_import(
+    db: Session,
+    file_token: str,
+    actor_id: UUID,
+    session_factory: Optional[sessionmaker[Session]] = None,
+    background_tasks: Any = None,
+) -> AssembleImportJobResponse:
+    """Confirms previewed assemble import. Runs synchronously for <= 200 rows or enqueues background job."""
+    preview_entry = _ASSEMBLE_PREVIEW_STORE.get(file_token)
+    if not preview_entry:
+        raise ApplicationError(
+            "EXPIRED_TOKEN",
+            "The preview session has expired or is invalid. Please re-upload your Excel file.",
+            404,
+        )
+
+    parsed_rows = preview_entry["parsed_rows"]
+    total_rows = len(parsed_rows)
+    job_id = uuid4().hex
+    now_str = datetime.now(timezone.utc).isoformat()
+
+    # If small file (<= 200 rows), execute inline synchronously
+    if total_rows <= 200 or not session_factory or not background_tasks:
+        job_data = {
+            "job_id": job_id,
+            "status": "running",
+            "stage": "Processing records",
+            "progress_percent": 0,
+            "total_rows": total_rows,
+            "upserted": 0,
+            "rows_added": preview_entry["rows_to_add"],
+            "rows_updated": preview_entry["rows_to_update"],
+            "errors": preview_entry["issues"][:50],
+            "error_message": None,
+            "created_at": now_str,
+            "completed_at": None,
+        }
+        res = execute_with_db_retry(
+            lambda: execute_assemble_import_batch(db, parsed_rows, actor_id, job=job_data)
+        )
+        _ASSEMBLE_PREVIEW_STORE.pop(file_token, None)
+        _ASSEMBLE_IMPORT_JOBS[job_id] = job_data
+        return AssembleImportJobResponse(**job_data)
+
+    # For large file (> 200 rows), enqueue background job and return 202 Accepted status
+    job_data = {
+        "job_id": job_id,
+        "status": "queued",
+        "stage": "Queued in background",
+        "progress_percent": 0,
+        "total_rows": total_rows,
+        "upserted": 0,
+        "rows_added": preview_entry["rows_to_add"],
+        "rows_updated": preview_entry["rows_to_update"],
+        "errors": preview_entry["issues"][:50],
+        "error_message": None,
+        "created_at": now_str,
+        "completed_at": None,
+    }
+    _ASSEMBLE_IMPORT_JOBS[job_id] = job_data
+    background_tasks.add_task(run_assemble_import_job, job_id, file_token, actor_id, session_factory)
+    return AssembleImportJobResponse(**job_data)
+
+
+def get_assemble_job_status(job_id: str) -> AssembleImportJobResponse:
+    """Retrieves live background job status and progress for polling."""
+    job = _ASSEMBLE_IMPORT_JOBS.get(job_id)
+    if not job:
+        raise ApplicationError("NOT_FOUND", f"Import job '{job_id}' not found.", 404)
+    return AssembleImportJobResponse(**job)
+
+
+def export_assemble_errors_excel(issues: list[AssembleRowIssue]) -> bytes:
+    """Generates a downloadable Excel (.xlsx) workbook of all validation issues and warnings."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Validation Issues"
+
+    headers = ["Row", "Column", "Error Code", "Message", "Raw Value", "Suggested Action"]
+    ws.append(headers)
+
+    header_font = openpyxl.styles.Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    header_fill = openpyxl.styles.PatternFill(start_color="1F4E5B", end_color="1F4E5B", fill_type="solid")
+    center_align = openpyxl.styles.Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left_align = openpyxl.styles.Alignment(horizontal="left", vertical="center", wrap_text=True)
+    thin_border = openpyxl.styles.Border(
+        left=openpyxl.styles.Side(style="thin", color="CCCCCC"),
+        right=openpyxl.styles.Side(style="thin", color="CCCCCC"),
+        top=openpyxl.styles.Side(style="thin", color="CCCCCC"),
+        bottom=openpyxl.styles.Side(style="thin", color="CCCCCC"),
+    )
+
+    for col_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+        cell.border = thin_border
+
+    data_font = openpyxl.styles.Font(name="Calibri", size=10)
+    for r_idx, issue in enumerate(issues, start=2):
+        row_vals = [
+            issue.row,
+            issue.column or "",
+            issue.error_code,
+            issue.message,
+            issue.raw_value or "",
+            issue.suggested_action or "",
+        ]
+        ws.append(row_vals)
+        for c_idx in range(1, len(headers) + 1):
+            c = ws.cell(row=r_idx, column=c_idx)
+            c.font = data_font
+            c.border = thin_border
+            if c_idx == 1:
+                c.alignment = center_align
+            else:
+                c.alignment = left_align
+
+    col_widths = {1: 10, 2: 24, 3: 20, 4: 45, 5: 20, 6: 40}
+    for col_idx, width in col_widths.items():
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = width
+
+    ws.row_dimensions[1].height = 24
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def bulk_upsert_assemble(
     db: Session,
     file_bytes: bytes,
     actor_id: UUID,
     username: Optional[str] = None,
-) -> dict:
-    df = header_hunter(file_bytes, [
-        "consumable_item", "consumable item", "part_no_saleable_item",
-        "saleable part", "part no", "process"
-    ])
-
-    # Strip empty rows at bottom where consumable_item or part_no is missing
-    def _is_valid_assemble_row(row: pd.Series) -> bool:
-        c = _extract_field(row, ["consumable_item", "consumable item", "consumable", "item id", "item_id"])
-        p = _extract_field(row, ["part_no_saleable_item", "saleable part no", "part no", "finished part no", "part_no"])
-        c_valid = bool(c and c.lower() not in ("nan", "none", "null", "undefined"))
-        p_valid = bool(p and p.lower() not in ("nan", "none", "null", "undefined"))
-        return c_valid and p_valid
-
-    df = df[df.apply(_is_valid_assemble_row, axis=1)].reset_index(drop=True)
-
-    total_rows = 0
-    upserted_count = 0
-    errors = []
-
-    try:
-        for idx, row in df.iterrows():
-            consumable_item = _extract_field(row, ["consumable_item", "consumable item", "consumable", "item id", "item_id"])
-            part_no = _extract_field(row, ["part_no_saleable_item", "saleable part no", "part no", "finished part no", "part_no"])
-            if not consumable_item or not part_no:
-                continue
-
-            total_rows += 1
-            used_name = _extract_field(row, ["used_for_name_of_saleable_part", "saleable part name", "part name"])
-            prd_part = _extract_field(row, ["used_part_no_prd_order", "prd part no"])
-            proc_name = _extract_field(row, ["process_name", "process"]) or "ASSEMBLY"
-            thickness = _extract_field(row, ["material_thickness_in_mm_gsm", "thickness"])
-            raw_qty = _extract_field(row, ["no_of_process_per_part", "qty", "process count", "quantity"])
-            uom = _extract_field(row, ["output_unit", "unit", "uom"]) or "PCS"
-            raw_rate = _extract_field(row, ["rate", "cost", "unit rate", "price"])
-
-            qty_val = _parse_decimal(raw_qty, default=Decimal("1.0000"))
-            if qty_val is None:
-                qty_val = Decimal("0.0000")
-            rate_val = _parse_decimal(raw_rate, default=None)
-
-            try:
-                product = _resolve_or_create_product(db, part_no, used_name, uom)
-                consumable = _resolve_or_create_consumable(db, consumable_item, uom)
-                process = _resolve_or_create_process(db, proc_name)
-
-                stmt = insert(ProductProcessConsumable).values({
-                    "id": uuid4(),
-                    "product_id": product.id,
-                    "consumable_id": consumable.id,
-                    "process_id": process.id,
-                    "consumable_item": consumable_item,
-                    "part_no_saleable_item": part_no,
-                    "used_for_name_of_saleable_part": used_name or None,
-                    "used_part_no_prd_order": prd_part or None,
-                    "process_name": process.name,
-                    "material_thickness_in_mm_gsm": thickness or None,
-                    "no_of_process_per_part": qty_val,
-                    "output_unit": uom,
-                    "rate": rate_val,
-                    "is_active": True,
-                })
-                upsert_stmt = stmt.on_conflict_do_update(
-                    constraint="uq_product_process_consumables_product_id_process_id_consumable_id",
-                    set_={
-                        "consumable_item": stmt.excluded.consumable_item,
-                        "part_no_saleable_item": stmt.excluded.part_no_saleable_item,
-                        "used_for_name_of_saleable_part": stmt.excluded.used_for_name_of_saleable_part,
-                        "used_part_no_prd_order": stmt.excluded.used_part_no_prd_order,
-                        "process_name": stmt.excluded.process_name,
-                        "material_thickness_in_mm_gsm": stmt.excluded.material_thickness_in_mm_gsm,
-                        "no_of_process_per_part": stmt.excluded.no_of_process_per_part,
-                        "output_unit": stmt.excluded.output_unit,
-                        "rate": stmt.excluded.rate,
-                        "is_active": True,
-                        "updated_at": func.now(),
-                    },
-                )
-                db.execute(upsert_stmt)
-                db.commit()
-                upserted_count += 1
-            except Exception as e:
-                db.rollback()
-                errors.append(f"Row {idx + 1} ({part_no} + {consumable_item}): {str(e)}")
-
-        db.add(AuditLog(
-            actor_id=actor_id,
-            user_id=actor_id,
-            username=username,
-            action="BULK_UPLOAD",
-            module="Product Master - Assembly BOM",
-            entity_type="product_process_consumables",
-            entity_id=uuid4(),
-            new_values={"total_evaluated": total_rows, "upserted": upserted_count, "summary": f"Processed {upserted_count} rows"},
-            changes_summary={"total_evaluated": total_rows, "upserted": upserted_count, "summary": f"Processed {upserted_count} rows"},
-            reason="Bulk Excel BOM Assemble Header Hunter ingestion",
-        ))
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        errors.append(f"Bulk assemble iteration error: {str(e)}")
-
-    return {
-        "total_rows": total_rows,
-        "upserted": upserted_count,
-        "errors": errors[:20],
-    }
+) -> dict[str, Any]:
+    """Legacy backward-compatible bulk upsert endpoint using new fast streaming & batch engine."""
+    _header_row, _matched_cols, parsed_rows, parse_issues = fast_parse_assemble_excel(file_bytes)
+    res = execute_with_db_retry(lambda: execute_assemble_import_batch(db, parsed_rows, actor_id, username=username))
+    all_errors = [f"Row {issue.row}: {issue.message}" for issue in parse_issues]
+    res["errors"] = (all_errors + res.get("errors", []))[:20]
+    return res
 
 
 # ---------------------------------------------------------------------------

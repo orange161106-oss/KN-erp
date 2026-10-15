@@ -63,6 +63,8 @@ export interface DataTableProps<T extends { id: string; row_index?: number | nul
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
   lastModifiedText?: string;
   onExport?: (mode: 'ALL' | 'FILTERED' | 'SELECTED') => void;
+  customRowActions?: (row: T) => Array<{ label: string; onClick: (row?: T) => void; icon?: React.ReactNode; disabled?: boolean; className?: string }>;
+  onSaveRow?: (rowId: string, updates: Record<string, any>) => Promise<void>;
 }
 
 // Convert column width specifications (e.g. 'w-44', '180px', or 180) to pure pixel numbers
@@ -115,6 +117,8 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   storageKey,
   saveStatus = 'idle',
   lastModifiedText,
+  customRowActions,
+  onSaveRow,
 }: DataTableProps<T>) {
   // --- Persistent Layout State ---
   const persistentKey = storageKey ? `knl_grid_layout_${storageKey}` : null;
@@ -194,26 +198,12 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   const [customHeight, setCustomHeight] = useState<number>(
     initialHeightPref?.customHeight || 540
   );
-  const [fitHeight, setFitHeight] = useState<number>(540);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isResizingHeight, setIsResizingHeight] = useState(false);
   const rootContainerRef = useRef<HTMLDivElement>(null);
 
-  // Measure available vertical space for 'fit' mode
-  const updateFitHeight = useCallback(() => {
-    if (!rootContainerRef.current) return;
-    const rect = rootContainerRef.current.getBoundingClientRect();
-    const available = window.innerHeight - rect.top - 24;
-    setFitHeight(Math.max(480, Math.floor(available)));
-  }, []);
-
-  useLayoutEffect(() => {
-    updateFitHeight();
-    const handleResize = () => updateFitHeight();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [updateFitHeight]);
-
+  // Fit follows the bounded flex parent, including sidebar transitions and
+  // wrapping toolbars. A viewport measurement becomes stale as those change.
   // Persist height preference
   useEffect(() => {
     if (!heightStorageKey) return;
@@ -244,14 +234,14 @@ export default function DataTable<T extends { id: string; row_index?: number | n
     if (heightMode === 'standard') return 540;
     if (heightMode === 'large') return 720;
     if (heightMode === 'custom') return customHeight;
-    return fitHeight;
-  }, [isFullscreen, heightMode, customHeight, fitHeight]);
+    return 540;
+  }, [isFullscreen, heightMode, customHeight]);
 
   const handleStartResizeHeight = (e: React.MouseEvent) => {
     e.preventDefault();
     setIsResizingHeight(true);
     const startY = e.clientY;
-    const startH = currentHeightPx;
+    const startH = rootContainerRef.current?.getBoundingClientRect().height || currentHeightPx;
 
     const onMouseMove = (moveEvent: MouseEvent) => {
       const diff = moveEvent.clientY - startY;
@@ -282,7 +272,6 @@ export default function DataTable<T extends { id: string; row_index?: number | n
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       setHeightMode('fit');
-      updateFitHeight();
     }
   };
 
@@ -327,8 +316,12 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   const [editValue, setEditValue] = useState<string>('');
 
   // --- Undo / Redo History Stack ---
-  const [undoStack, setUndoStack] = useState<Array<{ rowId: string; colKey: keyof T & string; oldVal: string; newVal: string }>>([]);
-  const [redoStack, setRedoStack] = useState<Array<{ rowId: string; colKey: keyof T & string; oldVal: string; newVal: string }>>([]);
+  type CellEdit = { rowId: string; colKey: keyof T & string; oldVal: string; newVal: string };
+  const [undoStack, setUndoStack] = useState<CellEdit[][]>([]);
+  const [redoStack, setRedoStack] = useState<CellEdit[][]>([]);
+  const [editError, setEditError] = useState<string | null>(null);
+  const saveHandlerRef = useRef(onSave);
+  saveHandlerRef.current = onSave;
 
   // --- Context Menu State ---
   const [contextMenu, setContextMenu] = useState<{
@@ -342,6 +335,10 @@ export default function DataTable<T extends { id: string; row_index?: number | n
 
   // --- Row Editor Modal State ---
   const [rowEditorItem, setRowEditorItem] = useState<T | null>(null);
+  const [rowEditorDraft, setRowEditorDraft] = useState<Record<string, string>>({});
+  const [rowEditorInitial, setRowEditorInitial] = useState<Record<string, string>>({});
+  const [isSavingRowEditor, setIsSavingRowEditor] = useState(false);
+  const [rowEditorError, setRowEditorError] = useState<string | null>(null);
 
   // --- Delete Confirmation Modal State ---
   const [confirmDeleteIds, setConfirmDeleteIds] = useState<string[] | null>(null);
@@ -349,10 +346,21 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   // --- DOM References ---
   const lastClickedIndexRef = useRef<number | null>(null);
   const cellInputRef = useRef<HTMLInputElement>(null);
+  const selectEditorOnFocus = useRef(true);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const groupHeaderRef = useRef<HTMLTableRowElement>(null);
   const [groupHeaderHeight, setGroupHeaderHeight] = useState<number>(32);
   const [isScrolledLeft, setIsScrolledLeft] = useState<boolean>(false);
+
+  useLayoutEffect(() => {
+    if (!editingCell) return;
+    cellInputRef.current?.focus();
+    if (selectEditorOnFocus.current) cellInputRef.current?.select();
+    else {
+      const input = cellInputRef.current;
+      if (input) input.setSelectionRange(input.value.length, input.value.length);
+    }
+  }, [editingCell?.rowId, editingCell?.colKey]);
 
   // Measure group header height dynamically to set column header `top` offset cleanly
   useLayoutEffect(() => {
@@ -554,9 +562,136 @@ export default function DataTable<T extends { id: string; row_index?: number | n
     onSelectionChange(next);
   };
 
+  const applyEdits = (edits: Array<{ rowId: string; colKey: keyof T & string; value: string }>) => {
+    if (!canUpdate || !onCellChange) return;
+    const actions: CellEdit[] = [];
+    for (const edit of edits) {
+      if (columns.find(col => col.key === edit.colKey)?.isEditable === false) {
+        setEditError('This column is read-only. Paste into an editable quantity or parameter column.');
+        return;
+      }
+      const row = data.find(item => item.id === edit.rowId);
+      if (!row) return;
+      const oldVal = String(row[edit.colKey] ?? '');
+      if (oldVal !== edit.value) actions.push({ ...edit, oldVal, newVal: edit.value });
+    }
+    if (!actions.length) return;
+    setEditError(null);
+    setUndoStack(prev => [...prev.slice(-99), actions]);
+    setRedoStack([]);
+    actions.forEach(action => onCellChange(action.rowId, action.colKey, action.newVal));
+  };
+  const applyCellEdit = (rowId: string, colKey: keyof T & string, value: string) =>
+    applyEdits([{ rowId, colKey, value }]);
+
+  const openRowEditor = useCallback((row: T) => {
+    const initialMap: Record<string, string> = {};
+    columns.forEach(col => {
+      const rawVal = (row as any)[col.key];
+      if (rawVal === null || rawVal === undefined) {
+        initialMap[col.key] = '';
+      } else if (typeof rawVal === 'number') {
+        initialMap[col.key] = Number(rawVal).toFixed(2);
+      } else {
+        initialMap[col.key] = String(rawVal);
+      }
+    });
+    setRowEditorInitial(initialMap);
+    setRowEditorDraft(initialMap);
+    setRowEditorError(null);
+    setRowEditorItem(row);
+  }, [columns]);
+
+  useEffect(() => {
+    if (!rowEditorItem || onSaveRow) return;
+    const fresh = data.find(r => r.id === rowEditorItem.id);
+    if (fresh) {
+      setRowEditorDraft(prev => {
+        const next = { ...prev };
+        columns.forEach(col => {
+          const raw = (fresh as any)[col.key];
+          next[col.key] = raw === null || raw === undefined ? '' : String(raw);
+        });
+        return next;
+      });
+    }
+  }, [data, rowEditorItem, onSaveRow, columns]);
+
+  const isRowEditorDirty = useMemo(() => {
+    if (!rowEditorItem) return false;
+    return Object.keys(rowEditorDraft).some(k => (rowEditorDraft[k] ?? '') !== (rowEditorInitial[k] ?? ''));
+  }, [rowEditorItem, rowEditorDraft, rowEditorInitial]);
+
+  const handleCloseRowEditor = useCallback(() => {
+    if (isSavingRowEditor) return;
+    if (isRowEditorDirty) {
+      if (window.confirm('Discard unsaved changes? Any edits made in this dialog will be lost.')) {
+        setRowEditorItem(null);
+        setRowEditorError(null);
+      }
+    } else {
+      setRowEditorItem(null);
+      setRowEditorError(null);
+    }
+  }, [isSavingRowEditor, isRowEditorDirty]);
+
+  const handleSaveRowEditor = useCallback(async () => {
+    if (!rowEditorItem || !isRowEditorDirty || isSavingRowEditor) return;
+    setIsSavingRowEditor(true);
+    setRowEditorError(null);
+    try {
+      const changedFields: Record<string, string> = {};
+      for (const [k, v] of Object.entries(rowEditorDraft)) {
+        if ((v ?? '') !== (rowEditorInitial[k] ?? '')) {
+          changedFields[k] = v;
+        }
+      }
+      if (onSaveRow) {
+        await onSaveRow(rowEditorItem.id, changedFields);
+      } else {
+        const edits = Object.entries(changedFields).map(([k, v]) => ({
+          rowId: rowEditorItem.id,
+          colKey: k as any,
+          value: v,
+        }));
+        applyEdits(edits);
+        if (onSave) {
+          await onSave();
+        }
+      }
+      setRowEditorItem(null);
+    } catch (err: any) {
+      setRowEditorError(err?.message || 'Failed to save row changes.');
+    } finally {
+      setIsSavingRowEditor(false);
+    }
+  }, [rowEditorItem, isRowEditorDirty, isSavingRowEditor, rowEditorDraft, rowEditorInitial, onSaveRow, onSave, applyEdits]);
+
+  useEffect(() => {
+    if (!rowEditorItem) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleCloseRowEditor();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        e.stopPropagation();
+        void handleSaveRowEditor();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [rowEditorItem, handleCloseRowEditor, handleSaveRowEditor]);
+
   // Keyboard shortcut Ctrl/Cmd+S and Ctrl/Cmd+A and Undo/Redo inside grid
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      const target = document.activeElement;
+      if (!rootContainerRef.current?.contains(target) && !(target === document.body && selectedCell)) return;
+      const typing = target instanceof HTMLElement &&
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable);
+
       // 1. Ctrl+S / Cmd+S: Save changes
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
@@ -564,20 +699,22 @@ export default function DataTable<T extends { id: string; row_index?: number | n
         if (editingCell) {
           handleCommitEdit();
         }
-        if (onSave) {
-          void onSave();
+        if (canUpdate && onSave) {
+          // Let the just-committed editor update parent state before saving.
+          if (editingCell) setTimeout(() => { void saveHandlerRef.current?.(); }, 0);
+          else void onSave();
         }
         return;
       }
 
       // 2. Ctrl+Z: Undo
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
-        if (undoStack.length > 0 && onCellChange) {
+        if ((!typing || target?.getAttribute('aria-label') === 'Formula bar' || rowEditorItem) && !editingCell && canUpdate && undoStack.length > 0 && onCellChange) {
           e.preventDefault();
           const lastAction = undoStack[undoStack.length - 1];
           setUndoStack(prev => prev.slice(0, -1));
           setRedoStack(prev => [...prev, lastAction]);
-          onCellChange(lastAction.rowId, lastAction.colKey, lastAction.oldVal);
+          lastAction.forEach(action => onCellChange(action.rowId, action.colKey, action.oldVal));
         }
         return;
       }
@@ -587,12 +724,12 @@ export default function DataTable<T extends { id: string; row_index?: number | n
         ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') ||
         ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'z')
       ) {
-        if (redoStack.length > 0 && onCellChange) {
+        if ((!typing || target?.getAttribute('aria-label') === 'Formula bar' || rowEditorItem) && !editingCell && canUpdate && redoStack.length > 0 && onCellChange) {
           e.preventDefault();
           const lastRedo = redoStack[redoStack.length - 1];
           setRedoStack(prev => prev.slice(0, -1));
           setUndoStack(prev => [...prev, lastRedo]);
-          onCellChange(lastRedo.rowId, lastRedo.colKey, lastRedo.newVal);
+          lastRedo.forEach(action => onCellChange(action.rowId, action.colKey, action.newVal));
         }
         return;
       }
@@ -610,23 +747,21 @@ export default function DataTable<T extends { id: string; row_index?: number | n
 
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [editingCell, onSave, undoStack, redoStack, onCellChange, processedData, onSelectionChange]);
+  }, [editingCell, onSave, undoStack, redoStack, onCellChange, processedData, onSelectionChange, canUpdate, selectedCell, editValue, rowEditorItem]);
 
   // Start editing a cell
   const handleStartEdit = (rowId: string, colKey: keyof T & string) => {
     const colDef = columns.find(c => c.key === colKey);
-    if (!canUpdate || (colDef && colDef.isEditable === false)) return;
+    if (!canUpdate || !onCellChange || (colDef && colDef.isEditable === false)) return;
+    if (editingCell?.rowId === rowId && editingCell.colKey === colKey) return;
 
     const row = data.find(r => r.id === rowId);
     if (!row) return;
 
+    selectEditorOnFocus.current = true;
     setSelectedCell({ rowId, colKey });
     setEditingCell({ rowId, colKey });
     setEditValue(String((row as any)[colKey] ?? ''));
-    setTimeout(() => {
-      cellInputRef.current?.focus();
-      cellInputRef.current?.select();
-    }, 10);
   };
 
   const handleCommitEdit = (newVal?: string) => {
@@ -636,9 +771,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
     const oldVal = row ? String((row as any)[editingCell.colKey] ?? '') : '';
 
     if (val !== oldVal && onCellChange) {
-      setUndoStack(prev => [...prev, { rowId: editingCell.rowId, colKey: editingCell.colKey, oldVal, newVal: val }]);
-      setRedoStack([]); // reset redo on new change
-      onCellChange(editingCell.rowId, editingCell.colKey, val);
+      applyCellEdit(editingCell.rowId, editingCell.colKey, val);
     }
     setEditingCell(null);
   };
@@ -666,7 +799,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
       const colDef = columns.find(c => c.key === colKey);
       if (canUpdate && colDef?.isEditable !== false) {
         e.preventDefault();
-        onCellChange?.(processedData[rowIndex].id, colKey, '');
+        applyCellEdit(processedData[rowIndex].id, colKey, '');
       }
       return;
     }
@@ -700,11 +833,9 @@ export default function DataTable<T extends { id: string; row_index?: number | n
       if (canUpdate && colDef?.isEditable !== false) {
         e.preventDefault();
         setSelectedCell({ rowId: processedData[rowIndex].id, colKey });
+        selectEditorOnFocus.current = false;
         setEditingCell({ rowId: processedData[rowIndex].id, colKey });
         setEditValue(e.key);
-        setTimeout(() => {
-          cellInputRef.current?.focus();
-        }, 10);
         return;
       }
     }
@@ -757,28 +888,37 @@ export default function DataTable<T extends { id: string; row_index?: number | n
     setCustomWidths(prev => ({ ...prev, [colKey]: autoWidth }));
   };
 
-  // Copy / Paste TSV
-  const handleCopySelection = () => {
-    if (!selectedCell) return;
-    const row = data.find(r => r.id === selectedCell.rowId);
-    if (!row) return;
-    const val = String((row as any)[selectedCell.colKey] ?? '');
-    void navigator.clipboard.writeText(val);
+  // Native clipboard events support Ctrl+C/V without requiring clipboard-read permission.
+  const selectedText = () => {
+    const row = data.find(item => item.id === selectedCell?.rowId);
+    return row && selectedCell ? String(row[selectedCell.colKey] ?? '') : '';
   };
-
+  const handleCopySelection = async () => {
+    if (!selectedCell) return;
+    try { await navigator.clipboard.writeText(selectedText()); }
+    catch { setEditError('Clipboard access was blocked. Select the cell and use Ctrl+C.'); }
+  };
+  const pasteText = (text: string) => {
+    if (!selectedCell || !canUpdate) return;
+    const rowIndex = processedData.findIndex(row => row.id === selectedCell.rowId);
+    const colIndex = visibleColumns.findIndex(col => col.key === selectedCell.colKey);
+    if (rowIndex < 0 || colIndex < 0) return;
+    const rows = text.replace(/\r/g, '').replace(/\n$/, '').split('\n').map(row => row.split('\t'));
+    const edits: Array<{ rowId: string; colKey: keyof T & string; value: string }> = [];
+    for (let r = 0; r < rows.length; r++) {
+      for (let c = 0; c < rows[r].length; c++) {
+        const row = processedData[rowIndex + r];
+        const col = visibleColumns[colIndex + c];
+        if (!row || !col) { setEditError('The pasted range extends beyond the table.'); return; }
+        edits.push({ rowId: row.id, colKey: col.key, value: rows[r][c] });
+      }
+    }
+    applyEdits(edits);
+  };
   const handlePasteSelection = async () => {
     if (!selectedCell || !canUpdate) return;
-    try {
-      const text = await navigator.clipboard.readText();
-      if (!text) return;
-      const lines = text.split(/\r?\n/).filter(Boolean);
-      if (lines.length === 1 && !lines[0].includes('\t')) {
-        // Single cell paste
-        onCellChange?.(selectedCell.rowId, selectedCell.colKey, lines[0]);
-      }
-    } catch {
-      // clipboard access denied
-    }
+    try { pasteText(await navigator.clipboard.readText()); }
+    catch { setEditError('Clipboard access was blocked. Select an editable cell and use Ctrl+V.'); }
   };
 
   // Context Menu Handlers
@@ -834,16 +974,27 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   return (
     <div
       ref={rootContainerRef}
-      style={{
-        height: isFullscreen ? '100vh' : heightMode === 'fit' ? `${fitHeight}px` : `${currentHeightPx}px`,
-        maxHeight: isFullscreen ? '100vh' : undefined,
+      onCopy={event => {
+        if (!selectedCell || (event.target instanceof HTMLElement && ['INPUT', 'TEXTAREA'].includes(event.target.tagName))) return;
+        event.preventDefault();
+        event.clipboardData.setData('text/plain', selectedText());
       }}
-      className={`flex flex-col min-h-[320px] bg-white border border-ink-text/15 rounded-lg shadow-2xs select-none relative transition-[height] duration-75 ${
-        isFullscreen ? 'fixed inset-0 z-[9990] rounded-none p-3 shadow-2xl' : 'flex-1'
+      onPaste={event => {
+        if (event.target instanceof HTMLElement && ['INPUT', 'TEXTAREA'].includes(event.target.tagName)) return;
+        event.preventDefault();
+        pasteText(event.clipboardData.getData('text/plain'));
+      }}
+      style={{
+        height: isFullscreen ? '100dvh' : heightMode === 'fit' ? undefined : `${currentHeightPx}px`,
+        maxHeight: isFullscreen ? '100dvh' : undefined,
+      }}
+      className={`min-w-0 w-full flex flex-col ${heightMode === 'fit' ? 'min-h-0' : 'min-h-[320px]'} bg-white border border-ink-text/15 rounded-lg shadow-2xs select-none transition-[height] duration-75 ${
+        isFullscreen ? 'fixed inset-0 z-[9990] rounded-none p-3 shadow-2xl' : 'relative flex-1'
       }`}
     >
+      {editError && <p role="alert" className="shrink-0 bg-red-50 text-red-700 p-2 text-xs">{editError}</p>}
       {/* 1. Formula Bar & Column Controls Toolbar */}
-      <div className="flex items-center gap-2 py-1.5 px-3 bg-vanilla-surface border-b border-ink-text/10 text-xs">
+      <div className="shrink-0 flex flex-wrap items-center gap-2 py-1.5 px-3 bg-vanilla-surface border-b border-ink-text/10 text-xs">
         {/* Cell Reference Box */}
         <div
           title="Active cell reference"
@@ -868,15 +1019,15 @@ export default function DataTable<T extends { id: string; row_index?: number | n
           aria-label="Formula bar"
           placeholder={selectedCell ? `Value of ${selectedColLabel || 'selected cell'}` : 'Select a cell to view or edit value (Ctrl+S to save)'}
           value={externalFormulaValue !== undefined ? externalFormulaValue : selectedCellValue}
-          disabled={!selectedCell || !onCellChange || !canUpdate}
+          disabled={!selectedCell || !onCellChange || !canUpdate || columns.find(col => col.key === selectedCell.colKey)?.isEditable === false}
           onChange={e => {
             if (externalOnFormulaChange) {
               externalOnFormulaChange(e.target.value);
             } else if (selectedCell && onCellChange) {
-              onCellChange(selectedCell.rowId, selectedCell.colKey, e.target.value);
+              applyCellEdit(selectedCell.rowId, selectedCell.colKey, e.target.value);
             }
           }}
-          className="flex-1 px-2.5 py-0.5 bg-white border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-brand-steel disabled:bg-gray-100 text-gray-800 font-mono text-xs"
+          className="min-w-0 flex-1 px-2.5 py-0.5 bg-white border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-brand-steel disabled:bg-gray-100 text-gray-800 font-mono text-xs"
         />
 
         {/* Save Status Badge */}
@@ -1025,7 +1176,6 @@ export default function DataTable<T extends { id: string; row_index?: number | n
               title="Fit to screen height (fills available viewport height)"
               onClick={() => {
                 setHeightMode('fit');
-                updateFitHeight();
               }}
               className={`px-2 py-0.5 font-medium transition-colors ${
                 heightMode === 'fit'
@@ -1369,12 +1519,18 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                           {isCellEditing ? (
                             <input
                               ref={cellInputRef}
+                              aria-label={`Edit ${col.label}`}
+                              onClick={event => event.stopPropagation()}
+                              onDoubleClick={event => event.stopPropagation()}
+                              onContextMenu={event => event.stopPropagation()}
                               type="text"
                               value={editValue}
                               onChange={e => setEditValue(e.target.value)}
                               onBlur={() => handleCommitEdit()}
                               onKeyDown={e => {
-                                if (e.key === 'Enter') handleCommitEdit();
+                                // Let Ctrl+S/Z keep their existing global/native behavior.
+                                if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Tab') e.stopPropagation();
+                                if (e.key === 'Enter') { e.preventDefault(); handleCommitEdit(); }
                                 if (e.key === 'Escape') setEditingCell(null);
                                 if (e.key === 'Tab') {
                                   e.preventDefault();
@@ -1450,7 +1606,6 @@ export default function DataTable<T extends { id: string; row_index?: number | n
           onMouseDown={handleStartResizeHeight}
           onDoubleClick={() => {
             setHeightMode('fit');
-            updateFitHeight();
           }}
           onKeyDown={handleResizeHandleKeyDown}
           className={`h-2.5 w-full bg-gray-100 hover:bg-burnt-orange/20 border-t border-gray-300 flex items-center justify-center cursor-row-resize select-none transition-colors group focus:outline-none focus:ring-1 focus:ring-burnt-orange ${
@@ -1508,7 +1663,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                       disabled={!canUpdate}
                       onClick={() => {
                         const targetRow = data.find(r => r.id === contextMenu.rowId);
-                        if (targetRow) setRowEditorItem(targetRow);
+                        if (targetRow) openRowEditor(targetRow);
                         setContextMenu(null);
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-gray-100 disabled:opacity-40 flex items-center justify-between"
@@ -1531,6 +1686,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                     {canUpdate && (
                       <button
                         type="button"
+                        disabled={columns.find(col => col.key === contextMenu.colKey)?.isEditable === false}
                         onClick={() => {
                           void handlePasteSelection();
                           setContextMenu(null);
@@ -1545,9 +1701,10 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                     {canUpdate && (
                       <button
                         type="button"
+                        disabled={columns.find(col => col.key === contextMenu.colKey)?.isEditable === false}
                         onClick={() => {
                           if (contextMenu.rowId && contextMenu.colKey) {
-                            onCellChange?.(contextMenu.rowId, contextMenu.colKey as keyof T & string, '');
+                            applyCellEdit(contextMenu.rowId, contextMenu.colKey as keyof T & string, '');
                           }
                           setContextMenu(null);
                         }}
@@ -1736,7 +1893,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                       type="button"
                       onClick={() => {
                         const targetRow = data.find(r => r.id === contextMenu.rowId);
-                        if (targetRow) setRowEditorItem(targetRow);
+                        if (targetRow) openRowEditor(targetRow);
                         setContextMenu(null);
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-gray-100"
@@ -1744,6 +1901,34 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                       Edit row…
                     </button>
                   )}
+
+                  {customRowActions && contextMenu.rowId && (() => {
+                    const targetRow = data.find(r => r.id === contextMenu.rowId);
+                    if (!targetRow) return null;
+                    const actions = customRowActions(targetRow);
+                    if (!actions || actions.length === 0) return null;
+                    return (
+                      <div className="py-1 border-t border-gray-100">
+                        {actions.map((act, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            disabled={act.disabled}
+                            onClick={() => {
+                              setContextMenu(null);
+                              act.onClick(targetRow);
+                            }}
+                            className={`w-full text-left px-3 py-1.5 hover:bg-gray-100 flex items-center gap-2 ${
+                              act.className || 'text-gray-800'
+                            }`}
+                          >
+                            {act.icon}
+                            <span>{act.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
 
                   {canDelete && onDeleteRows && (
                     <button
@@ -1753,7 +1938,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
                         setConfirmDeleteIds(idsToDelete);
                         setContextMenu(null);
                       }}
-                      className="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 font-semibold"
+                      className="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 font-semibold border-t border-gray-100"
                     >
                       Delete row(s)…
                     </button>
@@ -1766,62 +1951,164 @@ export default function DataTable<T extends { id: string; row_index?: number | n
         )}
 
       {/* 6. Row Editor Panel Modal */}
-      {rowEditorItem && (
-        <div className="fixed inset-0 bg-black/40 z-[10000] flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-2xl max-w-lg w-full p-5 space-y-4 max-h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between border-b pb-2">
-              <h3 className="text-base font-bold text-gray-900">
-                Edit Row (ID: {String(rowEditorItem.id).slice(0, 8)}…)
-              </h3>
-              <button
-                type="button"
-                onClick={() => setRowEditorItem(null)}
-                className="text-gray-400 hover:text-gray-700 text-lg font-bold"
-              >
-                ✕
-              </button>
-            </div>
+      {rowEditorItem && (() => {
+        const rowItemId = String((rowEditorItem as any).item_id || rowEditorItem.id || '');
+        const rowItemDesc = String(
+          (rowEditorItem as any).item_description ||
+          (rowEditorItem as any).name ||
+          (rowEditorItem as any).description ||
+          ''
+        );
+        const modalTitle = rowItemId && rowItemDesc
+          ? `Edit row: ${rowItemId} - ${rowItemDesc}`
+          : `Edit row: ${rowItemId}`;
 
-            <div className="flex-1 overflow-y-auto space-y-3 pr-1 text-xs">
-              {columns.map(col => {
-                const isEditable = canUpdate && col.isEditable !== false;
-                const val = String((rowEditorItem as any)[col.key] ?? '');
-                return (
-                  <div key={col.key} className="space-y-1">
-                    <label className="font-semibold text-gray-700 block">{col.label}</label>
-                    {isEditable ? (
-                      <input
-                        type="text"
-                        value={val}
-                        onChange={e => {
-                          const nextVal = e.target.value;
-                          setRowEditorItem(prev => (prev ? { ...prev, [col.key]: nextVal } : null));
-                          onCellChange?.(rowEditorItem.id, col.key, nextVal);
-                        }}
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 font-mono text-xs"
-                      />
-                    ) : (
-                      <div className="px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded text-gray-600 font-mono text-xs">
-                        {val || '—'}
-                      </div>
-                    )}
+        // Arithmetic check for stock statements
+        const hasQtyCols = ['opening_qty', 'receipt_qty', 'issue_qty', 'closing_qty'].every(k =>
+          columns.some(c => c.key === k)
+        );
+        let arithmeticMismatchMsg: string | null = null;
+        if (hasQtyCols) {
+          const op = parseFloat(rowEditorDraft['opening_qty'] || '0') || 0;
+          const rc = parseFloat(rowEditorDraft['receipt_qty'] || '0') || 0;
+          const is = parseFloat(rowEditorDraft['issue_qty'] || '0') || 0;
+          const cl = parseFloat(rowEditorDraft['closing_qty'] || '0') || 0;
+          const expected = op + rc - is;
+          if (Math.abs(expected - cl) > 0.01) {
+            arithmeticMismatchMsg = `Opening (${op.toFixed(2)}) + Receipt (${rc.toFixed(2)}) - Issue (${is.toFixed(2)}) = ${expected.toFixed(2)}, which differs from entered Closing (${cl.toFixed(2)}) by ${(cl - expected).toFixed(2)}.`;
+          }
+        }
+
+        return (
+          <div className="fixed inset-0 bg-black/50 z-[10000] flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl shadow-2xl max-w-xl w-full flex flex-col max-h-[85vh] overflow-hidden border border-gray-200">
+              {/* Header */}
+              <div className="flex items-center justify-between border-b px-5 py-3.5 bg-gray-50">
+                <h3 className="text-sm font-bold text-gray-900 truncate pr-2" title={modalTitle}>
+                  {modalTitle}
+                </h3>
+                <button
+                  type="button"
+                  onClick={handleCloseRowEditor}
+                  className="text-gray-400 hover:text-gray-700 text-base font-bold p-1 rounded hover:bg-gray-200 transition-colors"
+                  title="Close (Esc)"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Error banner if save fails */}
+              {rowEditorError && (
+                <div className="mx-5 mt-3 p-2.5 bg-red-50 border border-red-200 text-red-700 rounded text-xs flex items-center gap-2">
+                  <span>⚠️</span>
+                  <span>{rowEditorError}</span>
+                </div>
+              )}
+
+              {/* Arithmetic mismatch warning banner */}
+              {arithmeticMismatchMsg && (
+                <div className="mx-5 mt-3 p-2.5 bg-amber-50 border border-amber-200 text-amber-800 rounded text-xs flex items-start gap-2">
+                  <span className="shrink-0 mt-0.5">⚠️</span>
+                  <div>
+                    <span className="font-semibold">Arithmetic check warning: </span>
+                    <span>{arithmeticMismatchMsg}</span>
                   </div>
-                );
-              })}
-            </div>
+                </div>
+              )}
 
-            <div className="flex justify-end gap-2 pt-3 border-t">
-              <button
-                type="button"
-                onClick={() => setRowEditorItem(null)}
-                className="px-4 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded font-semibold text-xs"
-              >
-                Close
-              </button>
+              {/* Form scrollable body */}
+              <div className="flex-1 overflow-y-auto p-5 space-y-3.5 text-xs">
+                {columns.map(col => {
+                  const readOnlyKeys = ['item_id', 'unit', 'item_class', 'store_group'];
+                  const isEditable = canUpdate && col.isEditable !== false && !readOnlyKeys.includes(col.key);
+                  const currentVal = rowEditorDraft[col.key] ?? '';
+                  const isNumericCol = col.key.includes('qty') || col.key.includes('value') || col.key.includes('rate') || col.key.includes('amount');
+                  const isValueCol = col.key.includes('value') || col.key.includes('rate') || col.key.includes('amount');
+
+                  return (
+                    <div key={col.key} className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <label htmlFor={`edit-row-${rowEditorItem.id}-${col.key}`} className="font-semibold text-gray-700">
+                          {col.label}
+                          {!isEditable && <span className="ml-1.5 text-[10px] text-gray-400 font-normal">(Read-only)</span>}
+                        </label>
+                        {isValueCol && currentVal && !isNaN(parseFloat(currentVal)) && (
+                          <span className="text-[11px] font-mono text-emerald-700 font-semibold">
+                            Preview: ₹ {parseFloat(currentVal).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        )}
+                      </div>
+                      {isEditable ? (
+                        <div>
+                          <input
+                            type="text"
+                            id={`edit-row-${rowEditorItem.id}-${col.key}`}
+                            value={currentVal}
+                            onChange={e => {
+                              const nextVal = e.target.value;
+                              setRowEditorDraft(prev => ({ ...prev, [col.key]: nextVal }));
+                              if (!onSaveRow) {
+                                applyCellEdit(rowEditorItem.id, col.key, nextVal);
+                              }
+                            }}
+                            placeholder={isNumericCol ? 'Empty (null)' : 'Enter value'}
+                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 font-mono text-xs bg-white text-gray-900"
+                          />
+                          {isNumericCol && (
+                            <p className="text-[10px] text-gray-400 mt-0.5">
+                              {col.key.includes('qty') ? 'Quantity (2 decimals, empty = null)' : 'Value (currency ₹, empty = null)'}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="px-2.5 py-1.5 bg-gray-100 border border-gray-200 rounded text-gray-600 font-mono text-xs select-none">
+                          {currentVal || '—'}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Sticky Footer */}
+              <div className="flex items-center justify-between px-5 py-3 border-t bg-gray-50 shrink-0">
+                <div className="text-[11px] text-gray-500">
+                  {isRowEditorDirty ? (
+                    <span className="text-amber-700 font-medium">Unsaved changes (Ctrl+S to save)</span>
+                  ) : (
+                    <span>No changes made</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCloseRowEditor}
+                    disabled={isSavingRowEditor}
+                    className="px-3.5 py-1.5 bg-white border border-gray-300 hover:bg-gray-100 text-gray-700 rounded font-semibold text-xs transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveRowEditor}
+                    disabled={!isRowEditorDirty || isSavingRowEditor}
+                    className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded font-semibold text-xs shadow-xs transition-colors"
+                  >
+                    {isSavingRowEditor ? (
+                      <>
+                        <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span>Saving…</span>
+                      </>
+                    ) : (
+                      <span>Save</span>
+                    )}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* 7. Row Delete Confirmation Dialog */}
       {confirmDeleteIds && (

@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useId } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../features/auth/context';
 import { canOpen, isSuperAdmin } from '../core/rbac';
 import {
-  Menu,
+  PanelLeft,
   ChevronDown,
   ChevronRight,
   LayoutDashboard,
@@ -32,6 +33,13 @@ export interface SidebarProps {
   onToggleCollapse?: () => void;
 }
 
+interface SidebarTooltip {
+  label: string;
+  trigger: HTMLElement;
+  left: number;
+  top: number;
+}
+
 export default function Sidebar({
   isCollapsed: controlledCollapsed,
   onToggleCollapse,
@@ -41,6 +49,37 @@ export default function Sidebar({
   const [internalCollapsed, setInternalCollapsed] = useState(false);
   const isCollapsed = controlledCollapsed !== undefined ? controlledCollapsed : internalCollapsed;
   const toggleCollapse = onToggleCollapse || (() => setInternalCollapsed(prev => !prev));
+  const tooltipId = useId();
+  const [tooltip, setTooltip] = useState<SidebarTooltip | null>(null);
+
+  useEffect(() => {
+    const dismiss = () => setTooltip(null);
+    window.addEventListener('resize', dismiss);
+    window.addEventListener('scroll', dismiss, true);
+    return () => {
+      window.removeEventListener('resize', dismiss);
+      window.removeEventListener('scroll', dismiss, true);
+    };
+  }, []);
+
+  const tooltipProps = (label: string) => ({
+    'data-sidebar-tooltip': isCollapsed ? label : undefined,
+    'aria-describedby': isCollapsed && tooltip?.label === label ? tooltipId : undefined,
+  });
+
+  const showTooltip = (target: EventTarget | null) => {
+    if (!isCollapsed || !(target instanceof Element)) return;
+    const trigger = target.closest<HTMLElement>('[data-sidebar-tooltip]');
+    const label = trigger?.dataset.sidebarTooltip;
+    if (!trigger || !label) return;
+    const rect = trigger.getBoundingClientRect();
+    setTooltip(current => current?.trigger === trigger ? current : {
+      label,
+      trigger,
+      left: rect.right + 12,
+      top: Math.max(24, Math.min(rect.top + rect.height / 2, window.innerHeight - 24)),
+    });
+  };
 
   if (!user) return null;
 
@@ -68,9 +107,9 @@ export default function Sidebar({
         : 'text-erp-chocolate/70 hover:text-erp-chocolate hover:bg-erp-vanilla/50'
     }`;
 
-  const iconClass = (active: boolean) =>
+  const iconClass = (active: boolean, onLightBackground = false) =>
     `w-4 h-4 shrink-0 transition-transform duration-300 ease-out group-hover:scale-110 group-hover:-translate-y-0.5 ${
-      active ? 'text-white' : 'text-erp-chocolate/70 group-hover:text-erp-chocolate'
+      active ? (onLightBackground ? 'text-erp-chocolate' : 'text-white') : 'text-erp-chocolate/70 group-hover:text-erp-chocolate'
     }`;
 
   // Authorization checks for each section
@@ -120,9 +159,22 @@ export default function Sidebar({
   return (
     <aside
       data-testid="sidebar-container"
+      onMouseOver={event => showTooltip(event.target)}
+      onMouseOut={event => {
+        if (!(event.target instanceof Element)) return;
+        const trigger = event.target.closest('[data-sidebar-tooltip]');
+        if (trigger && event.relatedTarget instanceof Node && trigger.contains(event.relatedTarget)) return;
+        setTooltip(null);
+      }}
+      onFocusCapture={event => showTooltip(event.target)}
+      onBlurCapture={() => setTooltip(null)}
+      onClickCapture={() => setTooltip(null)}
+      onKeyDownCapture={event => {
+        if (event.key === 'Escape') setTooltip(null);
+      }}
       className={`${
         isCollapsed ? 'w-16' : 'w-64'
-      } shrink-0 h-full bg-white text-erp-chocolate border-r border-erp-dark-vanilla/30 flex flex-col select-none shadow-xs transition-all duration-300 ease-in-out`}
+      } relative shrink-0 min-h-0 h-full overflow-hidden bg-white text-erp-chocolate border-r border-erp-dark-vanilla/30 flex flex-col select-none shadow-xs transition-all duration-300 ease-in-out`}
     >
       <div
         className={`p-4 border-b border-erp-dark-vanilla/20 tracking-tight text-erp-chocolate flex items-center ${
@@ -137,12 +189,15 @@ export default function Sidebar({
         )}
         <button
           type="button"
-          onClick={toggleCollapse}
+          onClick={() => {
+            setTooltip(null);
+            toggleCollapse();
+          }}
           aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          className="p-1.5 rounded-lg text-erp-chocolate/70 hover:text-erp-chocolate hover:bg-erp-vanilla/50 transition-colors focus:outline-none"
+          {...tooltipProps(isCollapsed ? 'Expand sidebar' : 'Collapse sidebar')}
+          className="p-1.5 rounded-lg text-erp-chocolate/70 hover:text-erp-chocolate hover:bg-erp-vanilla/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-erp-orange"
         >
-          <Menu className="w-5 h-5 shrink-0" />
+          <PanelLeft className="w-5 h-5 shrink-0" strokeWidth={1.75} aria-hidden="true" />
         </button>
       </div>
 
@@ -164,10 +219,10 @@ export default function Sidebar({
         </div>
       )}
 
-      <nav className="flex-1 p-3 space-y-1 flex flex-col overflow-y-auto">
+      <nav className="relative min-h-0 flex-1 p-3 space-y-1 flex flex-col overflow-y-auto">
         {/* 1. Dashboard */}
         {showDashboard && (
-          <Link to="/" className={navItemClass('/')} title="Dashboard" aria-label="Dashboard">
+          <Link to="/" className={navItemClass('/')} {...tooltipProps('Dashboard')} aria-label="Dashboard">
             <LayoutDashboard className={iconClass(isActive('/'))} />
             <span className={isCollapsed ? 'sr-only' : 'truncate'}>Dashboard</span>
           </Link>
@@ -175,7 +230,7 @@ export default function Sidebar({
 
         {/* 2. Production for sale */}
         {showPrdPlanning && (
-          <Link to="/prd" className={navItemClass('/prd')} title="Production for sale" aria-label="Production for sale">
+          <Link to="/prd" className={navItemClass('/prd')} {...tooltipProps('Production for sale')} aria-label="Production for sale">
             <Factory className={iconClass(isActive('/prd'))} />
             <span className={isCollapsed ? 'sr-only' : 'truncate'}>Production for sale</span>
           </Link>
@@ -194,11 +249,11 @@ export default function Sidebar({
                   ? 'bg-erp-vanilla/80 text-erp-chocolate font-semibold border-l-2 border-erp-orange'
                   : 'text-erp-chocolate/80 hover:text-erp-chocolate hover:bg-erp-vanilla/50'
               }`}
-              title="Master data"
+              {...tooltipProps('Master data')}
               aria-label="Master data"
             >
               <div className={`flex items-center ${isCollapsed ? '' : 'space-x-3'}`}>
-                <Database className={iconClass(isMasterDataActive)} />
+                <Database className={iconClass(isMasterDataActive, true)} />
                 <span className={isCollapsed ? 'sr-only' : 'truncate'}>Master data</span>
               </div>
               {!isCollapsed && (
@@ -221,7 +276,7 @@ export default function Sidebar({
                   <Link
                     to="/masters"
                     className={subNavItemClass('/masters')}
-                    title="Product master"
+                    {...tooltipProps('Product master')}
                     aria-label="Product master"
                   >
                     <Package className={iconClass(isActive('/masters'))} />
@@ -234,7 +289,7 @@ export default function Sidebar({
                   <Link
                     to="/rules"
                     className={subNavItemClass('/rules')}
-                    title="Consumption norms"
+                    {...tooltipProps('Consumption norms')}
                     aria-label="Consumption norms"
                   >
                     <Sliders className={iconClass(isActive('/rules'))} />
@@ -247,7 +302,7 @@ export default function Sidebar({
                   <Link
                     to="/mappings"
                     className={subNavItemClass('/mappings')}
-                    title="Production mapping"
+                    {...tooltipProps('Production mapping')}
                     aria-label="Production mapping"
                   >
                     <Workflow className={iconClass(isActive('/mappings'))} />
@@ -264,7 +319,7 @@ export default function Sidebar({
           <Link
             to="/requirements"
             className={navItemClass('/requirements')}
-            title="Requirement"
+            {...tooltipProps('Requirement')}
             aria-label="Requirement"
           >
             <ClipboardList className={iconClass(isActive('/requirements'))} />
@@ -277,7 +332,7 @@ export default function Sidebar({
           <Link
             to="/plant-workflow"
             className={navItemClass('/plant-workflow')}
-            title="Plant review"
+            {...tooltipProps('Plant review')}
             aria-label="Plant review"
           >
             <Building2 className={iconClass(isActive('/plant-workflow'))} />
@@ -298,11 +353,11 @@ export default function Sidebar({
                   ? 'bg-erp-vanilla/80 text-erp-chocolate font-semibold border-l-2 border-erp-orange'
                   : 'text-erp-chocolate/80 hover:text-erp-chocolate hover:bg-erp-vanilla/50'
               }`}
-              title="Inventory"
+              {...tooltipProps('Inventory')}
               aria-label="Inventory"
             >
               <div className={`flex items-center ${isCollapsed ? '' : 'space-x-3'}`}>
-                <Warehouse className={iconClass(isInventoryActive)} />
+                <Warehouse className={iconClass(isInventoryActive, true)} />
                 <span className={isCollapsed ? 'sr-only' : 'truncate'}>Inventory</span>
               </div>
               {!isCollapsed && (
@@ -325,7 +380,7 @@ export default function Sidebar({
                   <Link
                     to="/inventory"
                     className={subNavItemClass('/inventory')}
-                    title="Stock history"
+                    {...tooltipProps('Stock history')}
                     aria-label="Stock history"
                   >
                     <History className={iconClass(isActive('/inventory'))} />
@@ -338,7 +393,7 @@ export default function Sidebar({
                   <Link
                     to="/inventory/statement"
                     className={subNavItemClass('/inventory/statement')}
-                    title="Stock statement"
+                    {...tooltipProps('Stock statement')}
                     aria-label="Stock statement"
                   >
                     <FileSpreadsheet className={iconClass(isActive('/inventory/statement'))} />
@@ -351,7 +406,7 @@ export default function Sidebar({
                   <Link
                     to="/inventory/management"
                     className={subNavItemClass('/inventory/management')}
-                    title="Stock management"
+                    {...tooltipProps('Stock management')}
                     aria-label="Stock management"
                   >
                     <Sliders className={iconClass(isActive('/inventory/management'))} />
@@ -368,7 +423,7 @@ export default function Sidebar({
           <Link
             to="/purchase"
             className={navItemClass('/purchase')}
-            title="Purchase"
+            {...tooltipProps('Purchase')}
             aria-label="Purchase"
           >
             <ShoppingCart className={iconClass(isActive('/purchase'))} />
@@ -381,7 +436,7 @@ export default function Sidebar({
           <Link
             to="/purchase-orders"
             className={navItemClass('/purchase-orders')}
-            title="Purchase order"
+            {...tooltipProps('Purchase order')}
             aria-label="Purchase order"
           >
             <Receipt className={iconClass(isActive('/purchase-orders'))} />
@@ -394,7 +449,7 @@ export default function Sidebar({
           <Link
             to="/grns"
             className={navItemClass('/grns')}
-            title="Goods receipts"
+            {...tooltipProps('Goods receipts')}
             aria-label="Goods receipts"
           >
             <Truck className={iconClass(isActive('/grns'))} />
@@ -407,7 +462,7 @@ export default function Sidebar({
           <Link
             to="/alerts"
             className={navItemClass('/alerts')}
-            title="Alerts"
+            {...tooltipProps('Alerts')}
             aria-label="Alerts"
           >
             <Bell className={iconClass(isActive('/alerts'))} />
@@ -420,7 +475,7 @@ export default function Sidebar({
           <Link
             to="/reports"
             className={navItemClass('/reports')}
-            title="Reports"
+            {...tooltipProps('Reports')}
             aria-label="Reports"
           >
             <BarChart3 className={iconClass(isActive('/reports'))} />
@@ -434,7 +489,7 @@ export default function Sidebar({
             <Link
               to="/admin"
               className={navItemClass('/admin')}
-              title="Administration"
+              {...tooltipProps('Administration')}
               aria-label="Administration"
             >
               <Shield className={iconClass(isActive('/admin'))} />
@@ -445,7 +500,7 @@ export default function Sidebar({
             <Link
               to="/status"
               className={navItemClass('/status')}
-              title="System Status"
+              {...tooltipProps('System Status')}
               aria-label="System Status"
             >
               <Activity className={iconClass(isActive('/status'))} />
@@ -454,7 +509,7 @@ export default function Sidebar({
           )}
           <button
             onClick={logout}
-            title="Logout"
+            {...tooltipProps('Logout')}
             aria-label="Logout"
             className={`group ${
               isCollapsed ? 'justify-center px-2 py-2' : 'px-3 py-1.5'
@@ -465,6 +520,17 @@ export default function Sidebar({
           </button>
         </div>
       </nav>
+      {isCollapsed && tooltip && createPortal(
+        <div
+          id={tooltipId}
+          role="tooltip"
+          className="pointer-events-none fixed z-[100] -translate-y-1/2 rounded-md bg-erp-chocolate px-3 py-2 text-xs font-medium text-white shadow-lg"
+          style={{ left: tooltip.left, top: tooltip.top, maxWidth: Math.max(0, window.innerWidth - tooltip.left - 12) }}
+        >
+          {tooltip.label}
+        </div>,
+        document.body,
+      )}
     </aside>
   );
 }

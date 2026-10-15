@@ -1,10 +1,14 @@
+import io
 from typing import Annotated, Optional
+from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, Request, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_admin_role
+from app.core.errors import ApplicationError
 from app.db.session import get_db
 from app.schemas.auth import CurrentUser
 from app.security.dependencies import get_current_user
@@ -94,6 +98,69 @@ def create_single_assemble(
     return service.upsert_single_assemble(session, data, current_user.id, username=current_user.username)
 
 
+@router.post("/assemble/preview", response_model=service.AssembleImportPreviewResponse)
+async def preview_assemble_upload(
+    file: UploadFile = File(...),
+    session: Annotated[Session, Depends(get_db)] = None,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)] = None,
+) -> service.AssembleImportPreviewResponse:
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+        raise ApplicationError("INVALID_FILE_TYPE", "Only .xlsx Excel files are supported.", 422)
+    contents = await file.read(15 * 1024 * 1024 + 1)
+    if len(contents) > 15 * 1024 * 1024:
+        raise ApplicationError("FILE_TOO_LARGE", "File size exceeds the 15 MB limit.", 413)
+    return service.execute_with_db_retry(
+        lambda: service.preview_assemble_import(session, contents, file.filename, current_user.id)
+    )
+
+
+@router.post("/assemble/confirm", response_model=service.AssembleImportJobResponse)
+def confirm_assemble_upload(
+    payload: service.AssembleImportConfirmRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> service.AssembleImportJobResponse:
+    session_factory = getattr(request.app.state, "session_factory", None)
+    return service.confirm_assemble_import(
+        db=session,
+        file_token=payload.file_token,
+        actor_id=current_user.id,
+        session_factory=session_factory,
+        background_tasks=background_tasks,
+    )
+
+
+@router.get("/assemble/jobs/{job_id}", response_model=service.AssembleImportJobResponse)
+def get_assemble_job(
+    job_id: str,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> service.AssembleImportJobResponse:
+    return service.get_assemble_job_status(job_id)
+
+
+@router.get("/assemble/preview-errors")
+def export_assemble_preview_errors(
+    file_token: str = Query(..., description="File token from preview response"),
+    current_user: Annotated[CurrentUser, Depends(get_current_user)] = None,
+):
+    entry = service._ASSEMBLE_PREVIEW_STORE.get(file_token)
+    if not entry:
+        raise ApplicationError(
+            "EXPIRED_TOKEN",
+            "The requested preview token has expired or is invalid. Please re-upload the file.",
+            404,
+        )
+    excel_bytes = service.export_assemble_errors_excel(entry["issues"])
+    filename = f"assemble_import_errors_{file_token[:8]}.xlsx"
+    headers = {
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
+    return StreamingResponse(io.BytesIO(excel_bytes), headers=headers)
+
+
 @router.post("/assemble/bulk")
 async def bulk_upload_assemble(
     file: UploadFile = File(...),
@@ -101,6 +168,8 @@ async def bulk_upload_assemble(
     current_user: Annotated[CurrentUser, Depends(require_admin_role)] = None,
 ):
     contents = await file.read(15 * 1024 * 1024 + 1)
+    if len(contents) > 15 * 1024 * 1024:
+        raise ApplicationError("FILE_TOO_LARGE", "File size exceeds the 15 MB limit.", 413)
     return service.bulk_upsert_assemble(session, contents, current_user.id, username=current_user.username)
 
 

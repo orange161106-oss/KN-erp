@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -23,9 +23,39 @@ def authentication_required() -> ApplicationError:
     )
 
 
-def database_unavailable() -> ApplicationError:
-    logger.warning("authentication_database_unavailable")
+def _database_failure(error: SQLAlchemyError | None) -> tuple[str, str]:
+    state = getattr(getattr(error, 'orig', None), 'sqlstate', None)
+    state = state if isinstance(state, str) and len(state) == 5 and state.isalnum() else 'none'
+    category = ('schema' if state in {'42703', '42P01'} else
+                'credentials' if state.startswith('28') else
+                'connection' if state.startswith('08') or
+                (isinstance(error, OperationalError) and state == 'none') else 'other')
+    return category, state
+
+
+def database_unavailable(error: SQLAlchemyError | None = None) -> ApplicationError:
+    category, state = _database_failure(error)
+    # Log diagnostic codes only: raw exceptions can contain connection secrets.
+    logger.warning('authentication_database_unavailable category=%s sqlstate=%s', category, state)
     return ApplicationError("DATABASE_UNAVAILABLE", "Database is unavailable.", 503)
+
+
+def _read_authentication(session: Session, operation):
+    """Retry only a read, once, after a transient connection failure."""
+    for attempt in range(2):
+        try:
+            return operation()
+        except SQLAlchemyError as error:
+            category, state = _database_failure(error)
+            if attempt == 0 and isinstance(error, OperationalError) and category == 'connection':
+                logger.warning('authentication_database_reconnecting sqlstate=%s', state)
+                try:
+                    # Release the failed transaction before acquiring a new connection.
+                    session.rollback()
+                except SQLAlchemyError as rollback_error:
+                    raise database_unavailable(rollback_error) from None
+                continue
+            raise database_unavailable(error) from None
 
 
 def login(
@@ -33,11 +63,7 @@ def login(
     settings: Settings, passwords: PasswordService,
     client_ip: str | None = None,
 ) -> TokenResponse:
-    try:
-         user = find_user_by_username(session, credentials.username)
-    except SQLAlchemyError:
-         logger.exception("authentication_database_unavailable")
-         raise database_unavailable() from None
+    user = _read_authentication(session, lambda: find_user_by_username(session, credentials.username))
     password = credentials.password.get_secret_value()
     if user is None:
         passwords.verify_dummy(password)
@@ -100,7 +126,7 @@ def current_user(session: Session, token: str, settings: Settings) -> CurrentUse
     except InvalidAccessToken:
         raise authentication_required() from None
     try:
-        user = find_user_with_permissions(session, user_id)
+        user = _read_authentication(session, lambda: find_user_with_permissions(session, user_id))
         if user is None or not user.is_active:
             raise authentication_required()
         crud_modules = [
@@ -142,5 +168,5 @@ def current_user(session: Session, token: str, settings: Settings) -> CurrentUse
             alert_purchasing=getattr(user, "alert_purchasing", False),
             alert_system=getattr(user, "alert_system", False),
         )
-    except SQLAlchemyError:
-        raise database_unavailable() from None
+    except SQLAlchemyError as error:
+        raise database_unavailable(error) from None
