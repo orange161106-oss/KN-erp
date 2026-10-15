@@ -55,8 +55,8 @@ export function canPerform(user: (UserContextData & Record<string, any>) | null 
 
 export function canOpen(user: (UserContextData & Record<string, any>) | null | undefined, path: string): boolean {
   if (!user) return false;
-  if (isSuperAdmin(user) || path === '/status') return true;
-  if (path === '/admin') return isSuperAdmin(user);
+  if (isSuperAdmin(user)) return true;
+  if (path === '/admin' || path === '/status' || path === '/system-status') return false;
 
   // If modern 40-point CRUD / global flags are defined on the user object, strictly evaluate them
   const hasModernFlags =

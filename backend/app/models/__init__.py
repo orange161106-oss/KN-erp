@@ -4,7 +4,7 @@ from app.models.alerts import InventoryAlert
 from app.models.grn import GRN, GRNItem, GoodsReceiptRecord
 from app.models.purchase_approval import PurchaseApproval
 from app.models.purchase_order import PurchaseDemandEvidence, PurchaseOrder, PurchaseOrderItem
-from app.models.audit import AuditLog
+from app.models.audit import AuditLog, UserSession
 from app.models.auth import Permission, Role, User, role_permissions, user_roles
 from app.models.inventory_masters import Consumable, Supplier, SupplierConsumable, Unit
 from app.models.inventory import StockImportBatch, StockSnapshot, StockTransaction
@@ -14,7 +14,15 @@ from app.models.masters import Customer, CustomerAlias, Product
 from app.models.prd import ImportBatch, ImportError, PlanningVersion, PRDOrderHeader, PRDOrderItem, PRDRecord
 from app.models.plant_workflow import PlantConfirmation, RequirementAdjustment, UserPlant
 from app.models.production import Plant, Process, Route, RouteStep
-from app.models.requirements import CalculatedRequirement, RequirementCalculationError
+from app.models.requirements import (
+    AggregatedRequirement,
+    CalculatedRequirement,
+    MonthlyRequirementPlan,
+    MonthlyRequirementRecord,
+    RequirementCalculationError,
+    RequirementLineItem,
+    RequirementStatus,
+)
 from app.models.rules import ConsumptionNorm
 from app.models.stock_statements import (
     StockParameter,
@@ -24,6 +32,13 @@ from app.models.stock_statements import (
 )
 
 __all__ = [
+    "AggregatedRequirement",
+    "MonthlyRequirementPlan",
+    "RequirementLineItem",
+    "RequirementStatus",
+    "MonthlyRequirementRecord",
+
+
     "GRN",
     "GRNItem",
     "GoodsReceiptRecord",
@@ -33,6 +48,7 @@ __all__ = [
     "PurchaseOrderItem",
     "ProjectionInputSet",
     "AuditLog",
+    "UserSession",
     "Permission",
     "Role",
     "User",

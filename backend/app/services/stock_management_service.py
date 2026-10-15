@@ -1845,71 +1845,66 @@ def batch_update_stock_parameters(
     if not req or not usr:
         raise ApplicationError("INVALID_REQUEST", "Missing batch update request or user.", 400)
 
-    batch = session.scalar(
-        select(StockParameterBatch).where(
-            StockParameterBatch.month == req.month,
-            StockParameterBatch.year == req.year,
-            StockParameterBatch.status == "active",
+    try:
+        batch = session.scalar(
+            select(StockParameterBatch).where(
+                StockParameterBatch.month == req.month,
+                StockParameterBatch.year == req.year,
+                StockParameterBatch.status == "active",
+            ).with_for_update().execution_options(populate_existing=True)
         )
-    )
-    if not batch:
-        raise ApplicationError("NOT_FOUND", f"No active stock management batch found for {MONTH_NAMES[req.month - 1]} {req.year}.", 404)
+        if not batch:
+            raise ApplicationError("NOT_FOUND", f"No active stock management batch found for {MONTH_NAMES[req.month - 1]} {req.year}.", 404)
 
-    now_utc = datetime.now(timezone.utc)
-    for update_item in req.updates:
-        param = session.get(StockParameter, uuid.UUID(update_item.id))
-        if not param or param.batch_id != batch.id:
-            continue
+        now_utc = datetime.now(timezone.utc)
+        for update_item in req.updates:
+            param_id = update_item.id if isinstance(update_item.id, uuid.UUID) else uuid.UUID(str(update_item.id))
+            param = session.get(StockParameter, param_id)
+            if not param or param.batch_id != batch.id:
+                raise ApplicationError("INVALID_ROW", "A row does not belong to the selected parameter batch.", 422)
 
-        min_val = update_item.min_stock_level if update_item.min_stock_level is not None else param.min_stock_level
-        max_val = update_item.max_stock_level if update_item.max_stock_level is not None else param.max_stock_level
-        if min_val is not None and max_val is not None and min_val > max_val:
-            raise ApplicationError(
-                "VALIDATION_ERROR",
-                f"Min stock level ({min_val}) cannot be greater than Max stock level ({max_val}) for {param.item_id}.",
-                400,
+            changes = update_item.model_dump(exclude_unset=True, exclude={"id"})
+            if not changes:
+                continue
+
+            min_val = changes.get("min_stock_level", param.min_stock_level)
+            max_val = changes.get("max_stock_level", param.max_stock_level)
+            if min_val is not None and max_val is not None and min_val > max_val:
+                raise ApplicationError(
+                    "VALIDATION_ERROR",
+                    f"Min stock level ({min_val}) cannot be greater than Max stock level ({max_val}) for {param.item_id}.",
+                    400,
+                )
+
+            lead_days = changes.get("lead_time_days", param.lead_time_days)
+            if lead_days is not None and lead_days < 0:
+                raise ApplicationError("VALIDATION_ERROR", f"Lead time cannot be negative for {param.item_id}.", 400)
+
+            before = {key: str(getattr(param, key)) if getattr(param, key) is not None else None for key in changes}
+            for key, value in changes.items():
+                setattr(param, key, value)
+            param.edited_after_import = True
+            param.updated_at = now_utc
+            param.updated_by = usr.id
+
+            log_audit_event(
+                session=session,
+                entity_type="StockParameter",
+                entity_id=param.id,
+                action="UPDATE",
+                actor_id=usr.id,
+                old_values=before,
+                new_values={key: str(value) if value is not None else None for key, value in changes.items()},
+                reason=f"Edited stock control limits for {param.item_id} ({param.category or '—'}) in {req.month}/{req.year}.",
             )
 
-        if update_item.lead_time_days is not None and update_item.lead_time_days < 0:
-            raise ApplicationError("VALIDATION_ERROR", f"Lead time cannot be negative for {param.item_id}.", 400)
+        batch.updated_at = now_utc
+        batch.updated_by = usr.id
 
-        before = {
-            "min_stock_level": str(param.min_stock_level) if param.min_stock_level is not None else None,
-            "max_stock_level": str(param.max_stock_level) if param.max_stock_level is not None else None,
-            "min_order_qty": str(param.min_order_qty) if param.min_order_qty is not None else None,
-            "lead_time_days": param.lead_time_days,
-        }
-
-        param.min_stock_level = update_item.min_stock_level
-        param.max_stock_level = update_item.max_stock_level
-        param.min_order_qty = update_item.min_order_qty
-        param.lead_time_days = update_item.lead_time_days
-        param.edited_after_import = True
-        param.updated_at = now_utc
-        param.updated_by = usr.id
-
-        after = {
-            "min_stock_level": str(param.min_stock_level) if param.min_stock_level is not None else None,
-            "max_stock_level": str(param.max_stock_level) if param.max_stock_level is not None else None,
-            "min_order_qty": str(param.min_order_qty) if param.min_order_qty is not None else None,
-            "lead_time_days": param.lead_time_days,
-        }
-
-        log_audit_event(
-            session=session,
-            entity_type="StockParameter",
-            entity_id=param.id,
-            action="UPDATE",
-            actor_id=usr.id,
-            old_values=before,
-            new_values=after,
-            reason=f"Edited stock control limits for {param.item_id} ({param.category or '—'}) in {req.month}/{req.year}.",
-        )
-
-    batch.updated_at = now_utc
-    batch.updated_by = usr.id
-
-    session.commit()
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
     return get_stock_management(session, req.month, req.year)
 
 

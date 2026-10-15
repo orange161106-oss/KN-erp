@@ -4,8 +4,14 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import delete, select
-from sqlalchemy.orm import Session, joinedload
+import io
+import logging
+import traceback
+import pandas as pd
+from sqlalchemy import delete, func, or_, select
+from sqlalchemy.orm import Session, joinedload, selectinload
+
+logger = logging.getLogger("app.modules.requirements")
 
 from app.core.errors import ApplicationError
 from app.domain.rules import (
@@ -20,17 +26,30 @@ from app.models.mappings import ProductPlant, ProductProcessConsumable
 from app.models.masters import Product
 from app.models.prd import PlanningVersion, PRDOrderItem
 from app.models.production import Plant, Process
-from app.models.requirements import CalculatedRequirement, RequirementCalculationError
+from app.models.requirements import (
+    CalculatedRequirement,
+    MonthlyRequirementPlan,
+    RequirementCalculationError,
+    RequirementLineItem,
+    RequirementStatus,
+)
 from app.models.rules import ConsumptionNorm
 from app.models.plant_workflow import PlantConfirmation
 from app.models.audit import AuditLog
+from app.schemas.auth import CurrentUser
 from app.schemas.requirements import (
+    BulkUploadResponse,
     CalculatedRequirementResponse,
     CalculationRunRequest,
     ConsumableAggregateItem,
+    MonthlyRequirementPlanCreate,
+    MonthlyRequirementPlanResponse,
     RequirementCalculationErrorResponse,
     RequirementCalculationRunResponse,
+    RequirementLineItemCreate,
+    RequirementLineItemResponse,
 )
+
 
 
 def _to_requirement_response(req: CalculatedRequirement) -> CalculatedRequirementResponse:
@@ -521,4 +540,932 @@ def get_calculation_errors(
     )
     errors = db.scalars(stmt).all()
     return [_to_error_response(e) for e in errors]
+
+
+def is_admin_user(user: CurrentUser) -> bool:
+    if user.is_super_admin or getattr(user, "is_superuser", False):
+        return True
+    roles_normalized = [str(r).upper().strip() for r in (user.roles or [])]
+    return any(r in ("SUPER ADMIN", "SUPER_ADMIN", "ADMIN") for r in roles_normalized)
+
+
+def is_admin_or_planner_user(user: CurrentUser) -> bool:
+    if is_admin_user(user):
+        return True
+    roles_normalized = [str(r).upper().strip() for r in (user.roles or [])]
+    return any(r in ("PLANNER",) for r in roles_normalized)
+
+
+def auto_get_or_create_consumable(
+    db: Session,
+    item_id_or_code: str,
+    name_or_desc: Optional[str] = None,
+    unit_str: Optional[str] = None,
+) -> Consumable:
+    """Finds existing consumable by item_id (case-insensitive) or auto-creates it."""
+    clean_code = item_id_or_code.strip()
+    existing = db.execute(
+        select(Consumable).where(
+            or_(
+                func.upper(Consumable.item_id) == clean_code.upper(),
+                Consumable.item_id == clean_code,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return existing
+
+    # Find or create a matching Unit
+    clean_unit = (unit_str or "NOS").strip().upper()
+    if not clean_unit or clean_unit.lower() == "nan":
+        clean_unit = "NOS"
+    unit_obj = db.execute(
+        select(Unit).where(
+            or_(
+                func.upper(Unit.code) == clean_unit,
+                func.upper(Unit.name) == clean_unit,
+            )
+        )
+    ).scalar_one_or_none()
+    if not unit_obj:
+        # Fallback to standard NOS
+        unit_obj = db.execute(select(Unit).where(func.upper(Unit.code) == "NOS")).scalar_one_or_none()
+        if not unit_obj:
+            unit_obj = Unit(code="NOS", name="Numbers")
+            db.add(unit_obj)
+            db.flush()
+
+    display_name = (name_or_desc or clean_code).strip()
+    new_consumable = Consumable(
+        item_id=clean_code,
+        name=display_name,
+        description=display_name,
+        output_unit=unit_str or unit_obj.code,
+        unit_id=unit_obj.id,
+    )
+    db.add(new_consumable)
+    db.flush()
+    return new_consumable
+
+
+def _to_line_item_response(item: RequirementLineItem) -> RequirementLineItemResponse:
+    item_id = None
+    item_code = None
+    consumable_name = None
+    unit = None
+    description = None
+    if item.consumable:
+        item_id = getattr(item.consumable, "item_id", None)
+        item_code = item_id
+        consumable_name = getattr(item.consumable, "name", None)
+        unit = getattr(item.consumable, "output_unit", None)
+        description = getattr(item.consumable, "description", None) or consumable_name
+
+    return RequirementLineItemResponse(
+        id=item.id,
+        plan_id=item.plan_id,
+        consumable_id=item.consumable_id,
+        serial_no=item.serial_no,
+        part_no=item.part_no,
+        requested_qty=item.requested_qty,
+        item_id=item_id,
+        item_code=item_code,
+        consumable_name=consumable_name,
+        unit=unit,
+        description=description,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+def _normalize_plant_key(name: str) -> Optional[str]:
+    """Map plant sheet name variations (e.g. 'Plant 1', 'PLANT I', 'Plant-1', 'PLANT_5') to standard ID."""
+    if not name:
+        return None
+    clean = str(name).strip().upper().replace(" ", "").replace("_", "").replace("-", "")
+    mapping = {
+        "PLANT1": "PLANT_I",
+        "PLANTI": "PLANT_I",
+        "PLANT2": "PLANT_II",
+        "PLANTII": "PLANT_II",
+        "PLANT3": "PLANT_III",
+        "PLANTIII": "PLANT_III",
+        "PLANT4": "PLANT_IV",
+        "PLANTIV": "PLANT_IV",
+        "PLANT5": "PLANT_V",
+        "PLANTV": "PLANT_V",
+    }
+    if clean in mapping:
+        return mapping[clean]
+    for digit, roman in [
+        ("1", "PLANT_I"),
+        ("I", "PLANT_I"),
+        ("2", "PLANT_II"),
+        ("II", "PLANT_II"),
+        ("3", "PLANT_III"),
+        ("III", "PLANT_III"),
+        ("4", "PLANT_IV"),
+        ("IV", "PLANT_IV"),
+        ("5", "PLANT_V"),
+        ("V", "PLANT_V"),
+    ]:
+        if clean == digit or f"PLANT{digit}" in clean:
+            return roman
+    return None
+
+
+def _find_matching_sheet_name(sheet_names: list[str], target_plant_id: str) -> Optional[str]:
+    """Find sheet name matching target_plant_id from sheet_names."""
+    plant_candidates_map = {
+        "PLANT_I": ["Plant 1", "Plant I", "PLANT_I", "Plant-1", "PLANT1", "PLANTI", "Plant1", "PlantI"],
+        "PLANT_II": ["Plant 2", "Plant II", "PLANT_II", "Plant-2", "PLANT2", "PLANTII", "Plant2", "PlantII"],
+        "PLANT_III": ["Plant 3", "Plant III", "PLANT_III", "Plant-3", "PLANT3", "PLANTIII", "Plant3", "PlantIII"],
+        "PLANT_IV": ["Plant 4", "Plant IV", "PLANT_IV", "Plant-4", "PLANT4", "PLANTIV", "Plant4", "PlantIV"],
+        "PLANT_V": ["Plant 5", "Plant V", "PLANT_V", "Plant-5", "PLANT5", "PLANTV", "Plant5", "PlantV"],
+    }
+    candidates = plant_candidates_map.get(target_plant_id, [target_plant_id])
+    for s in sheet_names:
+        s_clean = s.strip()
+        for cand in candidates:
+            if s_clean.lower() == cand.lower():
+                return s
+
+    for s in sheet_names:
+        norm = _normalize_plant_key(s)
+        if norm == target_plant_id:
+            return s
+
+    return None
+
+
+def _rollover_catalog_items(db: Session, target_plan: MonthlyRequirementPlan) -> int:
+    """Auto-rollover line items from another plan of the same plant if target_plan has no items.
+    Preserves consumable_id, serial_no, and part_no, setting starting requested_qty to 0.0.
+    """
+    existing_count = db.execute(
+        select(func.count(RequirementLineItem.id)).where(RequirementLineItem.plan_id == target_plan.id)
+    ).scalar() or 0
+    if existing_count > 0:
+        return 0
+
+    # Find the most relevant source plan for this plant that has line items (preferring latest plan)
+    source_plan = db.execute(
+        select(MonthlyRequirementPlan)
+        .join(RequirementLineItem, RequirementLineItem.plan_id == MonthlyRequirementPlan.id)
+        .where(
+            MonthlyRequirementPlan.plant_id == target_plan.plant_id,
+            MonthlyRequirementPlan.id != target_plan.id,
+        )
+        .order_by(MonthlyRequirementPlan.year.desc(), MonthlyRequirementPlan.month.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+    if not source_plan:
+        return 0
+
+    source_items = db.execute(
+        select(RequirementLineItem)
+        .where(RequirementLineItem.plan_id == source_plan.id)
+        .order_by(RequirementLineItem.serial_no.asc().nullslast(), RequirementLineItem.created_at.asc())
+    ).scalars().all()
+
+    seen_consumables = set()
+    copied_count = 0
+    for item in source_items:
+        if item.consumable_id in seen_consumables:
+            continue
+        seen_consumables.add(item.consumable_id)
+        new_item = RequirementLineItem(
+            plan_id=target_plan.id,
+            consumable_id=item.consumable_id,
+            serial_no=item.serial_no,
+            part_no=item.part_no,
+            requested_qty=0.0,
+        )
+        db.add(new_item)
+        copied_count += 1
+
+    return copied_count
+
+
+def _to_plan_response(plan: MonthlyRequirementPlan) -> MonthlyRequirementPlanResponse:
+    status_str = plan.status.value if hasattr(plan.status, "value") else str(plan.status)
+    items = sorted(
+        [_to_line_item_response(it) for it in (plan.line_items or [])],
+        key=lambda x: (x.serial_no is None, x.serial_no or 0, str(x.id or ""))
+    )
+    return MonthlyRequirementPlanResponse(
+        id=plan.id,
+        plant_id=plan.plant_id,
+        month=plan.month,
+        year=plan.year,
+        status=status_str,
+        created_at=plan.created_at,
+        updated_at=plan.updated_at,
+        line_items=items,
+    )
+
+
+def get_monthly_plans(
+    db: Session,
+    user: CurrentUser,
+    month: Optional[int] = None,
+    year: Optional[int] = None,
+) -> list[MonthlyRequirementPlanResponse]:
+    """Fetch monthly requirement plans.
+    Auto-provisions missing plant plans in DRAFT status when month and year are specified,
+    and rolls over annual consumable catalog items defaulting requested_qty to 0.0.
+    """
+    ALL_PLANTS = ["PLANT_I", "PLANT_II", "PLANT_III", "PLANT_IV", "PLANT_V"]
+
+    # Auto-provision plans if month and year are provided
+    if month is not None and year is not None:
+        if is_admin_or_planner_user(user):
+            target_plants = ALL_PLANTS
+        else:
+            assigned = getattr(user, "assigned_plant", None)
+            canonical_assigned = _normalize_plant_key(assigned) or assigned if assigned else None
+            target_plants = [canonical_assigned] if canonical_assigned else []
+
+        for p_id in target_plants:
+            canonical_pid = _normalize_plant_key(p_id) or p_id
+            existing = db.execute(
+                select(MonthlyRequirementPlan).where(
+                    MonthlyRequirementPlan.plant_id == canonical_pid,
+                    MonthlyRequirementPlan.month == month,
+                    MonthlyRequirementPlan.year == year,
+                )
+            ).scalar_one_or_none()
+            if not existing:
+                new_plan = MonthlyRequirementPlan(
+                    plant_id=canonical_pid,
+                    month=month,
+                    year=year,
+                    status=RequirementStatus.DRAFT,
+                )
+                db.add(new_plan)
+                db.flush()
+                _rollover_catalog_items(db, new_plan)
+            elif existing and existing.status == RequirementStatus.DRAFT:
+                _rollover_catalog_items(db, existing)
+        db.commit()
+
+    stmt = (
+        select(MonthlyRequirementPlan)
+        .options(
+            selectinload(MonthlyRequirementPlan.line_items).joinedload(RequirementLineItem.consumable)
+        )
+        .order_by(MonthlyRequirementPlan.year.desc(), MonthlyRequirementPlan.month.desc())
+    )
+    if month is not None:
+        stmt = stmt.where(MonthlyRequirementPlan.month == month)
+    if year is not None:
+        stmt = stmt.where(MonthlyRequirementPlan.year == year)
+
+    if not is_admin_or_planner_user(user):
+        assigned_plant = getattr(user, "assigned_plant", None)
+        canonical_assigned = _normalize_plant_key(assigned_plant) if assigned_plant else None
+        stmt = stmt.where(MonthlyRequirementPlan.plant_id == canonical_assigned)
+
+    plans = db.scalars(stmt).all()
+    return [_to_plan_response(p) for p in plans]
+
+
+def create_monthly_plan(
+    db: Session,
+    payload: MonthlyRequirementPlanCreate,
+    user: CurrentUser,
+) -> MonthlyRequirementPlanResponse:
+    canonical_pid = _normalize_plant_key(payload.plant_id) or payload.plant_id
+    existing = db.execute(
+        select(MonthlyRequirementPlan).where(
+            MonthlyRequirementPlan.plant_id == canonical_pid,
+            MonthlyRequirementPlan.month == payload.month,
+            MonthlyRequirementPlan.year == payload.year,
+        )
+    ).scalar_one_or_none()
+    if existing:
+        raise ApplicationError(
+            "DUPLICATE_PLAN",
+            f"Monthly requirement plan already exists for plant '{canonical_pid}', month {payload.month}, year {payload.year}.",
+            409,
+        )
+
+    plan = MonthlyRequirementPlan(
+        plant_id=canonical_pid,
+        month=payload.month,
+        year=payload.year,
+        status=RequirementStatus.DRAFT,
+    )
+    db.add(plan)
+    db.flush()
+    _rollover_catalog_items(db, plan)
+    db.commit()
+    db.refresh(plan)
+    return _to_plan_response(plan)
+
+
+def upsert_single_line_item(
+    db: Session,
+    plan_id: UUID,
+    payload: RequirementLineItemCreate,
+    user: CurrentUser,
+) -> RequirementLineItemResponse:
+    plan = db.get(MonthlyRequirementPlan, plan_id)
+    if not plan:
+        raise ApplicationError("NOT_FOUND", "Monthly requirement plan not found.", 404)
+
+    # Resolve or create Consumable
+    consumable = None
+    if payload.consumable_id:
+        consumable = db.get(Consumable, payload.consumable_id)
+
+    raw_item_code = (payload.item_code or payload.item_id or "").strip()
+    if not consumable and raw_item_code:
+        consumable = auto_get_or_create_consumable(
+            db=db,
+            item_id_or_code=raw_item_code,
+            name_or_desc=payload.item_description,
+            unit_str=payload.unit,
+        )
+
+    if not consumable:
+        raise ApplicationError("NOT_FOUND", "Consumable not found and no valid item_code provided.", 400)
+
+    # If payload provided part_no, update consumable if not set
+    if payload.part_no and hasattr(consumable, "part_number") and not consumable.part_number:
+        consumable.part_number = payload.part_no
+
+    existing = db.execute(
+        select(RequirementLineItem)
+        .options(joinedload(RequirementLineItem.consumable))
+        .where(
+            RequirementLineItem.plan_id == plan_id,
+            RequirementLineItem.consumable_id == consumable.id,
+        )
+    ).scalar_one_or_none()
+
+    if existing:
+        existing.requested_qty = payload.requested_qty
+        if payload.serial_no is not None:
+            existing.serial_no = payload.serial_no
+        if payload.part_no is not None:
+            existing.part_no = payload.part_no
+        item = existing
+    else:
+        # Determine serial_no if not provided
+        serial_no = payload.serial_no
+        if serial_no is None:
+            max_sno = db.execute(
+                select(func.max(RequirementLineItem.serial_no)).where(RequirementLineItem.plan_id == plan_id)
+            ).scalar() or 0
+            serial_no = max_sno + 1
+
+        item = RequirementLineItem(
+            plan_id=plan_id,
+            consumable_id=consumable.id,
+            serial_no=serial_no,
+            part_no=payload.part_no,
+            requested_qty=payload.requested_qty,
+        )
+        db.add(item)
+
+    db.commit()
+    db.refresh(item)
+    if not item.consumable:
+        item.consumable = consumable
+
+    # Automatic background aggregation
+    try:
+        from app.services.mrp_calculator import run_monthly_aggregation
+        run_monthly_aggregation(db, plan.month, plan.year)
+    except Exception:
+        pass
+
+    return _to_line_item_response(item)
+
+
+def update_single_line_item(
+    db: Session,
+    plan_id: UUID,
+    item_id: UUID,
+    payload: Any,  # RequirementLineItemUpdate
+    user: CurrentUser,
+) -> RequirementLineItemResponse:
+    plan = db.get(MonthlyRequirementPlan, plan_id)
+    if not plan:
+        raise ApplicationError("NOT_FOUND", "Monthly requirement plan not found.", 404)
+
+    item = db.execute(
+        select(RequirementLineItem)
+        .options(joinedload(RequirementLineItem.consumable))
+        .where(
+            RequirementLineItem.id == item_id,
+            RequirementLineItem.plan_id == plan_id,
+        )
+    ).scalar_one_or_none()
+
+    if not item:
+        raise ApplicationError("NOT_FOUND", "Requirement line item not found in this plan.", 404)
+
+    if payload.requested_qty is not None:
+        item.requested_qty = payload.requested_qty
+    if payload.serial_no is not None:
+        item.serial_no = payload.serial_no
+    if payload.part_no is not None:
+        item.part_no = payload.part_no
+
+    if item.consumable:
+        if payload.unit is not None:
+            item.consumable.output_unit = payload.unit
+        if payload.item_description is not None:
+            item.consumable.description = payload.item_description
+            if not item.consumable.name:
+                item.consumable.name = payload.item_description
+
+    db.commit()
+    db.refresh(item)
+
+    # Automatic background aggregation
+    try:
+        from app.services.mrp_calculator import run_monthly_aggregation
+        run_monthly_aggregation(db, plan.month, plan.year)
+    except Exception:
+        pass
+
+    return _to_line_item_response(item)
+
+
+def delete_single_line_item(
+    db: Session,
+    plan_id: UUID,
+    item_id: UUID,
+    user: CurrentUser,
+) -> dict[str, Any]:
+    plan = db.get(MonthlyRequirementPlan, plan_id)
+    if not plan:
+        raise ApplicationError("NOT_FOUND", "Monthly requirement plan not found.", 404)
+
+    item = db.execute(
+        select(RequirementLineItem).where(
+            RequirementLineItem.id == item_id,
+            RequirementLineItem.plan_id == plan_id,
+        )
+    ).scalar_one_or_none()
+
+    if not item:
+        raise ApplicationError("NOT_FOUND", "Requirement line item not found in this plan.", 404)
+
+    db.delete(item)
+    db.commit()
+
+    # Automatic background aggregation
+    try:
+        from app.services.mrp_calculator import run_monthly_aggregation
+        run_monthly_aggregation(db, plan.month, plan.year)
+    except Exception:
+        pass
+
+    return {"message": "Line item deleted successfully", "id": str(item_id)}
+
+
+def _parse_and_ingest_sheet(
+    db: Session,
+    target_plan: MonthlyRequirementPlan,
+    df_raw: pd.DataFrame,
+    errors: list[str],
+    auto_create_consumables: bool = False,
+    sheet_name: str = "Sheet",
+) -> tuple[list[RequirementLineItem], int]:
+    if df_raw.empty:
+        return [], 0
+
+    num_rows = len(df_raw)
+    num_cols = len(df_raw.columns)
+    scan_limit = min(10, num_rows)
+
+    # 1. Dynamic Header & Month Row Detection in the first 10 rows
+    header_row_idx: Optional[int] = None
+    month_row_idx: Optional[int] = None
+
+    for r_idx in range(scan_limit):
+        row_raw_vals = [str(v).strip() for v in df_raw.iloc[r_idx] if pd.notna(v)]
+        row_clean_vals = [
+            str(v).strip().lower().replace(" ", "").replace(".", "").replace("_", "").replace("-", "")
+            for v in df_raw.iloc[r_idx]
+            if pd.notna(v)
+        ]
+
+        # Check for header row containing 'Item Id.' or 'Item Code'
+        if header_row_idx is None:
+            if any(term in row_clean_vals for term in ["itemid", "itemcode", "consumableid", "itemdescription", "sno", "serialno"]):
+                header_row_idx = r_idx
+
+        # Check for month row containing 'Month'
+        if month_row_idx is None:
+            if any("month" in term for term in row_clean_vals):
+                month_row_idx = r_idx
+
+    # If header_row_idx not found, fallback to row 0 if it has content, or find row with most non-nulls
+    if header_row_idx is None:
+        header_row_idx = 0
+
+    # 2. Dynamic QTY Column Detection using Month Translation Dictionary
+    month_keywords = {
+        1: ["jan"], 2: ["feb"], 3: ["mar"], 4: ["apr"],
+        5: ["may"], 6: ["jun"], 7: ["jul"], 8: ["aug"],
+        9: ["sep"], 10: ["oct"], 11: ["nov"], 12: ["dec"]
+    }
+    target_keywords = month_keywords.get(target_plan.month, [])
+
+    qty_col_idx: Optional[int] = None
+
+    # Step 2A: If month_row_idx was found, search for target month keywords
+    if month_row_idx is not None:
+        for c_idx in range(num_cols):
+            val = df_raw.iat[month_row_idx, c_idx]
+            if pd.notna(val):
+                cell_str = str(val).strip().lower()
+                if any(kw in cell_str for kw in target_keywords):
+                    qty_col_idx = c_idx
+                    break
+
+    # Step 2B: Search header_row_idx for month-specific label if not found in month_row_idx
+    if qty_col_idx is None and header_row_idx is not None:
+        for c_idx in range(num_cols):
+            val = df_raw.iat[header_row_idx, c_idx]
+            if pd.notna(val):
+                cell_str = str(val).strip().lower()
+                if any(kw in cell_str for kw in target_keywords):
+                    qty_col_idx = c_idx
+                    break
+
+    # Step 2C: Fallback: search header_row_idx for exact/contained 'qty'
+    if qty_col_idx is None and header_row_idx is not None:
+        for c_idx in range(num_cols):
+            val = df_raw.iat[header_row_idx, c_idx]
+            if pd.notna(val):
+                cell_str = str(val).strip().lower().replace(" ", "").replace(".", "").replace("_", "")
+                if cell_str == "qty" or "qty" in cell_str or "quantity" in cell_str or "requestedqty" in cell_str:
+                    qty_col_idx = c_idx
+                    break
+
+    # Step 2D: Fallback: scan first scan_limit rows for 'qty' column header
+    if qty_col_idx is None:
+        for r_idx in range(scan_limit):
+            for c_idx in range(num_cols):
+                val = df_raw.iat[r_idx, c_idx]
+                if pd.notna(val):
+                    cell_str = str(val).strip().lower().replace(" ", "").replace(".", "").replace("_", "")
+                    if cell_str == "qty" or "qty" in cell_str or "quantity" in cell_str:
+                        qty_col_idx = c_idx
+                        break
+            if qty_col_idx is not None:
+                break
+
+    # 3. Detect column indices for serial_no, item_code, item_description, part_no, unit
+    sno_col_idx: Optional[int] = None
+    item_col_idx: Optional[int] = None
+    desc_col_idx: Optional[int] = None
+    part_col_idx: Optional[int] = None
+    unit_col_idx: Optional[int] = None
+
+    if header_row_idx is not None:
+        for c_idx in range(num_cols):
+            val = str(df_raw.iat[header_row_idx, c_idx]).strip().lower().replace(" ", "").replace(".", "").replace("_", "").replace("-", "") if pd.notna(df_raw.iat[header_row_idx, c_idx]) else ""
+            if not val:
+                continue
+            if sno_col_idx is None and any(cand in val for cand in ["sno", "serialno", "slno", "srno"]):
+                sno_col_idx = c_idx
+            elif item_col_idx is None and any(cand in val for cand in ["itemid", "itemcode", "consumableid", "consumablecode", "partnumber", "item", "code"]):
+                item_col_idx = c_idx
+            elif desc_col_idx is None and any(cand in val for cand in ["itemdescription", "description", "itemname", "name", "desc"]):
+                desc_col_idx = c_idx
+            elif part_col_idx is None and any(cand in val for cand in ["partno", "partnum", "partnumber"]):
+                part_col_idx = c_idx
+            elif unit_col_idx is None and any(cand in val for cand in ["unit", "uom", "outputunit"]):
+                unit_col_idx = c_idx
+
+    # Positional fallback if named detection didn't match:
+    # Factory standard: Col 0/1: S.no., Col 1/2: Item Id., Col 2/3: Description, Col 3/4: Part No., Col 4/5: Unit
+    if item_col_idx is None:
+        if num_cols >= 2:
+            item_col_idx = 1
+        else:
+            item_col_idx = 0
+
+    if sno_col_idx is None and item_col_idx > 0:
+        sno_col_idx = 0
+    if desc_col_idx is None and item_col_idx + 1 < num_cols:
+        desc_col_idx = item_col_idx + 1
+    if part_col_idx is None and item_col_idx + 2 < num_cols:
+        part_col_idx = item_col_idx + 2
+    if unit_col_idx is None and item_col_idx + 3 < num_cols:
+        unit_col_idx = item_col_idx + 3
+
+    # Fallback: If no QTY column found anywhere, make it optional and default to 0.0
+    if qty_col_idx is None:
+        logger.info("No QTY column found in sheet '%s'. Defaulting requested_qty to 0.0 for all line items.", sheet_name)
+
+    # 4. Data Extraction from header_row_idx + 1 to the end
+    existing_items_stmt = (
+        select(RequirementLineItem)
+        .options(joinedload(RequirementLineItem.consumable))
+        .where(RequirementLineItem.plan_id == target_plan.id)
+    )
+    existing_items = {it.consumable_id: it for it in db.execute(existing_items_stmt).scalars().all()}
+    upserted_dict: dict[UUID, RequirementLineItem] = {}
+    consumable_cache: dict[str, Consumable] = {}
+
+    start_row = (header_row_idx + 1) if header_row_idx is not None else 0
+    total_processed_rows = 0
+
+    for r_idx in range(start_row, num_rows):
+        total_processed_rows += 1
+        current_row_index = r_idx + 1  # 1-indexed for human readability
+        try:
+            raw_item_val = df_raw.iat[r_idx, item_col_idx] if item_col_idx < num_cols else None
+            if pd.isna(raw_item_val):
+                continue
+            raw_item = str(raw_item_val).strip()
+            if not raw_item or raw_item.lower() in ("nan", "none", "total", "subtotal", "item id.", "item id", "item code"):
+                continue
+
+            raw_desc_val = df_raw.iat[r_idx, desc_col_idx] if desc_col_idx is not None and desc_col_idx < num_cols else None
+            raw_desc = str(raw_desc_val).strip() if pd.notna(raw_desc_val) and str(raw_desc_val).strip().lower() not in ("nan", "none") else None
+
+            raw_part_val = df_raw.iat[r_idx, part_col_idx] if part_col_idx is not None and part_col_idx < num_cols else None
+            raw_part = str(raw_part_val).strip() if pd.notna(raw_part_val) and str(raw_part_val).strip().lower() not in ("nan", "none") else None
+
+            raw_unit_val = df_raw.iat[r_idx, unit_col_idx] if unit_col_idx is not None and unit_col_idx < num_cols else None
+            raw_unit = str(raw_unit_val).strip() if pd.notna(raw_unit_val) and str(raw_unit_val).strip().lower() not in ("nan", "none") else "NOS"
+
+            sno_val = None
+            if sno_col_idx is not None and sno_col_idx < num_cols:
+                raw_sno = df_raw.iat[r_idx, sno_col_idx]
+                if pd.notna(raw_sno):
+                    try:
+                        sno_val = int(float(raw_sno))
+                    except Exception:
+                        sno_val = None
+
+            if qty_col_idx is not None and qty_col_idx < num_cols:
+                raw_qty = df_raw.iat[r_idx, qty_col_idx]
+                try:
+                    if pd.isna(raw_qty) or str(raw_qty).strip() in ("-", "", "nan", "none"):
+                        qty_val = 0.0
+                    else:
+                        qty_val = float(raw_qty)
+                    if qty_val < 0:
+                        qty_val = 0.0
+                except Exception:
+                    qty_val = 0.0
+            else:
+                qty_val = 0.0
+
+            clean_raw_item_key = raw_item.strip().upper()
+            if clean_raw_item_key in consumable_cache:
+                consumable = consumable_cache[clean_raw_item_key]
+            else:
+                consumable = db.execute(
+                    select(Consumable).where(
+                        or_(
+                            func.upper(Consumable.item_id) == raw_item.upper(),
+                            Consumable.item_id == raw_item,
+                        )
+                    )
+                ).scalar_one_or_none()
+
+                if not consumable:
+                    if auto_create_consumables:
+                        consumable = auto_get_or_create_consumable(
+                            db=db,
+                            item_id_or_code=raw_item,
+                            name_or_desc=raw_desc,
+                            unit_str=raw_unit,
+                        )
+                    else:
+                        row_num = r_idx + 1
+                        errors.append(f"Row {row_num}: Item ID '{raw_item}' not found in Product Master.")
+                        continue
+                if consumable:
+                    consumable_cache[clean_raw_item_key] = consumable
+
+            if consumable.id in existing_items:
+                item = existing_items[consumable.id]
+                item.requested_qty = qty_val
+                if sno_val is not None:
+                    item.serial_no = sno_val
+                if raw_part is not None:
+                    item.part_no = raw_part
+                item.consumable = consumable
+                upserted_dict[consumable.id] = item
+            elif consumable.id in upserted_dict:
+                item = upserted_dict[consumable.id]
+                item.requested_qty = qty_val
+                if sno_val is not None:
+                    item.serial_no = sno_val
+                if raw_part is not None:
+                    item.part_no = raw_part
+                item.consumable = consumable
+            else:
+                new_item = RequirementLineItem(
+                    plan_id=target_plan.id,
+                    consumable_id=consumable.id,
+                    serial_no=sno_val or (len(upserted_dict) + 1),
+                    part_no=raw_part,
+                    requested_qty=qty_val,
+                )
+                new_item.consumable = consumable
+                db.add(new_item)
+                existing_items[consumable.id] = new_item
+                upserted_dict[consumable.id] = new_item
+        except Exception as e:
+            trace_str = traceback.format_exc()
+            logger.error(
+                "Sheet '%s' failed at row %s. header_row_idx=%s, qty_col_idx=%s, err=%s\nTrace:\n%s",
+                sheet_name,
+                current_row_index,
+                header_row_idx,
+                qty_col_idx,
+                str(e),
+                trace_str,
+            )
+            print(
+                f"[BULK UPLOAD ERROR] Sheet '{sheet_name}' failed at row {current_row_index}: "
+                f"header_row_idx={header_row_idx}, qty_col_idx={qty_col_idx}, error={str(e)}\n{trace_str}",
+                flush=True,
+            )
+            raise ApplicationError(
+                "PARSING_FAILED",
+                f"Sheet '{sheet_name}' failed at row {current_row_index}: {str(e)} | Trace: {trace_str}",
+                400,
+            )
+
+    db.flush()
+    return list(upserted_dict.values()), total_processed_rows
+
+
+def bulk_upsert_line_items(
+    db: Session,
+    plan_id: UUID,
+    file_bytes: bytes,
+    filename: str,
+    user: CurrentUser,
+    upload_all_plants: bool = False,
+    auto_create_consumables: bool = False,
+) -> BulkUploadResponse:
+    plan = db.get(MonthlyRequirementPlan, plan_id)
+    if not plan:
+        raise ApplicationError("NOT_FOUND", "Monthly requirement plan not found.", 404)
+
+    if not file_bytes:
+        raise ApplicationError("INVALID_FILE", "Uploaded file is empty.", 400)
+
+    filename_lower = filename.lower()
+    is_excel = filename_lower.endswith((".xlsx", ".xls"))
+
+    errors: list[str] = []
+    total_rows = 0
+    all_upserted_items: list[RequirementLineItem] = []
+    plants_affected = [plan.plant_id]
+
+    try:
+        if is_excel:
+            # Safe Sheet Matching using header=None
+            sheets_dict = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None, header=None)
+            sheet_names = list(sheets_dict.keys())
+
+            recognized_sheets: dict[str, str] = {}
+            for s in sheet_names:
+                pkey = _normalize_plant_key(s)
+                if pkey:
+                    recognized_sheets[pkey] = s
+
+            CANONICAL_PLANTS = ["PLANT_I", "PLANT_II", "PLANT_III", "PLANT_IV", "PLANT_V"]
+
+            if upload_all_plants and is_admin_user(user):
+                plants_affected = []
+                for pkey in CANONICAL_PLANTS:
+                    sname = _find_matching_sheet_name(sheet_names, pkey)
+                    if not sname and pkey in recognized_sheets:
+                        sname = recognized_sheets[pkey]
+                    if not sname:
+                        continue
+
+                    df_sheet = sheets_dict[sname]
+                    # Get or create plan for this plant
+                    p_plan = db.execute(
+                        select(MonthlyRequirementPlan).where(
+                            MonthlyRequirementPlan.plant_id == pkey,
+                            MonthlyRequirementPlan.month == plan.month,
+                            MonthlyRequirementPlan.year == plan.year,
+                        )
+                    ).scalar_one_or_none()
+
+                    if not p_plan:
+                        p_plan = MonthlyRequirementPlan(
+                            plant_id=pkey,
+                            month=plan.month,
+                            year=plan.year,
+                            status=RequirementStatus.DRAFT,
+                        )
+                        db.add(p_plan)
+                        db.flush()
+
+                    try:
+                        items, sheet_rows = _parse_and_ingest_sheet(db, p_plan, df_sheet, errors, auto_create_consumables=True, sheet_name=sname)
+                        total_rows += sheet_rows
+                        all_upserted_items.extend(items)
+                        plants_affected.append(pkey)
+                    except ApplicationError:
+                        raise
+                    except Exception as sheet_err:
+                        trace_str = traceback.format_exc()
+                        logger.error("Failed parsing %s: %s\n%s", sname, str(sheet_err), trace_str)
+                        raise ApplicationError("PARSING_FAILED", f"Failed parsing {sname}: {str(sheet_err)} | Trace: {trace_str}", 400)
+            else:
+                # Single plant mode: find matching sheet for target plan
+                # If the workbook has only 1 sheet (even if named 'Sheet1'), use that sheet directly
+                if len(sheet_names) == 1:
+                    matched_sheet = sheet_names[0]
+                else:
+                    matched_sheet = _find_matching_sheet_name(sheet_names, plan.plant_id)
+                    if not matched_sheet:
+                        matched_sheet = sheet_names[0]
+
+                df_sheet = sheets_dict[matched_sheet]
+                try:
+                    items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_sheet, errors, auto_create_consumables=True, sheet_name=matched_sheet)
+                    total_rows += sheet_rows
+                    all_upserted_items.extend(items)
+                except ApplicationError:
+                    raise
+                except Exception as sheet_err:
+                    trace_str = traceback.format_exc()
+                    logger.error("Failed parsing %s: %s\n%s", matched_sheet, str(sheet_err), trace_str)
+                    raise ApplicationError("PARSING_FAILED", f"Failed parsing {matched_sheet}: {str(sheet_err)} | Trace: {trace_str}", 400)
+        else:
+            # CSV parsing
+            try:
+                df_csv = pd.read_csv(io.BytesIO(file_bytes), header=None)
+            except Exception:
+                df_csv = pd.read_excel(io.BytesIO(file_bytes), header=None)
+
+            try:
+                items, sheet_rows = _parse_and_ingest_sheet(db, plan, df_csv, errors, auto_create_consumables=auto_create_consumables, sheet_name=filename)
+                total_rows += sheet_rows
+                all_upserted_items.extend(items)
+            except ApplicationError:
+                raise
+            except Exception as sheet_err:
+                trace_str = traceback.format_exc()
+                logger.error("Failed parsing %s: %s\n%s", filename, str(sheet_err), trace_str)
+                raise ApplicationError("PARSING_FAILED", f"Failed parsing {filename}: {str(sheet_err)} | Trace: {trace_str}", 400)
+
+        db.commit()
+
+        # Automatic background aggregation
+        try:
+            from app.services.mrp_calculator import run_monthly_aggregation
+            run_monthly_aggregation(db, plan.month, plan.year)
+        except Exception:
+            pass
+
+        # Ensure all items have their consumable loaded via a clean scalar query to avoid lazy loading N+1 queries
+        upserted_ids = [it.id for it in all_upserted_items if it.id]
+        if upserted_ids:
+            loaded_items = db.execute(
+                select(RequirementLineItem)
+                .options(joinedload(RequirementLineItem.consumable))
+                .where(RequirementLineItem.id.in_(upserted_ids))
+            ).scalars().all()
+            # Preserve original order
+            item_map = {it.id: it for it in loaded_items}
+            final_items = [item_map.get(it.id, it) for it in all_upserted_items]
+        else:
+            final_items = all_upserted_items
+
+        results = [_to_line_item_response(it) for it in final_items]
+        return BulkUploadResponse(
+            total_rows=total_rows,
+            upserted=len(results),
+            errors=errors,
+            items=results,
+            plants_affected=list(set(plants_affected)),
+        )
+    except ApplicationError:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise ApplicationError("PARSING_FAILED", f"Excel Parsing Failed: {str(exc)}", 400)
+
+
 

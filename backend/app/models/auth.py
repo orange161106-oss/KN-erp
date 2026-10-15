@@ -35,6 +35,7 @@ class User(Base):
     is_super_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     full_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     employee_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    assigned_plant: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # 40-Point Granular CRUD Permission Matrix (10 Workflow Modules x 4 CRUD Operations)
     # 1. Masters

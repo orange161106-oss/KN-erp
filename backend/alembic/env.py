@@ -37,7 +37,7 @@ class KnPostgresqlImpl(PostgresqlImpl):
 def run_migrations_offline() -> None:
     settings = load_settings()
     context.configure(
-        url=settings.sqlalchemy_url,
+        url=settings.alembic_sqlalchemy_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -55,7 +55,8 @@ def run_migrations_online() -> None:
     if connection is not None:
         run_with_connection(connection)
         return
-    engine = create_db_engine(load_settings())
+    settings = load_settings()
+    engine = create_db_engine(settings, url=settings.alembic_sqlalchemy_url)
     try:
         with engine.begin() as connection:
             run_with_connection(connection)

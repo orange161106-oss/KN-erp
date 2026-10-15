@@ -1,11 +1,14 @@
 from datetime import datetime
 from decimal import Decimal
+import enum
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Enum as SQLEnum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -20,6 +23,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
 
 
 class CalculatedRequirement(Base):
@@ -179,5 +183,96 @@ class MonthlyRequirementRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     planning_version: Mapped[Optional["PlanningVersion"]] = relationship("PlanningVersion")  # noqa: F821
+
+
+class RequirementStatus(str, enum.Enum):
+    DRAFT = "DRAFT"
+    SUBMITTED = "SUBMITTED"
+    APPROVED = "APPROVED"
+
+
+class MonthlyRequirementPlan(Base):
+    __tablename__ = "monthly_requirement_plans"
+    __table_args__ = (
+        UniqueConstraint("plant_id", "month", "year", name="uq_monthly_requirement_plans_plant_month_year"),
+        Index("ix_monthly_req_plan_lookup", "plant_id", "month", "year"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    plant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[RequirementStatus] = mapped_column(
+        SQLEnum(RequirementStatus, name="requirement_status_enum", native_enum=False),
+        default=RequirementStatus.DRAFT,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    line_items: Mapped[list["RequirementLineItem"]] = relationship(
+        "RequirementLineItem", back_populates="plan", cascade="all, delete-orphan"
+    )
+
+
+class RequirementLineItem(Base):
+    __tablename__ = "requirement_line_items"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "consumable_id", name="uq_requirement_line_items_plan_consumable"),
+        Index("ix_req_line_item_plan", "plan_id"),
+        Index("ix_req_line_item_consumable", "consumable_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    serial_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    plan_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("monthly_requirement_plans.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    consumable_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("consumables.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    part_no: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    requested_qty: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    plan: Mapped["MonthlyRequirementPlan"] = relationship("MonthlyRequirementPlan", back_populates="line_items")
+    consumable: Mapped["Consumable"] = relationship("Consumable")  # noqa: F821
+
+
+class AggregatedRequirement(Base):
+    __tablename__ = "aggregated_requirements"
+    __table_args__ = (
+        UniqueConstraint("month", "year", "consumable_id", name="uq_aggregated_requirements_month_year_consumable"),
+        Index("ix_aggregated_req_period", "month", "year"),
+        Index("ix_aggregated_req_consumable", "consumable_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    consumable_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("consumables.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    total_gross_qty: Mapped[float] = mapped_column(Float, nullable=False)
+    net_purchase_qty: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    consumable: Mapped["Consumable"] = relationship("Consumable")  # noqa: F821
+
+
 
 

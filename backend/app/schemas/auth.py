@@ -25,6 +25,16 @@ class TokenResponse(BaseModel):
     token_type: Literal["bearer"] = "bearer"
     expires_in: int
     user: CurrentUser | None = None
+    session_id: UUID | None = None
+
+
+class LogoutRequest(BaseModel):
+    session_id: UUID | None = None
+
+
+class LogoutResponse(BaseModel):
+    message: str = "Logged out successfully"
+    status: str = "LOGGED_OUT"
 
 
 class CurrentUser(BaseModel):
@@ -37,6 +47,7 @@ class CurrentUser(BaseModel):
     roles: list[str]
     permissions: list[str]
     plant_ids: list[UUID] = Field(default_factory=list)
+    assigned_plant: str | None = None
 
     # 40-Point Granular CRUD Permission Matrix
     masters_read: bool = False

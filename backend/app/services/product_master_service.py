@@ -404,7 +404,12 @@ def _parse_decimal(val: Any, default: Optional[Decimal] = None) -> Optional[Deci
 # Tab 1: List of Consumables Ingestion
 # ---------------------------------------------------------------------------
 
-def upsert_single_consumable(db: Session, data: ConsumableSingleCreate, actor_id: UUID) -> Consumable:
+def upsert_single_consumable(
+    db: Session,
+    data: ConsumableSingleCreate,
+    actor_id: UUID,
+    username: Optional[str] = None,
+) -> Consumable:
     clean_item_id = data.item_id.strip().upper()
     if not clean_item_id:
         raise ApplicationError("INVALID_ITEM_ID", "Item Id is required.", 422)
@@ -450,17 +455,27 @@ def upsert_single_consumable(db: Session, data: ConsumableSingleCreate, actor_id
     record = db.scalars(upsert_stmt).first()
     db.add(AuditLog(
         actor_id=actor_id,
-        action="UPSERT",
+        user_id=actor_id,
+        username=username,
+        action="CREATE",
+        module="Product Master - Consumables",
         entity_type="consumable",
         entity_id=record.id,
+        record_id=str(record.id),
         new_values=data.model_dump(mode="json"),
+        changes_summary=data.model_dump(mode="json"),
         reason="Single consumable upsert",
     ))
     db.commit()
     return record
 
 
-def bulk_upsert_consumables(db: Session, file_bytes: bytes, actor_id: UUID) -> dict:
+def bulk_upsert_consumables(
+    db: Session,
+    file_bytes: bytes,
+    actor_id: UUID,
+    username: Optional[str] = None,
+) -> dict:
     df = header_hunter(file_bytes, [
         "item_id", "itemid", "item no", "item code", "description",
         "supplier_id", "supplier id", "supplier name", "supplier",
@@ -546,10 +561,14 @@ def bulk_upsert_consumables(db: Session, file_bytes: bytes, actor_id: UUID) -> d
 
         db.add(AuditLog(
             actor_id=actor_id,
-            action="BULK_IMPORT",
+            user_id=actor_id,
+            username=username,
+            action="BULK_UPLOAD",
+            module="Product Master - Consumables",
             entity_type="consumables",
             entity_id=uuid4(),
-            new_values={"total_evaluated": total_rows, "upserted": upserted_count},
+            new_values={"total_evaluated": total_rows, "upserted": upserted_count, "summary": f"Processed {upserted_count} rows"},
+            changes_summary={"total_evaluated": total_rows, "upserted": upserted_count, "summary": f"Processed {upserted_count} rows"},
             reason="Bulk Excel Consumables Header Hunter ingestion",
         ))
         db.commit()
@@ -568,7 +587,12 @@ def bulk_upsert_consumables(db: Session, file_bytes: bytes, actor_id: UUID) -> d
 # Tab 2: List of Sales Parts Ingestion
 # ---------------------------------------------------------------------------
 
-def upsert_single_sales_part(db: Session, data: SalesPartSingleCreate, actor_id: UUID) -> Product:
+def upsert_single_sales_part(
+    db: Session,
+    data: SalesPartSingleCreate,
+    actor_id: UUID,
+    username: Optional[str] = None,
+) -> Product:
     clean_part_no = data.part_no.strip()
     clean_item_id = data.item_id.strip()
     clean_desc = data.part_description.strip()
@@ -620,17 +644,27 @@ def upsert_single_sales_part(db: Session, data: SalesPartSingleCreate, actor_id:
     record = db.scalars(upsert_stmt).first()
     db.add(AuditLog(
         actor_id=actor_id,
-        action="UPSERT",
+        user_id=actor_id,
+        username=username,
+        action="CREATE",
+        module="Product Master - Sales Parts",
         entity_type="product",
         entity_id=record.id,
+        record_id=str(record.id),
         new_values=data.model_dump(mode="json"),
+        changes_summary=data.model_dump(mode="json"),
         reason="Single sales part upsert",
     ))
     db.commit()
     return record
 
 
-def bulk_upsert_sales_parts(db: Session, file_bytes: bytes, actor_id: UUID) -> dict:
+def bulk_upsert_sales_parts(
+    db: Session,
+    file_bytes: bytes,
+    actor_id: UUID,
+    username: Optional[str] = None,
+) -> dict:
     df = header_hunter(file_bytes, ["part_no", "partno", "part number", "item_id", "itemid"])
 
     # Strip empty rows at bottom where both part_no and item_id are missing
@@ -713,10 +747,14 @@ def bulk_upsert_sales_parts(db: Session, file_bytes: bytes, actor_id: UUID) -> d
 
         db.add(AuditLog(
             actor_id=actor_id,
-            action="BULK_IMPORT",
+            user_id=actor_id,
+            username=username,
+            action="BULK_UPLOAD",
+            module="Product Master - Sales Parts",
             entity_type="products",
             entity_id=uuid4(),
-            new_values={"total_evaluated": total_rows, "upserted": upserted_count},
+            new_values={"total_evaluated": total_rows, "upserted": upserted_count, "summary": f"Processed {upserted_count} rows"},
+            changes_summary={"total_evaluated": total_rows, "upserted": upserted_count, "summary": f"Processed {upserted_count} rows"},
             reason="Bulk Excel Sales Parts Header Hunter ingestion",
         ))
         db.commit()
@@ -806,7 +844,12 @@ def _resolve_or_create_process(db: Session, proc_name: Optional[str]) -> Process
     return process
 
 
-def upsert_single_assemble(db: Session, data: AssembleSingleCreate, actor_id: UUID) -> ProductProcessConsumable:
+def upsert_single_assemble(
+    db: Session,
+    data: AssembleSingleCreate,
+    actor_id: UUID,
+    username: Optional[str] = None,
+) -> ProductProcessConsumable:
     product = _resolve_or_create_product(db, data.part_no_saleable_item, data.used_for_name_of_saleable_part, data.output_unit or "PCS")
     consumable = _resolve_or_create_consumable(db, data.consumable_item, data.output_unit or "PCS")
     process = _resolve_or_create_process(db, data.process_name)
@@ -849,10 +892,15 @@ def upsert_single_assemble(db: Session, data: AssembleSingleCreate, actor_id: UU
     record = db.scalars(upsert_stmt).first()
     db.add(AuditLog(
         actor_id=actor_id,
-        action="UPSERT",
+        user_id=actor_id,
+        username=username,
+        action="CREATE",
+        module="Product Master - Assembly BOM",
         entity_type="product_process_consumable",
         entity_id=record.id,
+        record_id=str(record.id),
         new_values=data.model_dump(mode="json"),
+        changes_summary=data.model_dump(mode="json"),
         reason="Single BOM assemble consumable upsert",
     ))
     db.commit()
@@ -1250,6 +1298,7 @@ def execute_assemble_import_batch(
     parsed_rows: list[dict[str, Any]],
     actor_id: UUID,
     job: Optional[dict[str, Any]] = None,
+    username: Optional[str] = None,
 ) -> dict[str, Any]:
     """Constant O(1) batched upsert engine for Consumable for Assemble.
     
@@ -1474,6 +1523,8 @@ def execute_assemble_import_batch(
     # 8. Audit log and commit
     db.add(AuditLog(
         actor_id=actor_id,
+        user_id=actor_id,
+        username=username,
         action="BULK_IMPORT",
         entity_type="product_process_consumables",
         entity_id=uuid4(),
@@ -1662,10 +1713,15 @@ def export_assemble_errors_excel(issues: list[AssembleRowIssue]) -> bytes:
     return buf.getvalue()
 
 
-def bulk_upsert_assemble(db: Session, file_bytes: bytes, actor_id: UUID) -> dict[str, Any]:
+def bulk_upsert_assemble(
+    db: Session,
+    file_bytes: bytes,
+    actor_id: UUID,
+    username: Optional[str] = None,
+) -> dict[str, Any]:
     """Legacy backward-compatible bulk upsert endpoint using new fast streaming & batch engine."""
     _header_row, _matched_cols, parsed_rows, parse_issues = fast_parse_assemble_excel(file_bytes)
-    res = execute_with_db_retry(lambda: execute_assemble_import_batch(db, parsed_rows, actor_id))
+    res = execute_with_db_retry(lambda: execute_assemble_import_batch(db, parsed_rows, actor_id, username=username))
     all_errors = [f"Row {issue.row}: {issue.message}" for issue in parse_issues]
     res["errors"] = (all_errors + res.get("errors", []))[:20]
     return res
@@ -1790,6 +1846,7 @@ def update_product_master_item(
     item_id: Union[UUID, str],
     data: dict[str, Any],
     actor_id: UUID,
+    username: Optional[str] = None,
 ) -> dict:
     try:
         parsed_id = UUID(str(item_id))
@@ -1837,10 +1894,15 @@ def update_product_master_item(
         row.is_active = True
         db.add(AuditLog(
             actor_id=actor_id,
+            user_id=actor_id,
+            username=username,
             action="UPDATE",
+            module="Product Master - Consumables",
             entity_type="consumable",
             entity_id=row.id,
+            record_id=str(row.id),
             new_values=safe_data,
+            changes_summary=safe_data,
             reason="Consumable updated via UI",
         ))
         db.commit()
@@ -1869,10 +1931,15 @@ def update_product_master_item(
         product.is_active = True
         db.add(AuditLog(
             actor_id=actor_id,
+            user_id=actor_id,
+            username=username,
             action="UPDATE",
+            module="Product Master - Sales Parts",
             entity_type="product",
             entity_id=product.id,
+            record_id=str(product.id),
             new_values=safe_data,
+            changes_summary=safe_data,
             reason="Sales part updated via UI",
         ))
         db.commit()
@@ -1911,10 +1978,15 @@ def update_product_master_item(
         mapping.is_active = True
         db.add(AuditLog(
             actor_id=actor_id,
+            user_id=actor_id,
+            username=username,
             action="UPDATE",
+            module="Product Master - Assembly BOM",
             entity_type="product_process_consumable",
             entity_id=mapping.id,
+            record_id=str(mapping.id),
             new_values=safe_data,
+            changes_summary=safe_data,
             reason="Assembly mapping updated via UI",
         ))
         db.commit()
@@ -1935,6 +2007,7 @@ def deactivate_product_master_item(
     category: str,
     item_id: Union[UUID, str],
     actor_id: UUID,
+    username: Optional[str] = None,
 ) -> dict:
     try:
         parsed_id = UUID(str(item_id))
@@ -1945,12 +2018,15 @@ def deactivate_product_master_item(
     if cat in ("consumables", "consumable"):
         row = db.scalars(select(Consumable).where(Consumable.id == parsed_id)).first()
         entity_type = "consumable"
+        module_name = "Product Master - Consumables"
     elif cat in ("sales_parts", "sales_part", "products", "product"):
         row = db.scalars(select(Product).where(Product.id == parsed_id)).first()
         entity_type = "product"
+        module_name = "Product Master - Sales Parts"
     elif cat in ("assemble", "assembly", "product_process_consumables"):
         row = db.scalars(select(ProductProcessConsumable).where(ProductProcessConsumable.id == parsed_id)).first()
         entity_type = "product_process_consumable"
+        module_name = "Product Master - Assembly BOM"
     else:
         raise ApplicationError("INVALID_CATEGORY", f"Unknown master category: {category}", 400)
 
@@ -1960,10 +2036,15 @@ def deactivate_product_master_item(
     row.is_active = False
     db.add(AuditLog(
         actor_id=actor_id,
-        action="DEACTIVATE",
+        user_id=actor_id,
+        username=username,
+        action="DELETE",
+        module=module_name,
         entity_type=entity_type,
         entity_id=row.id,
+        record_id=str(row.id),
         new_values={"is_active": False},
+        changes_summary={"is_active": False},
         reason="Soft-deleted via UI",
     ))
     db.commit()
