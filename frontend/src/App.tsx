@@ -1,25 +1,26 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import SystemStatus from './pages/SystemStatus';
 import Login from './pages/Login';
 import AppShell from './components/AppShell';
+import PageBoundary from './components/PageBoundary';
 import AuthProvider from './features/auth/AuthProvider';
 import { useAuth } from './features/auth/context';
-import Masters from './features/masters/Masters';
-import ProductionMappings from './features/mappings/ProductionMappings';
-import ConsumptionNorms from './features/rules/ConsumptionNorms';
-import PlantWorkflow from './features/plant_workflow/PlantWorkflow';
-import Inventory from './features/inventory/Inventory';
-import StockStatementWorkspace from './features/inventory/StockStatementWorkspace';
-import StockManagementWorkspace from './features/inventory/StockManagementWorkspace';
-import AlertsCenter from './features/alerts/AlertsCenter';
-import PurchaseApprovals from './features/purchasing/PurchaseApprovals';
-import PurchaseOrders from './features/purchasing/PurchaseOrders';
-import GRNs from './features/purchasing/GRNs';
-import ExecutiveDashboard from './features/dashboard/ExecutiveDashboard';
-import PRDPlanning from './features/prd/PRDPlanning';
-import Requirements from './features/requirements/Requirements';
-import UserManagement from './features/admin/UserManagement';
-import Reports from './features/reports/Reports';
+const SystemStatus = lazy(() => import('./pages/SystemStatus'));
+const Masters = lazy(() => import('./features/masters/Masters'));
+const ProductionMappings = lazy(() => import('./features/mappings/ProductionMappings'));
+const ConsumptionNorms = lazy(() => import('./features/rules/ConsumptionNorms'));
+const PlantWorkflow = lazy(() => import('./features/plant_workflow/PlantWorkflow'));
+const Inventory = lazy(() => import('./features/inventory/Inventory'));
+const StockStatementWorkspace = lazy(() => import('./features/inventory/StockStatementWorkspace'));
+const StockManagementWorkspace = lazy(() => import('./features/inventory/StockManagementWorkspace'));
+const AlertsCenter = lazy(() => import('./features/alerts/AlertsCenter'));
+const PurchaseApprovals = lazy(() => import('./features/purchasing/PurchaseApprovals'));
+const PurchaseOrders = lazy(() => import('./features/purchasing/PurchaseOrders'));
+const GRNs = lazy(() => import('./features/purchasing/GRNs'));
+const ExecutiveDashboard = lazy(() => import('./features/dashboard/ExecutiveDashboard'));
+const PRDPlanning = lazy(() => import('./features/prd/PRDPlanning'));
+const Requirements = lazy(() => import('./features/requirements/Requirements'));
+const UserManagement = lazy(() => import('./features/admin/UserManagement'));
+const Reports = lazy(() => import('./features/reports/Reports'));
 
 import { canOpen, isSuperAdmin } from './core/rbac';
 
@@ -60,6 +61,8 @@ function Application() {
   return (
     <BrowserRouter>
       <AppShell>
+        <PageBoundary>
+        <Suspense fallback={<p role="status" className="p-4">Loading page…</p>}>
         <Routes>
           <Route path="/" element={
             <ProtectedRoute isAllowed={canOpen(user, '/')}><ExecutiveDashboard /></ProtectedRoute>
@@ -134,6 +137,8 @@ function Application() {
           } />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
+        </PageBoundary>
       </AppShell>
     </BrowserRouter>
   );
@@ -142,3 +147,4 @@ function Application() {
 export default function App() {
   return <AuthProvider><Application /></AuthProvider>;
 }
+import { lazy, Suspense } from 'react';

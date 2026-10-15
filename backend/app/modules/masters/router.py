@@ -26,8 +26,8 @@ router = APIRouter(prefix="/masters", tags=["masters"])
 
 
 @router.post("/products/preview", response_model=ProductSourcePreview, dependencies=[Depends(require_permissions("masters.write"))])
-async def preview_products(file: UploadFile = File(...), sheet_name: str = Form("Prd. Order")):
-    return product_source.preview(await file.read(10 * 1024 * 1024 + 1), file.filename or "source.xlsx", sheet_name)
+def preview_products(file: UploadFile = File(...), sheet_name: str = Form("Prd. Order")):
+    return product_source.preview(file.file.read(10 * 1024 * 1024 + 1), file.filename or "source.xlsx", sheet_name)
 
 
 @router.post("/products/reviewed", response_model=list[ProductResponse], dependencies=[Depends(require_permissions("masters.write"))])

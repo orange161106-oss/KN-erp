@@ -164,7 +164,7 @@ describe('Reports Dashboard & Multi-Format Exports', () => {
   it('triggers export functions for Excel, CSV, PDF, and Word', async () => {
     const csvSpy = vi.spyOn(exportUtils, 'downloadCSV').mockImplementation(() => {});
     const excelSpy = vi.spyOn(exportUtils, 'downloadExcel').mockImplementation(() => {});
-    const pdfSpy = vi.spyOn(exportUtils, 'downloadPDF').mockImplementation(() => {});
+    const pdfSpy = vi.spyOn(exportUtils, 'downloadPDF').mockImplementation(async () => {});
     const wordSpy = vi.spyOn(exportUtils, 'downloadWord').mockImplementation(async () => {});
 
     render(

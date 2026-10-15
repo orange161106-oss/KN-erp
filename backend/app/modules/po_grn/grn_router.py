@@ -106,16 +106,16 @@ def bulk_delete_workspace(
 
 
 @router.post('/workspace/inspect', response_model=ExcelInspectResponse)
-async def inspect_excel_file(
+def inspect_excel_file(
     user: ImportWorkspace,
     file: UploadFile = File(...),
 ):
-    contents = await file.read()
+    contents = file.file.read()
     return service.inspect_excel_file(contents, file.filename or 'upload.xlsx')
 
 
 @router.post('/workspace/import-sheet', response_model=ExcelImportSheetResponse)
-async def import_workspace_sheet(
+def import_workspace_sheet(
     user: ImportWorkspace,
     session: Database,
     file: UploadFile = File(...),
@@ -123,7 +123,7 @@ async def import_workspace_sheet(
     mode: str = Form(default='APPEND'),
     reason: str = Form(default='Excel sheet import'),
 ):
-    contents = await file.read()
+    contents = file.file.read()
     return service.import_excel_sheet(session, contents, file.filename or 'upload.xlsx', sheet_name, user.id, mode=mode, reason=reason)
 
 

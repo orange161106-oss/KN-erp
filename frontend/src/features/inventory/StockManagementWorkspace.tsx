@@ -238,7 +238,11 @@ export default function StockManagementWorkspace() {
   const [selectedMonth, setSelectedMonth] = useState<number>(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState<number>(now.getFullYear());
   const [searchQuery, setSearchQuery] = useState('');
+<<<<<<< HEAD
+  const settledSearch = useDebouncedValue(searchQuery);
+=======
   const [multiCategoryOnly, setMultiCategoryOnly] = useState(false);
+>>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
 
   const [records, setRecords] = useState<StockParameterRecord[]>([]);
   const [originalRecords, setOriginalRecords] = useState<Map<string, StockParameterRecord>>(new Map());
@@ -297,7 +301,13 @@ export default function StockManagementWorkspace() {
       if (multiCategoryOnly) params.set('multi_category_only', 'true');
 
       const res = await apiClient.get<StockManagementResponse>(
+<<<<<<< HEAD
+        `/api/v1/inventory/management?month=${selectedMonth}&year=${selectedYear}${
+          settledSearch ? `&search=${encodeURIComponent(settledSearch)}` : ''
+        }`
+=======
         `/api/v1/inventory/management?${params.toString()}`
+>>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
       );
       if (requestId !== loadRequestId.current) return;
       setRecords(res.records || []);
@@ -319,7 +329,11 @@ export default function StockManagementWorkspace() {
     } finally {
       if (requestId === loadRequestId.current) setIsLoading(false);
     }
+<<<<<<< HEAD
+  }, [selectedMonth, selectedYear, settledSearch]);
+=======
   }, [selectedMonth, selectedYear, searchQuery, multiCategoryOnly]);
+>>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
 
   useEffect(() => {
     setSuccessMsg(null);
@@ -1076,13 +1090,14 @@ export default function StockManagementWorkspace() {
       {/* 4. Table Area */}
       <div className="flex-1 min-h-0 bg-white rounded-xl border border-stone-200 shadow-xs overflow-hidden flex flex-col">
         <DataTable
+          virtualize
           key={`${metadata?.batch_id || `${selectedYear}-${selectedMonth}`}:${draftVersion}`}
           originalData={originalRecords}
           columns={columns}
           data={records}
           selectedIds={selectedIds}
           onSelectionChange={setSelectedIds}
-          isLoading={isLoading}
+          isLoading={isLoading || searchQuery !== settledSearch}
           onCellChange={handleCellChange}
           onSave={handleSave}
           saveStatus={saveStatus}
@@ -1724,3 +1739,4 @@ export default function StockManagementWorkspace() {
     </div>
   );
 }
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';

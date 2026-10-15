@@ -3,6 +3,7 @@ from decimal import Decimal, localcontext
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.db.reliability import database_unavailable
 from app.core.errors import ApplicationError
 from app.domain.inventory_engine.reorder import Calendar, TimingUnavailable, shift
 from app.domain.purchase_engine.recommendation import Constraint, NAMES, calculate
@@ -14,8 +15,8 @@ from app.services import projection
 def report(session, data: PurchaseRequest):
     try:
         return _report(session, data)
-    except SQLAlchemyError:
-        raise ApplicationError('DATABASE_UNAVAILABLE', 'Database is unavailable.', 503) from None
+    except SQLAlchemyError as error:
+        raise database_unavailable(error) from None
 
 
 def _report(session, data):

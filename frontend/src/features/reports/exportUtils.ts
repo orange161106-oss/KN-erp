@@ -1,16 +1,3 @@
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
-import {
-  Document,
-  Packer,
-  Paragraph,
-  TextRun,
-  Table,
-  TableRow,
-  TableCell,
-  WidthType,
-  ShadingType,
-} from 'docx';
 
 export interface ColumnDef {
   header: string;
@@ -145,12 +132,15 @@ export function downloadExcel(
 /**
  * Multi-format export: PDF Download (jsPDF + autoTable)
  */
-export function downloadPDF(
+export async function downloadPDF(
   title: string,
   columns: ColumnDef[],
   data: Record<string, any>[],
   filename = 'knl_erp_report'
 ) {
+  const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+    import('jspdf'), import('jspdf-autotable'),
+  ]);
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
 
   // Top Accent Banner
@@ -219,6 +209,7 @@ export async function downloadWord(
   data: Record<string, any>[],
   filename = 'knl_erp_report'
 ) {
+  const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, ShadingType } = await import('docx');
   const tableHeaderRow = new TableRow({
     tableHeader: true,
     children: columns.map(

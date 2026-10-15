@@ -31,7 +31,7 @@ def create_single_consumable(
 
 
 @router.post("/consumables/bulk")
-async def bulk_upload_consumables(
+def bulk_upload_consumables(
     file: UploadFile = File(...),
     session: Annotated[Session, Depends(get_db)] = None,
     current_user: Annotated[CurrentUser, Depends(require_admin_role)] = None,
@@ -65,7 +65,7 @@ def create_single_sales_part(
 
 
 @router.post("/sales-parts/bulk")
-async def bulk_upload_sales_parts(
+def bulk_upload_sales_parts(
     file: UploadFile = File(...),
     session: Annotated[Session, Depends(get_db)] = None,
     current_user: Annotated[CurrentUser, Depends(require_admin_role)] = None,
@@ -162,7 +162,7 @@ def export_assemble_preview_errors(
 
 
 @router.post("/assemble/bulk")
-async def bulk_upload_assemble(
+def bulk_upload_assemble(
     file: UploadFile = File(...),
     session: Annotated[Session, Depends(get_db)] = None,
     current_user: Annotated[CurrentUser, Depends(require_admin_role)] = None,

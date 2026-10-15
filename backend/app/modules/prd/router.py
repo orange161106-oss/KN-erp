@@ -30,13 +30,13 @@ router = APIRouter(prefix="/prd", tags=["prd"])
 
 
 @router.post("/upload", response_model=ImportBatchResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permissions('planning.write'))])
-async def upload_prd_file(
+def upload_prd_file(
     file: UploadFile = File(...),
     planning_period: str = Form("2026-10"),
     session: Session = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> ImportBatchResponse:
-    contents = await file.read()
+    contents = file.file.read()
     filename = file.filename or "unknown.xlsx"
     batch = stage_and_validate_prd_file(
         db=session,

@@ -39,7 +39,13 @@ URL but do not require a signing key.
 | `APP_ENV` | `local`, `test`, `staging`, or `production`; default `local` |
 | `LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; default `INFO` |
 | `DATABASE_URL` | Required PostgreSQL URL; no default |
-| `DB_CONNECT_TIMEOUT_SECONDS` | Connection/pool acquisition timeout; integer 1–60, default 5 |
+| `DB_CONNECT_TIMEOUT_SECONDS` | New connection timeout; integer 1–60, default 5 |
+| `DB_POOL_SIZE` | Retained connections per backend worker; default 5 |
+| `DB_MAX_OVERFLOW` | Extra connections per worker under load; default 5 |
+| `DB_POOL_TIMEOUT_SECONDS` | Maximum wait for a pooled connection; default 10 |
+| `DB_POOL_RECYCLE_SECONDS` | Connection lifetime before reconnecting on checkout; default 1800 |
+| `DB_WARMUP_ON_STARTUP` | Warm one remote connection before accepting logins; default true; skipped for test/loopback databases |
+| `HTTP_SLOW_REQUEST_MS` | Safe slow-request log threshold; default 1000 milliseconds |
 | `TEST_DATABASE_URL` | Test-only disposable PostgreSQL database; read by integration tests |
 | `AUTH_SECRET_KEY` | Required operator-generated secret, at least 32 UTF-8 bytes; no default |
 | `AUTH_ACCESS_TOKEN_EXPIRE_MINUTES` | Access-token lifetime, integer 1–60; default 15 |
@@ -64,6 +70,48 @@ tracked files. Sessions configure the PostgreSQL timezone to UTC.
 Generate the signing key with a cryptographic secret generator, then supply it
 through the local environment/secret store. Do not reuse sample values or database
 passwords as signing keys. Startup fails when the key is missing or too short.
+
+## Performance and connection diagnostics
+
+Run this read-only check from `backend/` when investigating database errors:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.db.diagnose
+```
+
+It reports three connection/round-trip timings, missing registered-model columns,
+and the maximum connection budget per worker. It does not print credentials,
+employee/business rows, or connection URLs, and does not migrate or change data.
+Schema comparison checks column presence; it does not certify constraints, indexes,
+Alembic ancestry, or business correctness. A failed result exits nonzero.
+
+The default pool retains five connections and allows five overflow connections,
+uses the most recently returned connection first, checks for stale connections,
+and keeps TCP keepalives enabled. A remote startup warm-up prepares just one
+connection; a temporary failure is logged without preventing later reconnection.
+Size the total across **all workers, teammates, jobs and replicas** within your
+database/provider budget. Separate order/projection sessions can need multiple
+connections per request. Increasing worker count also multiplies the pool budget.
+Defaults are a conservative starting point, not a measured production capacity.
+
+Database diagnostics distinguish connection, schema, credentials and capacity
+failures without raw SQL/DSNs. Transient authentication/health/PRD preview reads
+can reconnect once after rollback. The frontend retries only a GET explicitly
+marked transient, once; account changes and writes cancel that recovery. Saves,
+deletions, login requests and receipt imports are never automatically repeated.
+No transaction is resumed midway after a disconnect. A provider outage or a
+failed schema migration still needs its underlying cause addressed.
+
+Excel parsing and synchronous SQL work run in request worker threads so uploads
+do not block the event loop. Large API responses use gzip when negotiated. Logs
+identify slow requests by their registered route template, status and duration,
+without query strings, employee IDs, passwords or uploaded data.
+
+Use a built frontend and a proper static web server/CDN for deployment. Serve
+hashed assets with long-lived caching and the HTML entry with revalidation, so
+deployments do not strand browsers on old chunk names. Vite's development server
+and Uvicorn's `--reload` mode are development tools. No deployment or infrastructure
+change is performed by these code optimizations.
 
 ## Database migrations
 

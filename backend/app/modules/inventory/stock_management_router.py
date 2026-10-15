@@ -69,7 +69,7 @@ def delete_parameters(
 
 
 @router.post("/preview", response_model=StockParameterPreviewResponse)
-async def preview_parameters(
+def preview_parameters(
     session: Database,
     user: ImportUser,
     file: UploadFile = File(...),
@@ -77,7 +77,7 @@ async def preview_parameters(
     year: int = Form(...),
 ) -> StockParameterPreviewResponse:
     """Upload and validate an Excel file for Stock Management parameters without saving to DB."""
-    content = await file.read()
+    content = file.file.read()
     filename = file.filename or "stock_management.xlsx"
     return service.parse_and_preview_stock_parameters(
         session,

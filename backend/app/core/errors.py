@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.schemas.error import ErrorResponse
 
@@ -35,9 +36,18 @@ def error_response(
 
 
 def register_error_handlers(app: FastAPI) -> None:
+    @app.exception_handler(SQLAlchemyError)
+    async def database_error_handler(request: Request, exc: SQLAlchemyError):
+        from app.db.reliability import database_unavailable
+        error = database_unavailable(exc)
+        return await application_error_handler(request, error)
+
     @app.exception_handler(ApplicationError)
     async def application_error_handler(request: Request, exc: ApplicationError):
-        return error_response(exc.status_code, exc.code, exc.message, exc.details, exc.headers)
+        details = exc.details
+        if exc.code == "DATABASE_UNAVAILABLE" and request.method not in {"GET", "HEAD"}:
+            details = {**details, "retryable": False}
+        return error_response(exc.status_code, exc.code, exc.message, details, exc.headers)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError):

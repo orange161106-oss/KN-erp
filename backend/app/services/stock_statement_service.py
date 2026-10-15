@@ -11,8 +11,8 @@ import uuid
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import case, func, select
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.errors import ApplicationError
 from app.models.audit import AuditLog
@@ -915,8 +915,16 @@ def batch_update_stock_statement(session: Session, *, payload: StockStatementBat
         ).with_for_update().execution_options(populate_existing=True))
         if batch is None:
             raise ApplicationError("STATEMENT_CHANGED", "The active statement has changed. Refresh before saving.", 409)
+        # One lookup for the entire reviewed patch, retaining the batch lock,
+        # per-row validation and atomic audit/commit behavior.
+        lines_by_id = {line.id: line for line in session.scalars(
+            select(StockStatementLine).where(
+                StockStatementLine.batch_id == batch.id,
+                StockStatementLine.id.in_([update.id for update in payload.updates]),
+            ).execution_options(populate_existing=True)
+        )}
         for update in payload.updates:
-            line = session.get(StockStatementLine, update.id)
+            line = lines_by_id.get(update.id)
             if line is None or line.batch_id != batch.id:
                 raise ApplicationError("INVALID_STATEMENT_ROW", "A row does not belong to the selected statement.", 422)
             changes = update.model_dump(exclude_unset=True, exclude={"id"})
@@ -1014,6 +1022,9 @@ def get_stock_statement(
             StockStatementBatch.statement_month == month,
             StockStatementBatch.statement_year == year,
             StockStatementBatch.status == "active",
+        ).options(
+            joinedload(StockStatementBatch.creator).load_only(User.full_name, User.username),
+            joinedload(StockStatementBatch.updater).load_only(User.full_name, User.username),
         )
     )
 
@@ -1033,9 +1044,24 @@ def get_stock_statement(
         summary = StockStatementSummary()
         return StockStatementResponse(metadata=meta, summary=summary, records=[])
 
-    creator = session.get(User, batch.created_by) if batch.created_by else None
-    updater = session.get(User, batch.updated_by) if batch.updated_by else None
+    creator = batch.creator
+    updater = batch.updater
 
+<<<<<<< HEAD
+    # Calculate class counts across the whole batch
+    totals = session.execute(
+        select(
+            func.count(StockStatementLine.id),
+            func.coalesce(func.sum(StockStatementLine.opening_value), 0),
+            func.coalesce(func.sum(StockStatementLine.receipt_value), 0),
+            func.coalesce(func.sum(StockStatementLine.issue_value), 0),
+            func.coalesce(func.sum(StockStatementLine.closing_value), 0),
+            *(func.count(case((StockStatementLine.item_class == item_class, 1)))
+              for item_class in ("CONSUMABLE", "PRODUCT_OR_OTHER", "UNKNOWN")),
+        ).where(StockStatementLine.batch_id == batch.id)
+    ).one()
+    consumable_count, product_or_other_count, unknown_count = totals[5:8]
+=======
     # Fetch all active Consumable item_ids for live class derivation
     active_consumable_items = session.execute(
         select(Consumable.id, Consumable.item_id).where(Consumable.is_active == True)
@@ -1045,6 +1071,7 @@ def get_stock_statement(
         for c in active_consumable_items
         if c.item_id
     }
+>>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
 
     # Fetch all lines for the batch
     all_lines = session.scalars(
@@ -1072,6 +1099,9 @@ def get_stock_statement(
         else:
             other_items_count += 1
 
+<<<<<<< HEAD
+    warning_rows_count = sum(1 for l in lines if l.warning_codes and len(l.warning_codes) > 0)
+=======
         if l.store_group and l.store_group.strip():
             store_groups_set.add(l.store_group.strip())
 
@@ -1141,6 +1171,7 @@ def get_stock_statement(
     tot_iss_val = Decimal("0.0000")
     tot_cls_val = Decimal("0.0000")
     warning_rows_count = 0
+>>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
 
     records: list[StockStatementLineResponse] = []
     for l in filtered_lines:
@@ -1535,11 +1566,12 @@ def list_stock_statement_history(
             StockStatementBatch.statement_year == year,
         )
         .order_by(StockStatementBatch.created_at.desc())
+        .options(joinedload(StockStatementBatch.uploader).load_only(User.full_name, User.username))
     ).all()
 
     items: list[StockStatementHistoryItem] = []
     for b in batches:
-        uploader = session.get(User, b.uploaded_by) if b.uploaded_by else None
+        uploader = b.uploader
         items.append(
             StockStatementHistoryItem(
                 batch_id=str(b.id),

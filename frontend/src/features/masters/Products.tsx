@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import axios from 'axios';
-import type { AxiosProgressEvent } from 'axios';
-import { apiClient, getAccessToken, getApiBaseUrl } from '../../api/client';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { apiClient } from '../../api/client';
+import MasterBulkWorkspace from './MasterBulkWorkspace';
 import { useAuth } from '../auth/context';
 import { TableSkeletonRows } from '../../components/ui/Skeleton';
 
@@ -110,14 +109,10 @@ export default function Products() {
   // Loading & Notification states
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Bulk Upload Modal & Progress states
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadPhase, setUploadPhase] = useState<'idle' | 'uploading' | 'parsing'>('idle');
-  const [uploadError, setUploadError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [assemblePreview, setAssemblePreview] = useState<AssemblePreviewData | null>(null);
@@ -211,8 +206,6 @@ export default function Products() {
   });
 
   // File Upload Drag & Drop State
-  const [dragActive, setDragActive] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ---------------------------------------------------------------------------
   // Data Fetching
@@ -515,6 +508,8 @@ export default function Products() {
   };
 
   // ---------------------------------------------------------------------------
+<<<<<<< HEAD
+=======
   // Bulk Excel File Upload & Header Hunter Execution
   // ---------------------------------------------------------------------------
 
@@ -781,6 +776,7 @@ export default function Products() {
   };
 
   // ---------------------------------------------------------------------------
+>>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
   // Localized Inline Column Search Filters
   // ---------------------------------------------------------------------------
 
@@ -847,6 +843,16 @@ export default function Products() {
             Authoritative master catalog for raw consumables, sales parts, and assembly BOM mappings.
           </p>
         </div>
+<<<<<<< HEAD
+        <button
+          type="button"
+          onClick={() => setIsUploadModalOpen(true)}
+          disabled={!canRead}
+          className="inline-flex items-center gap-2 bg-erp-orange hover:bg-erp-tenne text-white text-xs sm:text-sm font-semibold px-4 py-2.5 rounded-lg shadow-sm hover:shadow transition-all disabled:opacity-50"
+        >
+          Bulk Import ☁️
+        </button>
+=======
         {isAdmin && (
           <button
             type="button"
@@ -861,6 +867,7 @@ export default function Products() {
             Bulk Import ☁️
           </button>
         )}
+>>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
       </div>
 
       {/* Task 2: Dashboard KPI Cards (Top Row) */}
@@ -2215,6 +2222,10 @@ export default function Products() {
       {/* ========================================================================= */}
       {/* BULK UPLOAD MODAL OVERLAY                                                 */}
       {/* ========================================================================= */}
+<<<<<<< HEAD
+      {isUploadModalOpen && <MasterBulkWorkspace category={activeTab} label={activeTabLabel}
+        onClose={() => setIsUploadModalOpen(false)} onChanged={() => { void loadData(); }}/>}
+=======
       {isUploadModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in duration-200"
@@ -2496,6 +2507,7 @@ export default function Products() {
           </div>
         </div>
       )}
+>>>>>>> ec06ef741c80eba081a6a19fb956319d5380515c
 
       {/* Floating Success Toast */}
       {toast && (

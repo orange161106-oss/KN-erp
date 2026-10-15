@@ -34,6 +34,20 @@ If code and documentation disagree, stop and resolve the conflict before continu
 ## Golden rule
 AI must never invent a manufacturing/business rule. Unknown rules must be marked `TBD`.
 
+## Saved project context
+
+[Code and workflow context](PROJECT_CONTEXT.md) records the 2026-10-13 review,
+current screen/service paths, recent approved UI changes, and unresolved integration
+issues. Use it for orientation, then verify current code and the governing contracts.
+
+[Performance and connection validation](validation/PERFORMANCE_RELIABILITY_2026-10-15.md)
+records the latest optimization measurements, tests and remaining hosting limits.
+
+[Product Master catalog](validation/PRODUCT_MASTER_CATALOG_2026-10-15.md) records the
+current undated upload → review → Save changes flow, count reconciliation, deletion
+and focused checks. The earlier monthly upload design is retained as a historical
+deployment record only.
+
 ## Shared implementation contracts
 
 - [M1.3 authentication and RBAC](13_AUTH_RBAC_CONTRACT.md): schema, login/current-user
