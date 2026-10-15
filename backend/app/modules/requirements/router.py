@@ -5,12 +5,13 @@ from typing import Annotated, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger("app.modules.requirements.router")
 
 from app.db.session import get_db
-from app.models.requirements import MonthlyRequirementPlan, RequirementStatus
+from app.models.requirements import MonthlyRequirementPlan, RequirementLineItem, RequirementStatus
 from app.schemas.auth import CurrentUser
 from app.schemas.requirements import (
     AggregatedRequirementResponse,
@@ -283,11 +284,52 @@ def handle_approve_plan(
             detail=f"Cannot approve plan in '{plan.status.value}' status. Plan is already {plan.status.value}.",
         )
 
+    # Empty plan validation: must have at least one line item
+    item_count = session.scalar(
+        select(func.count(RequirementLineItem.id)).where(RequirementLineItem.plan_id == plan.id)
+    ) or 0
+    if item_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot approve an empty plan. Add at least one requirement line item before approving.",
+        )
+
     plan.status = RequirementStatus.APPROVED
     session.commit()
     session.refresh(plan)
 
     # Automatic background aggregation upon plan approval
+    try:
+        run_monthly_aggregation(session, month=plan.month, year=plan.year)
+    except Exception:
+        pass
+
+    return _to_plan_response(plan)
+
+
+def handle_reopen_plan(
+    plan_id: UUID,
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> MonthlyRequirementPlanResponse:
+    """Transition status from APPROVED back to DRAFT for corrections or additions. Strictly protected: Admin or Planner."""
+    require_admin_or_planner_role(current_user)
+
+    plan = session.get(MonthlyRequirementPlan, plan_id)
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monthly requirement plan not found.")
+
+    if plan.status != RequirementStatus.APPROVED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot reopen plan in '{plan.status.value}' status. Only APPROVED plans can be reopened.",
+        )
+
+    plan.status = RequirementStatus.DRAFT
+    session.commit()
+    session.refresh(plan)
+
+    # Re-run monthly aggregation to update company-wide totals
     try:
         run_monthly_aggregation(session, month=plan.month, year=plan.year)
     except Exception:
@@ -328,6 +370,7 @@ router.add_api_route("/plans/{plan_id}/items/{item_id}", handle_delete_line_item
 router.add_api_route("/plans/{plan_id}/items/bulk", handle_bulk_upload_items, methods=["POST"], response_model=BulkUploadResponse)
 router.add_api_route("/plans/{plan_id}/submit", handle_submit_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
 router.add_api_route("/plans/{plan_id}/approve", handle_approve_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
+router.add_api_route("/plans/{plan_id}/reopen", handle_reopen_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
 router.add_api_route("/aggregate/{month}/{year}", handle_get_aggregated_requirements, methods=["GET"], response_model=list[AggregatedRequirementResponse])
 router.add_api_route("/aggregate/{month}/{year}", handle_run_aggregation, methods=["POST"], response_model=AggregationRunResponse)
 
@@ -340,6 +383,7 @@ plans_router.add_api_route("/{plan_id}/items/{item_id}", handle_delete_line_item
 plans_router.add_api_route("/{plan_id}/items/bulk", handle_bulk_upload_items, methods=["POST"], response_model=BulkUploadResponse)
 plans_router.add_api_route("/{plan_id}/submit", handle_submit_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
 plans_router.add_api_route("/{plan_id}/approve", handle_approve_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
+plans_router.add_api_route("/{plan_id}/reopen", handle_reopen_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
 plans_router.add_api_route("/aggregate/{month}/{year}", handle_get_aggregated_requirements, methods=["GET"], response_model=list[AggregatedRequirementResponse])
 plans_router.add_api_route("/aggregate/{month}/{year}", handle_run_aggregation, methods=["POST"], response_model=AggregationRunResponse)
 

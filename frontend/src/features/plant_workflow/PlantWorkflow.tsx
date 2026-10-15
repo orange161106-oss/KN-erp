@@ -6,12 +6,14 @@ import {
   AlertTriangle,
   Sparkles,
   X,
+  Unlock,
 } from 'lucide-react';
 import { useAuth } from '../auth/context';
 import {
   fetchPlans,
   createPlan,
   approvePlan,
+  reopenPlan,
   bulkUploadItems,
   createSingleLineItem,
   updateLineItem,
@@ -110,6 +112,17 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
       await loadAllPlans();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Failed to approve plan.';
+      showToast(msg, 'error');
+    }
+  };
+
+  const handleReopenPlant = async (planId: string, plantName: string) => {
+    try {
+      await reopenPlan(planId);
+      showToast(`Unlocked ${plantName} plan for editing!`, 'success');
+      await loadAllPlans();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to reopen plan.';
       showToast(msg, 'error');
     }
   };
@@ -315,23 +328,49 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
           {currentPlantTabPlan && currentPlantTabPlan.status !== 'APPROVED' && (
             <button
               type="button"
+              disabled={(currentPlantTabPlan.line_items?.length ?? 0) === 0}
+              title={
+                (currentPlantTabPlan.line_items?.length ?? 0) === 0
+                  ? 'Cannot approve an empty plan. Add items first.'
+                  : undefined
+              }
               onClick={() =>
                 handleDirectApprovePlant(
                   currentPlantTabPlan.id,
                   tabs.find((t) => t.key === activeTab)?.label || activeTab
                 )
               }
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer"
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg shadow-xs transition-colors ${
+                (currentPlantTabPlan.line_items?.length ?? 0) === 0
+                  ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed shadow-none'
+                  : 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
+              }`}
             >
               <CheckCircle2 className="w-3.5 h-3.5" />
               <span>Approve {tabs.find((t) => t.key === activeTab)?.label}</span>
             </button>
           )}
           {currentPlantTabPlan && currentPlantTabPlan.status === 'APPROVED' && (
-            <span className="inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              Approved & Locked
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Approved & Locked
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  handleReopenPlant(
+                    currentPlantTabPlan.id,
+                    tabs.find((t) => t.key === activeTab)?.label || activeTab
+                  )
+                }
+                className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg border border-amber-300 text-amber-800 bg-amber-50 hover:bg-amber-100 shadow-2xs transition-colors cursor-pointer"
+                title="Reopen approved plan to add or edit line items"
+              >
+                <Unlock className="w-3.5 h-3.5 text-amber-600" />
+                <span>Reopen / Unlock</span>
+              </button>
+            </div>
           )}
         </div>
 
