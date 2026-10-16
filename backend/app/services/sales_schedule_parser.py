@@ -41,6 +41,8 @@ DEFAULT_CUSTOMERS = [
         "code": "CUST-AL",
         "name": "Ashok Leyland",
         "aliases": [
+            {"alias": "ASHOK LEYLAND - CHILD PARTS", "group": "Child Parts"},
+            {"alias": "ASHOK LEYLAND CHILD PARTS", "group": "Child Parts"},
             {"alias": "ASHOK LEYLAND", "group": None},
         ],
     },
@@ -55,6 +57,7 @@ DEFAULT_CUSTOMERS = [
         "code": "CUST-TAFE-FED",
         "name": "TAFE FED",
         "aliases": [
+            {"alias": "TAFE FED Assy Part", "group": "Assy Part"},
             {"alias": "TAFE FED Component", "group": "Component"},
             {"alias": "TAFE FED Child Parts", "group": "Child Parts"},
             {"alias": "TAFE FED", "group": None},
@@ -115,11 +118,14 @@ def seed_default_customers_and_aliases(session: Session) -> None:
     existing_aliases = set(session.scalars(select(CustomerAlias.normalized_alias)).all())
 
     needed_custs = [c for c in DEFAULT_CUSTOMERS if c["code"] not in existing_codes]
-    needed_aliases = [
-        (c["code"], a) for c in DEFAULT_CUSTOMERS
-        for a in c["aliases"]
-        if normalize_alias(a["alias"]) not in existing_aliases
-    ]
+    needed_aliases = []
+    seen_norm = set(existing_aliases)
+    for c in DEFAULT_CUSTOMERS:
+        for a in c["aliases"]:
+            norm = normalize_alias(a["alias"])
+            if norm not in seen_norm:
+                needed_aliases.append((c["code"], a))
+                seen_norm.add(norm)
     if not needed_custs and not needed_aliases:
         return
 
@@ -256,54 +262,61 @@ class QuantityColumnMetadata:
 
 
 def detect_header_layout(rows: list[tuple[Any, ...]]) -> tuple[int, dict[str, int], list[QuantityColumnMetadata]]:
-    """Detect left column positions and all valid revision quantity columns.
-    
-    Returns:
-        header_row_index: Row index where column identities reside (0-based)
-        left_columns: {'s_no': idx, 'part_number': idx, 'item_id': idx, 'description': idx}
-        quantity_columns: list of QuantityColumnMetadata
+    """Detect left column positions and all valid revision quantity columns dynamically.
+
+    Does not depend on fixed row 4 or fixed column positions.
+    Scans for Part No. and Item ID / Description anywhere in the workbook,
+    and inspects the banner above the header dynamically by label and content.
     """
     left_columns: dict[str, int] = {}
     header_row_idx = -1
 
-    # Scan top 10 rows for Part No / Item ID / Description / S.No
-    for r_idx, row in enumerate(rows[:10]):
-        norm_cells = [re.sub(r"[^a-z0-9]", "", str(c or "").lower()) for c in row]
-        col_map = {}
+    def clean_norm(val: Any) -> str:
+        return re.sub(r"[^a-z0-9]", "", str(val or "").lower())
+
+    # Scan all rows in the workbook for Part No and Item ID
+    for r_idx, row in enumerate(rows):
+        norm_cells = [clean_norm(c) for c in row]
+        col_map: dict[str, int] = {}
         for c_idx, cell in enumerate(norm_cells):
-            if cell in ("sno", "slno", "serialno", "snumber"):
+            if cell in ("sno", "slno", "serialno", "snumber", "no", "sno."):
                 col_map["s_no"] = c_idx
-            elif cell in ("partno", "partnumber", "productcode", "productpartno"):
+            elif any(k in cell for k in ("partno", "partnumber", "productcode", "productpartno", "usedpartno")) or cell == "part":
                 col_map["part_number"] = c_idx
-            elif cell in ("itemid", "itemcode"):
+            elif any(k in cell for k in ("itemid", "itemcode", "consitemid")) or cell == "item":
                 col_map["item_id"] = c_idx
-            elif cell in ("partdescription", "description", "itemdescription", "productname"):
+            elif any(k in cell for k in ("partdescription", "description", "itemdescription", "productname", "partdesc", "desc", "usedfor")):
                 col_map["description"] = c_idx
 
-        if "description" in col_map and ("part_number" in col_map or "item_id" in col_map):
+        # Found if part_number and item_id both exist, or description with either part_number or item_id
+        if ("part_number" in col_map and "item_id" in col_map) or (
+            "description" in col_map and ("part_number" in col_map or "item_id" in col_map)
+        ):
             header_row_idx = r_idx
             left_columns = col_map
             break
 
     if header_row_idx == -1:
-        # Fallback: assume first row or look for any description column
-        for r_idx, row in enumerate(rows[:5]):
-            norm_cells = [re.sub(r"[^a-z0-9]", "", str(c or "").lower()) for c in row]
+        # Fallback: scan top 50 rows for description and any part-like header
+        for r_idx, row in enumerate(rows[:50]):
+            norm_cells = [clean_norm(c) for c in row]
+            col_map = {}
             for c_idx, cell in enumerate(norm_cells):
                 if "desc" in cell:
-                    left_columns["description"] = c_idx
+                    col_map["description"] = c_idx
                 if "part" in cell or "code" in cell:
-                    left_columns["part_number"] = c_idx
+                    col_map["part_number"] = c_idx
                 if "item" in cell:
-                    left_columns["item_id"] = c_idx
-                if "sno" in cell:
-                    left_columns["s_no"] = c_idx
-            if "description" in left_columns:
+                    col_map["item_id"] = c_idx
+                if "sno" in cell or cell == "no":
+                    col_map["s_no"] = c_idx
+            if "description" in col_map and ("part_number" in col_map or "item_id" in col_map):
                 header_row_idx = r_idx
+                left_columns = col_map
                 break
 
     if header_row_idx == -1:
-        raise ApplicationError("HEADER_NOT_FOUND", "Could not locate table header with Part No and Description.", 422)
+        raise ApplicationError("HEADER_NOT_FOUND", "Could not locate table header with Part No and Item ID / Description.", 422)
 
     # Defaults for missing left columns if possible
     if "part_number" not in left_columns:
@@ -313,22 +326,44 @@ def detect_header_layout(rows: list[tuple[Any, ...]]) -> tuple[int, dict[str, in
     if "description" not in left_columns:
         left_columns["description"] = 3
 
-    # Detect Quantity columns (columns to the right of Description)
-    max_left_col = max(left_columns.values())
-    num_cols = len(rows[header_row_idx]) if rows else 0
+    identified_left_cols = set(left_columns.values())
+    max_cols = max(len(r) for r in rows) if rows else 0
 
     quantity_columns: list[QuantityColumnMetadata] = []
 
-    # Check if we have 4-row header structure above or at header_row_idx
-    # In KNL's Pro.Order:
-    # row 0: Month label (e.g. Oct'26)
-    # row 1: Schedule given on (e.g. 22.09.2026)
-    # row 2: Month date (e.g. 01.10.2026)
-    # row 3: Revision label (e.g. R0)
-    has_four_tier = header_row_idx >= 3
+    # Detect sheet-wide banner labels from rows above header_row_idx (0..header_row_idx-1)
+    banner_rows = rows[:header_row_idx]
+    sheet_wide_month_label: Optional[str] = None
+    sheet_wide_period: Optional[str] = None
+    sheet_wide_schedule_date: Optional[datetime] = None
+    sheet_wide_month_date: Optional[datetime] = None
 
-    for col_idx in range(max_left_col + 1, num_cols):
-        # Check all cells in this column in rows 0..header_row_idx
+    for b_row in banner_rows:
+        for c_val in b_row:
+            if c_val is None:
+                continue
+            str_c = str(c_val).strip()
+            if not str_c:
+                continue
+            try:
+                p_cand = parse_period_string(c_val)
+                if not sheet_wide_period:
+                    sheet_wide_period = p_cand
+                    sheet_wide_month_label = str_c
+            except ApplicationError:
+                pass
+            d_cand = parse_date_value(c_val)
+            if d_cand:
+                if d_cand.day == 1 and not sheet_wide_month_date:
+                    sheet_wide_month_date = d_cand
+                elif d_cand.day != 1 and not sheet_wide_schedule_date:
+                    sheet_wide_schedule_date = d_cand
+
+    # Inspect all candidate columns (not in left_columns)
+    for col_idx in range(max_cols):
+        if col_idx in identified_left_cols:
+            continue
+
         col_cells = [rows[r][col_idx] if col_idx < len(rows[r]) else None for r in range(header_row_idx + 1)]
         col_text_combined = " ".join(str(c or "") for c in col_cells)
 
@@ -336,62 +371,83 @@ def detect_header_layout(rows: list[tuple[Any, ...]]) -> tuple[int, dict[str, in
         if is_value_column_header(col_text_combined):
             continue
 
-        if has_four_tier:
-            row0_val = col_cells[0]
-            row1_val = col_cells[1]
-            row2_val = col_cells[2]
-            row3_val = col_cells[3]
+        header_val = col_cells[header_row_idx] if header_row_idx < len(col_cells) else None
+        header_text = str(header_val or "").strip()
 
-            # Row 3 is typically the revision (R0, R1, R2, etc.)
-            rev_match = re.search(r"\b(R(?:0|[1-9][0-9]*))\b", str(row3_val or "").strip().upper())
-            if not rev_match:
-                # Might be row 0 or row 2
-                rev_match = re.search(r"\b(R(?:0|[1-9][0-9]*))\b", col_text_combined.upper())
+        # Check for revision R0, R1, R2, etc. in header cell or anywhere in this column's banner
+        rev_match = re.search(r"\b(R(?:0|[1-9][0-9]*))\b", header_text.upper())
+        if not rev_match:
+            for c in reversed(col_cells[:header_row_idx]):
+                m = re.search(r"\b(R(?:0|[1-9][0-9]*))\b", str(c or "").strip().upper())
+                if m:
+                    rev_match = m
+                    break
 
-            if rev_match:
-                revision_label = rev_match.group(1)
-                # Parse period from row 0 or row 2
+        norm_h = clean_norm(header_text)
+        is_qty_col = rev_match or "qty" in norm_h or "quantity" in norm_h or "planned" in norm_h
+        if not is_qty_col:
+            continue
+
+        rev_label = rev_match.group(1) if rev_match else "R0"
+
+        col_month_label: Optional[str] = None
+        col_period: Optional[str] = None
+        col_sched_date: Optional[datetime] = None
+        col_month_date: Optional[datetime] = None
+
+        # Check labeled rows in banner (rows where left columns indicate Month, Schedule date, etc.)
+        for r in range(header_row_idx):
+            cell_val = col_cells[r]
+            if cell_val is None or str(cell_val).strip() == "":
+                continue
+
+            left_label_str = " ".join(str(rows[r][lc] or "") for lc in identified_left_cols if lc < len(rows[r])).lower()
+            if "schedule" in left_label_str or "given" in left_label_str:
+                col_sched_date = parse_date_value(cell_val) or col_sched_date
+            elif "month date" in left_label_str or "effective" in left_label_str:
+                col_month_date = parse_date_value(cell_val) or col_month_date
+            elif "month" in left_label_str or "period" in left_label_str:
                 try:
-                    period_val = parse_period_string(row0_val)
+                    col_period = parse_period_string(cell_val)
+                    col_month_label = str(cell_val).strip()
                 except ApplicationError:
-                    try:
-                        period_val = parse_period_string(row2_val)
-                    except ApplicationError:
-                        continue
+                    pass
 
-                schedule_given_on = parse_date_value(row1_val)
-                month_date = parse_date_value(row2_val)
+            if not col_period:
+                try:
+                    col_period = parse_period_string(cell_val)
+                    col_month_label = str(cell_val).strip()
+                except ApplicationError:
+                    pass
 
-                quantity_columns.append(
-                    QuantityColumnMetadata(
-                        col_index=col_idx,
-                        month_label=str(row0_val or period_val).strip(),
-                        planning_period=period_val,
-                        revision_label=revision_label,
-                        schedule_given_on=schedule_given_on,
-                        month_date=month_date,
-                    )
-                )
-        else:
-            # Single-tier header (e.g. "Oct'26 R0" or "Quantity" / "Planned Qty")
-            header_cell = str(col_cells[header_row_idx] or "").strip()
-            rev_match = re.search(r"\b(R(?:0|[1-9][0-9]*))\b", header_cell.upper())
-            revision_label = rev_match.group(1) if rev_match else "R0"
+            d_val = parse_date_value(cell_val)
+            if d_val:
+                if d_val.day == 1 and not col_month_date:
+                    col_month_date = d_val
+                elif d_val.day != 1 and not col_sched_date:
+                    col_sched_date = d_val
+
+        final_period = col_period or sheet_wide_period
+        final_month_label = col_month_label or sheet_wide_month_label or (header_text if "r" not in header_text.lower() else "Sales Schedule")
+        if not final_period:
             try:
-                period_val = parse_period_string(header_cell)
+                final_period = parse_period_string(header_text)
             except ApplicationError:
-                period_val = datetime.now().strftime("%Y-%m")
+                final_period = datetime.now().strftime("%Y-%m")
 
-            norm = re.sub(r"[^a-z0-9]", "", header_cell.lower())
-            if "qty" in norm or "quantity" in norm or rev_match:
-                quantity_columns.append(
-                    QuantityColumnMetadata(
-                        col_index=col_idx,
-                        month_label=header_cell,
-                        planning_period=period_val,
-                        revision_label=revision_label,
-                    )
-                )
+        final_sched_date = col_sched_date or sheet_wide_schedule_date
+        final_month_date = col_month_date or sheet_wide_month_date
+
+        quantity_columns.append(
+            QuantityColumnMetadata(
+                col_index=col_idx,
+                month_label=final_month_label,
+                planning_period=final_period,
+                revision_label=rev_label,
+                schedule_given_on=final_sched_date,
+                month_date=final_month_date,
+            )
+        )
 
     if not quantity_columns:
         raise ApplicationError("QUANTITY_COLUMNS_MISSING", "No valid planned-quantity revision columns found.", 422)
@@ -439,23 +495,47 @@ def parse_sales_schedule_data(
     session: Session,
     target_period: Optional[str] = None,
     revision_label: Optional[str] = None,
+    *, seed_defaults: bool = True,
 ) -> dict[str, Any]:
-    """Parse sales schedule workbook rows using KNL two-pass block parser."""
-    seed_default_customers_and_aliases(session)
+    """Parse sales schedule workbook rows using KNL two-pass block parser.
+    
+    Dynamic: no hardcoded row numbers, counts, or customer positions.
+    """
+    if seed_defaults:
+        seed_default_customers_and_aliases(session)
 
     header_row_idx, left_cols, qty_cols = detect_header_layout(rows)
 
-    # Filter to specific quantity column if target_period and revision_label supplied
+    errors: list[str] = []
+    warnings: list[str] = []
+    needs_review_rows: list[dict[str, Any]] = []
+
+    # 1. Month-wise validation: check target_period against file banner/quantity columns
     active_qty_cols = qty_cols
     if target_period:
-        target_p = parse_period_string(target_period)
-        active_qty_cols = [q for q in active_qty_cols if q.planning_period == target_p]
+        try:
+            target_p = parse_period_string(target_period)
+            matched_qty_cols = [q for q in qty_cols if q.planning_period == target_p]
+            if not matched_qty_cols:
+                # Blocking error if selected month differs from file banner month
+                file_month = qty_cols[0].planning_period if qty_cols else "Unknown"
+                file_month_label = qty_cols[0].month_label if qty_cols else ""
+                errors.append(
+                    f"Month mismatch: Selected planning month '{target_period}' does not match the file banner month '{file_month}' ({file_month_label}). Please select {file_month} or upload the schedule for {target_period}."
+                )
+            else:
+                active_qty_cols = matched_qty_cols
+        except ApplicationError:
+            pass
+
     if revision_label:
         rev_clean = revision_label.strip().upper()
-        active_qty_cols = [q for q in active_qty_cols if q.revision_label == rev_clean]
+        rev_matched = [q for q in active_qty_cols if q.revision_label == rev_clean]
+        if rev_matched:
+            active_qty_cols = rev_matched
 
     if not active_qty_cols:
-        active_qty_cols = qty_cols  # keep all if filter yielded none
+        active_qty_cols = qty_cols
 
     # Load active aliases into memory map: normalized_alias -> (Customer, CustomerAlias)
     alias_results = session.execute(
@@ -476,7 +556,7 @@ def parse_sales_schedule_data(
 
     data_rows = rows[header_row_idx + 1 :]
 
-    # Pass 1: Scan rows to identify blocks and part rows
+    # Pass 1: Scan rows to identify blocks and part rows dynamically
     blocks: list[dict[str, Any]] = []
     current_heading: Optional[str] = None
     current_part_rows: list[dict[str, Any]] = []
@@ -497,24 +577,24 @@ def parse_sales_schedule_data(
         item_id = get_val(left_cols.get("item_id"))
         description = get_val(left_cols.get("description"))
 
-        # Combine text for row-level classification
         row_summary = f"{part_no} {item_id} {description}".strip()
 
         # Check for Grand Total
         if is_grand_total_row(row_summary) or any(is_grand_total_row(str(c)) for c in row[:5]):
-            # Record grand total quantities
             for q_col in active_qty_cols:
                 raw_qty = row[q_col.col_index] if q_col.col_index < len(row) else None
                 grand_total_quantities[q_col.key] = parse_decimal_safe(raw_qty)
-            break  # end of data
+            break
 
         # Check for Closing Total Row
-        if is_closing_row(row_summary) or any(is_closing_row(str(c)) for c in row[:5]):
-            raw_closing_label = description or part_no
-            closing_heading = raw_closing_label
-            # If current_heading is None, this closing row identifies the FIRST block (Ashok Leyland)
+        row_has_closing = is_closing_row(row_summary) or any(is_closing_row(str(c)) for c in row[: max(left_cols.values()) + 1])
+        if row_has_closing:
+            raw_closing_label = description or part_no or (s_no if not re.match(r"^\d+$", s_no) else "") or "TOTAL"
+            # If current_heading is None, this closing row identifies the block (e.g. "ASHOK LEYLAND - TOTAL")
             if not current_heading:
-                current_heading = re.sub(r"\s*[-–—]?\s*TOTAL\s*$", "", raw_closing_label, flags=re.IGNORECASE).strip()
+                current_heading = re.sub(r"\s*[-–—:]?\s*TOTAL\s*$", "", raw_closing_label, flags=re.IGNORECASE).strip()
+            if not current_heading:
+                current_heading = "First Block"
 
             closing_totals: dict[str, Decimal] = {}
             for q_col in active_qty_cols:
@@ -531,58 +611,76 @@ def parse_sales_schedule_data(
             current_part_rows = []
             continue
 
-        # Check if Heading Row (e.g. "TAFE", "TAFE FED Component", "JOB WORK")
-        # Heading rows typically have empty S.No, no Item ID, and empty/zero quantities
-        has_id = bool(part_no or item_id)
+        # Check for Heading Row: text in description, part_no, or s_no, no item_id, no numeric S.No, no positive qty
         has_qty = any(
             parse_decimal_safe(row[q_col.col_index] if q_col.col_index < len(row) else None) > 0
             for q_col in active_qty_cols
         )
-
-        is_heading_candidate = (
+        candidate_heading = (
             description
+            or (part_no if not item_id and not re.match(r"^\d+$", part_no) else "")
+            or (s_no if not re.match(r"^\d+$", s_no) else "")
+        ).strip()
+        is_heading_candidate = (
+            bool(candidate_heading)
             and not item_id
             and not has_qty
             and not re.match(r"^\d+$", s_no)
+            and not row_has_closing
         )
 
         if is_heading_candidate:
-            current_heading = description
+            if current_part_rows:
+                blocks.append({
+                    "heading_text": current_heading or "Preceding Block",
+                    "closing_label": current_heading or "Preceding Block",
+                    "part_rows": current_part_rows,
+                    "closing_totals": {},
+                })
+            current_heading = candidate_heading
             current_part_rows = []
             continue
 
-        # Part Row
-        if not part_no and not item_id and not description:
+        # Check for Part Row: Part No or Item ID filled, not containing TOTAL
+        if (part_no or item_id) and not row_has_closing:
+            quantities: dict[str, Decimal] = {}
+            for q_col in active_qty_cols:
+                raw_qty = row[q_col.col_index] if q_col.col_index < len(row) else None
+                quantities[q_col.key] = parse_decimal_safe(raw_qty)
+
+            is_mapped_part = (
+                part_no in product_code_set
+                or part_no in product_part_set
+                or item_id in product_item_set
+                or item_id in product_code_set
+            )
+
+            current_part_rows.append({
+                "source_row": source_row_num,
+                "s_no": s_no,
+                "part_no": part_no,
+                "item_id": item_id,
+                "description": description,
+                "quantities": quantities,
+                "is_mapped_part": is_mapped_part,
+            })
             continue
 
-        quantities: dict[str, Decimal] = {}
-        for q_col in active_qty_cols:
-            raw_qty = row[q_col.col_index] if q_col.col_index < len(row) else None
-            quantities[q_col.key] = parse_decimal_safe(raw_qty)
-
-        # Check master mapping
-        is_mapped_part = (
-            part_no in product_code_set
-            or part_no in product_part_set
-            or item_id in product_item_set
-            or item_id in product_code_set
-        )
-
-        current_part_rows.append({
-            "source_row": source_row_num,
-            "s_no": s_no,
-            "part_no": part_no,
-            "item_id": item_id,
-            "description": description,
-            "quantities": quantities,
-            "is_mapped_part": is_mapped_part,
-        })
+        # Unrecognized row: record in needs_review_rows
+        if any(c is not None and str(c).strip() != "" for c in row):
+            needs_review_rows.append({
+                "excel_row": source_row_num,
+                "text": row_summary[:120],
+                "reason": "Unrecognised row format (appears as both heading and part or has irregular structure)",
+            })
+            if has_qty:
+                warnings.append(f"Row {source_row_num} has unrecognized format with quantity; verify reconciliation.")
 
     # Close any dangling block
-    if current_part_rows and current_heading:
+    if current_part_rows:
         blocks.append({
-            "heading_text": current_heading,
-            "closing_label": current_heading,
+            "heading_text": current_heading or "Remaining Parts",
+            "closing_label": current_heading or "Remaining Parts",
             "part_rows": current_part_rows,
             "closing_totals": {},
         })
@@ -590,11 +688,10 @@ def parse_sales_schedule_data(
     # Pass 2: Alias Resolution & Reconciliation
     processed_blocks: list[dict[str, Any]] = []
     unmapped_headings: list[str] = []
-    warnings: list[str] = []
-    errors: list[str] = []
     all_flat_rows: list[dict[str, Any]] = []
 
-    grand_sum_by_revision: dict[str, Decimal] = {q.key: Decimal("0.0000") for q in active_qty_cols}
+    grand_sum_all: dict[str, Decimal] = {q.key: Decimal("0.0000") for q in active_qty_cols}
+    grand_sum_customer: dict[str, Decimal] = {q.key: Decimal("0.0000") for q in active_qty_cols}
 
     for b_idx, block in enumerate(blocks):
         heading = block["heading_text"]
@@ -616,15 +713,23 @@ def parse_sales_schedule_data(
             group_label = alias_obj.group_label
             is_mapped = True
         else:
+            customer_name = heading
+            customer_code = ""
+            customer_id = None
+            group_label = "Job Work" if section_type == "JOB_WORK" else None
+            is_mapped = False
             if heading not in unmapped_headings:
                 unmapped_headings.append(heading)
+            warnings.append(f"Unknown company heading detected: '{heading}'. Map this heading to an existing Customer Master record.")
 
-        # Block quantity reconciliation
+        # Block quantity reconciliation against ITS OWN closing row
         block_sums: dict[str, Decimal] = {q.key: Decimal("0.0000") for q in active_qty_cols}
         for p_row in block["part_rows"]:
             for q_key, q_val in p_row["quantities"].items():
                 block_sums[q_key] += q_val
-                grand_sum_by_revision[q_key] += q_val
+                grand_sum_all[q_key] += q_val
+                if section_type != "JOB_WORK":
+                    grand_sum_customer[q_key] += q_val
 
         reconciliation_ok = True
         reconciliation_diffs: dict[str, str] = {}
@@ -638,7 +743,7 @@ def parse_sales_schedule_data(
                     reconciliation_ok = False
                     reconciliation_diffs[q_key] = str(diff)
                     warnings.append(
-                        f"Block '{heading}' sum ({part_sum}) differs from sheet total ({sheet_total}) for {q_col.revision_label}. Diff: {diff}."
+                        f"Block '{heading}' sum ({part_sum}) differs from sheet closing total ({sheet_total}) for {q_col.revision_label}. Diff: {diff}."
                     )
 
         # Build flat rows with Customer, Customer ID, Group
@@ -688,21 +793,19 @@ def parse_sales_schedule_data(
     grand_diffs: dict[str, str] = {}
     for q_col in active_qty_cols:
         q_key = q_col.key
-        parts_total = grand_sum_by_revision[q_key]
+        parts_total = grand_sum_all[q_key]
+        cust_total = grand_sum_customer[q_key]
         sheet_grand = grand_total_quantities.get(q_key)
         if sheet_grand is not None and sheet_grand > 0:
-            diff = abs(parts_total - sheet_grand)
-            if diff > Decimal("0.0001"):
+            diff_all = abs(parts_total - sheet_grand)
+            diff_cust = abs(cust_total - sheet_grand)
+            best_diff = min(diff_all, diff_cust)
+            if best_diff > Decimal("0.0001"):
                 grand_reconciliation_ok = False
-                grand_diffs[q_key] = str(diff)
+                grand_diffs[q_key] = str(best_diff)
                 warnings.append(
-                    f"Grand total check failed for {q_col.revision_label}: Sum of blocks ({parts_total}) does not match sheet Grand Total ({sheet_grand}). Diff: {diff}."
+                    f"Grand total check failed for {q_col.revision_label}: Sum of blocks ({parts_total}) does not match sheet Grand Total ({sheet_grand}). Diff: {best_diff}."
                 )
-
-    if unmapped_headings:
-        errors.append(
-            f"{len(unmapped_headings)} unknown company heading(s) detected: {', '.join(unmapped_headings)}. Please map them to continue."
-        )
 
     # Check for duplicate parts within blocks
     for b in processed_blocks:
@@ -714,7 +817,7 @@ def parse_sales_schedule_data(
                 warnings.append(f"Duplicate part '{r['product_code']}' in block '{b['heading_text']}'.")
             seen_parts.add(key)
 
-    can_confirm = len(unmapped_headings) == 0 and len(all_flat_rows) > 0
+    can_confirm = len(errors) == 0 and len(unmapped_headings) == 0 and len(all_flat_rows) > 0
 
     return {
         "header_row_index": header_row_idx + 1,
@@ -723,13 +826,14 @@ def parse_sales_schedule_data(
         "blocks": processed_blocks,
         "unmapped_aliases": unmapped_headings,
         "grand_total": {
-            "parts_sum": {k: format(v, ".4f") for k, v in grand_sum_by_revision.items()},
+            "parts_sum": {k: format(v, ".4f") for k, v in grand_sum_all.items()},
             "sheet_grand_total": {k: format(v, ".4f") for k, v in grand_total_quantities.items()},
             "reconciliation_ok": grand_reconciliation_ok,
             "diffs": grand_diffs,
         },
         "total_part_rows": len(all_flat_rows),
         "sample_rows": all_flat_rows[:50],
+        "needs_review_rows": needs_review_rows,
         "can_confirm": can_confirm,
         "warnings": warnings,
         "errors": errors,

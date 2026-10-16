@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import require_admin_role
 from app.core.errors import ApplicationError
@@ -37,7 +38,13 @@ async def bulk_upload_consumables(
     current_user: Annotated[CurrentUser, Depends(require_admin_role)] = None,
 ):
     contents = await file.read(15 * 1024 * 1024 + 1)
-    return service.bulk_upsert_consumables(session, contents, current_user.id, username=current_user.username)
+    return await run_in_threadpool(
+        service.bulk_upsert_consumables,
+        session,
+        contents,
+        current_user.id,
+        username=current_user.username,
+    )
 
 
 @router.get("/consumables")
@@ -71,7 +78,13 @@ async def bulk_upload_sales_parts(
     current_user: Annotated[CurrentUser, Depends(require_admin_role)] = None,
 ):
     contents = await file.read(15 * 1024 * 1024 + 1)
-    return service.bulk_upsert_sales_parts(session, contents, current_user.id, username=current_user.username)
+    return await run_in_threadpool(
+        service.bulk_upsert_sales_parts,
+        session,
+        contents,
+        current_user.id,
+        username=current_user.username,
+    )
 
 
 @router.get("/sales-parts")
@@ -170,7 +183,13 @@ async def bulk_upload_assemble(
     contents = await file.read(15 * 1024 * 1024 + 1)
     if len(contents) > 15 * 1024 * 1024:
         raise ApplicationError("FILE_TOO_LARGE", "File size exceeds the 15 MB limit.", 413)
-    return service.bulk_upsert_assemble(session, contents, current_user.id, username=current_user.username)
+    return await run_in_threadpool(
+        service.bulk_upsert_assemble,
+        session,
+        contents,
+        current_user.id,
+        username=current_user.username,
+    )
 
 
 @router.get("/assemble")

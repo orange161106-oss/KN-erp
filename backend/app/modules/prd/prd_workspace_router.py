@@ -3,7 +3,7 @@ from typing import Annotated, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
-from sqlalchemy.exc import DBAPIError, OperationalError
+from app.db.reliability import read_only
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -101,18 +101,18 @@ def bulk_delete_prd_workspace(
 
 
 @router.post("/inspect", response_model=PRDExcelInspectResponse)
-async def inspect_prd_excel(
+def inspect_prd_excel(
     user: CanCreatePRD,
     file: UploadFile = File(...),
 ):
-    contents = await file.read(10 * 1024 * 1024 + 1)
+    contents = file.file.read(10 * 1024 * 1024 + 1)
     if len(contents) > 10 * 1024 * 1024:
         raise ApplicationError('SOURCE_TOO_LARGE', 'Use a workbook of at most 10 MB.', 422)
     return service.inspect_prd_excel(contents, file.filename or "prd.xlsx")
 
 
 @router.post("/import-preview", response_model=SalesScheduleImportPreviewResponse)
-async def preview_sales_schedule(
+def preview_sales_schedule(
     user: CanCreatePRD,
     session: Annotated[Session, Depends(get_db)],
     file: UploadFile = File(...),
@@ -120,40 +120,17 @@ async def preview_sales_schedule(
     target_period: Optional[str] = Form(None),
     revision_label: Optional[str] = Form(None),
 ):
-    contents = await file.read(10 * 1024 * 1024 + 1)
+    contents = file.file.read(10 * 1024 * 1024 + 1)
     if len(contents) > 10 * 1024 * 1024:
         raise ApplicationError('SOURCE_TOO_LARGE', 'Use a workbook of at most 10 MB.', 422)
-    try:
-        return service.preview_sales_schedule_upload(
-            session=session,
-            file_bytes=contents,
-            filename=file.filename or "sales_schedule.xlsx",
-            sheet_name=sheet_name,
-            target_period=target_period,
-            revision_label=revision_label,
-        )
-    except (OperationalError, DBAPIError) as exc:
-        logger.warning("Database connection dropped during preview, disposing engine and retrying once: %s", exc)
-        session.rollback()
-        bind = session.get_bind()
-        if bind is not None:
-            bind.dispose()
-        try:
-            return service.preview_sales_schedule_upload(
-                session=session,
-                file_bytes=contents,
-                filename=file.filename or "sales_schedule.xlsx",
-                sheet_name=sheet_name,
-                target_period=target_period,
-                revision_label=revision_label,
-            )
-        except (OperationalError, DBAPIError) as retry_exc:
-            logger.error("Database connection dropped on retry: %s", retry_exc)
-            raise ApplicationError(
-                "DATABASE_UNAVAILABLE",
-                "The database connection was lost. Please retry.",
-                503,
-            )
+    return read_only(session, lambda: service.preview_sales_schedule_upload(
+        session=session,
+        file_bytes=contents,
+        filename=file.filename or "sales_schedule.xlsx",
+        sheet_name=sheet_name,
+        target_period=target_period,
+        revision_label=revision_label,
+    ))
 
 
 @router.post("/import-confirm", response_model=PRDExcelImportResponse)
@@ -173,11 +150,12 @@ def confirm_sales_schedule(
         alias_mappings=data.alias_mappings,
         mode=data.mode,
         reason=data.reason,
+        require_route_mapping=data.require_route_mapping,
     )
 
 
 @router.post("/import-sheet", response_model=PRDExcelImportResponse)
-async def import_prd_sheet(
+def import_prd_sheet(
     user: CanCreatePRD,
     session: Annotated[Session, Depends(get_db)],
     file: UploadFile = File(...),
@@ -187,7 +165,7 @@ async def import_prd_sheet(
     target_period: str | None = Form(default=None),
     revision_label: str | None = Form(default=None),
 ):
-    contents = await file.read(10 * 1024 * 1024 + 1)
+    contents = file.file.read(10 * 1024 * 1024 + 1)
     if len(contents) > 10 * 1024 * 1024:
         raise ApplicationError('SOURCE_TOO_LARGE', 'Use a workbook of at most 10 MB.', 422)
     return service.import_prd_excel(

@@ -6,6 +6,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from app.db.reliability import database_unavailable
 from app.core.errors import ApplicationError
 from app.domain.purchase_engine.orders import line_value, pending_quantity, satisfies_order_terms
 from app.models.audit import AuditLog
@@ -30,7 +31,7 @@ def transactional(function):
             session.rollback()
             if getattr(getattr(error, 'orig', None), 'sqlstate', None) in ('40001', '40P01'):
                 raise ApplicationError('PO_RETRY_REQUIRED', 'Source or allocation changed concurrently. Retry the unchanged request.', 409) from None
-            raise ApplicationError('DATABASE_UNAVAILABLE', 'Database is unavailable.', 503) from None
+            raise database_unavailable(error) from None
         except Exception:
             session.rollback()
             raise

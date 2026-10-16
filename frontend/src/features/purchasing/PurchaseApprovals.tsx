@@ -8,6 +8,7 @@ import type {
   ReviewPurchaseApprovalRequest,
 } from './types';
 import PurchaseWorkspace from './PurchaseWorkspace';
+import CentralRequirements from '../requirements/CentralRequirements';
 
 const STATUS_BADGES: Record<ApprovalStatus, string> = {
   PENDING: 'bg-yellow-100 text-yellow-800 border-yellow-200',
@@ -36,7 +37,7 @@ interface PurchaseApprovalsProps {
   currentUserId: string;
 }
 
-type TabKey = 'workspace' | 'queue' | 'handoff';
+type TabKey = 'central' | 'workspace' | 'queue' | 'handoff';
 
 export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsProps) {
   const { user } = useAuth();
@@ -51,7 +52,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
   const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.purchase_update : true));
   const hasActions = Boolean(isSuperAdmin || canUpdate);
 
-  const [activeTab, setActiveTab] = useState<TabKey>('workspace');
+  const [activeTab, setActiveTab] = useState<TabKey>(isSuperAdmin ? 'central' : 'workspace');
   const [items, setItems] = useState<PurchaseApprovalResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +62,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
   const fetchItems = useCallback(async () => {
     setLoading(true);
     setError(null);
-    if (activeTab === 'workspace') {
+    if (activeTab === 'workspace' || activeTab === 'central') {
       setLoading(false);
       return;
     }
@@ -173,6 +174,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
 
             {/* Navigation Tabs */}
             <nav className="flex gap-1 ml-2 border-l border-gray-200 pl-3">
+              <button type="button" onClick={()=>setActiveTab('central')} className="px-2.5 py-1 text-xs font-semibold rounded border">Central purchase assessment</button>
               <button
                 type="button"
                 onClick={() => setActiveTab('workspace')}
@@ -249,7 +251,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
 
       {/* Content Area */}
       <div className="flex-1 min-h-0 flex flex-col">
-        {activeTab === 'workspace' ? (
+        {activeTab === 'central' ? <CentralRequirements purchaseOnly/> : activeTab === 'workspace' ? (
           <PurchaseWorkspace canCreate={canUpdate} />
         ) : loading ? (
           <TableSkeleton columns={8 + (hasActions ? 1 : 0)} rows={5} />

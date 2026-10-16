@@ -12,7 +12,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.errors import ApplicationError
 from app.models.audit import AuditLog
@@ -915,8 +915,16 @@ def batch_update_stock_statement(session: Session, *, payload: StockStatementBat
         ).with_for_update().execution_options(populate_existing=True))
         if batch is None:
             raise ApplicationError("STATEMENT_CHANGED", "The active statement has changed. Refresh before saving.", 409)
+        # One lookup for the entire reviewed patch, retaining the batch lock,
+        # per-row validation and atomic audit/commit behavior.
+        lines_by_id = {line.id: line for line in session.scalars(
+            select(StockStatementLine).where(
+                StockStatementLine.batch_id == batch.id,
+                StockStatementLine.id.in_([update.id for update in payload.updates]),
+            ).execution_options(populate_existing=True)
+        )}
         for update in payload.updates:
-            line = session.get(StockStatementLine, update.id)
+            line = lines_by_id.get(update.id)
             if line is None or line.batch_id != batch.id:
                 raise ApplicationError("INVALID_STATEMENT_ROW", "A row does not belong to the selected statement.", 422)
             changes = update.model_dump(exclude_unset=True, exclude={"id"})
@@ -1014,6 +1022,9 @@ def get_stock_statement(
             StockStatementBatch.statement_month == month,
             StockStatementBatch.statement_year == year,
             StockStatementBatch.status == "active",
+        ).options(
+            joinedload(StockStatementBatch.creator).load_only(User.full_name, User.username),
+            joinedload(StockStatementBatch.updater).load_only(User.full_name, User.username),
         )
     )
 
@@ -1033,8 +1044,8 @@ def get_stock_statement(
         summary = StockStatementSummary()
         return StockStatementResponse(metadata=meta, summary=summary, records=[])
 
-    creator = session.get(User, batch.created_by) if batch.created_by else None
-    updater = session.get(User, batch.updated_by) if batch.updated_by else None
+    creator = batch.creator
+    updater = batch.updater
 
     # Fetch all active Consumable item_ids for live class derivation
     active_consumable_items = session.execute(
@@ -1231,7 +1242,7 @@ def get_stock_statement(
     )
 
     summary = StockStatementSummary(
-        item_count=len(records),
+        item_count=len(filtered_lines),
         consumable_count=consumable_count,
         product_or_other_count=other_items_count,
         unknown_count=0,
@@ -1535,11 +1546,12 @@ def list_stock_statement_history(
             StockStatementBatch.statement_year == year,
         )
         .order_by(StockStatementBatch.created_at.desc())
+        .options(joinedload(StockStatementBatch.uploader).load_only(User.full_name, User.username))
     ).all()
 
     items: list[StockStatementHistoryItem] = []
     for b in batches:
-        uploader = session.get(User, b.uploaded_by) if b.uploaded_by else None
+        uploader = b.uploader
         items.append(
             StockStatementHistoryItem(
                 batch_id=str(b.id),
@@ -1724,4 +1736,3 @@ def export_error_report_excel(issues: list[RowIssue], filename: str) -> tuple[by
         filename[:-4] if filename.lower().endswith(".xls") else filename
     )
     return buf.getvalue(), f"Error_Report_{clean_name}.xlsx"
-

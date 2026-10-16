@@ -1758,7 +1758,7 @@ def list_consumables_table(db: Session, q: Optional[str] = None, limit: int = 10
         "category": r[0].category or "",
         "type_of_material": r[0].type_of_material or "",
         "description": r[0].description or r[0].name or "",
-        "output_unit": r[0].output_unit or "PCS",
+        "output_unit": r[0].output_unit or "",
         "rate": float(r[0].rate) if r[0].rate is not None else None,
         "is_active": r[0].is_active,
     } for r in records]
@@ -1816,7 +1816,7 @@ def list_assemble_table(db: Session, q: Optional[str] = None, limit: int = 100, 
         "process_name": m.process_name or "",
         "material_thickness_in_mm_gsm": m.material_thickness_in_mm_gsm or "",
         "no_of_process_per_part": float(m.no_of_process_per_part) if m.no_of_process_per_part is not None else 1.0,
-        "output_unit": m.output_unit or "PCS",
+        "output_unit": m.output_unit or "",
         "rate": float(m.rate) if m.rate is not None else None,
         "is_active": m.is_active,
     } for m in records]
@@ -1848,6 +1848,11 @@ def update_product_master_item(
     actor_id: UUID,
     username: Optional[str] = None,
 ) -> dict:
+    # Reuse the catalog's optional-unit and Decimal validation for partial table
+    # edits, instead of applying the add-item form's fallback values.
+    from app.services import master_catalog as catalog
+    from app.services.master_uploads import number
+    from types import SimpleNamespace
     try:
         parsed_id = UUID(str(item_id))
     except ValueError:
@@ -1869,10 +1874,10 @@ def update_product_master_item(
                     raise ApplicationError("CONFLICT", f"Consumable Item ID '{new_code}' already exists.", 409)
                 row.item_id = new_code
 
-        if "output_unit" in data and data["output_unit"]:
-            unit = ensure_unit(db, data["output_unit"])
-            row.output_unit = unit.code
-            row.unit_id = unit.id
+        if "output_unit" in data:
+            values = {"output_unit": row.output_unit}
+            catalog.apply_edits("consumables", values, {"output_unit": str(data["output_unit"]) if data["output_unit"] is not None else None})
+            catalog.update_stock_unit(db, "consumables", row, values["output_unit"], SimpleNamespace(id=actor_id))
 
         if "supplier_id" in data or "supplier_name" in data:
             supplier = ensure_supplier(db, data.get("supplier_id"), data.get("supplier_name"))
@@ -1889,7 +1894,7 @@ def update_product_master_item(
             if desc:
                 row.name = desc[:255]
         if "rate" in data:
-            row.rate = _parse_decimal(data["rate"], None)
+            row.rate = number(data["rate"], "rate")
 
         row.is_active = True
         db.add(AuditLog(
@@ -1969,11 +1974,17 @@ def update_product_master_item(
         if "material_thickness_in_mm_gsm" in data:
             mapping.material_thickness_in_mm_gsm = str(data["material_thickness_in_mm_gsm"]).strip() if data["material_thickness_in_mm_gsm"] else None
         if "no_of_process_per_part" in data:
-            mapping.no_of_process_per_part = _parse_decimal(data["no_of_process_per_part"], Decimal("1.0000"))
-        if "output_unit" in data and data["output_unit"]:
-            mapping.output_unit = str(data["output_unit"]).strip().upper()
+            quantity = number(data["no_of_process_per_part"], "no_of_process_per_part")
+            if quantity is None:
+                raise ApplicationError("INVALID_MASTER_VALUE", "Process Count is required.", 422)
+            mapping.no_of_process_per_part = quantity
+        if "output_unit" in data:
+            values = {"output_unit": mapping.output_unit}
+            catalog.apply_edits("assemble", values, {"output_unit": str(data["output_unit"]) if data["output_unit"] is not None else None})
+            catalog.update_stock_unit(db, "assemble", mapping, values["output_unit"], SimpleNamespace(id=actor_id))
+            mapping.output_unit = values["output_unit"]
         if "rate" in data:
-            mapping.rate = _parse_decimal(data["rate"], None)
+            mapping.rate = number(data["rate"], "rate")
 
         mapping.is_active = True
         db.add(AuditLog(

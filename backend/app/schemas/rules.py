@@ -3,13 +3,14 @@ from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.rules.models import CalculationResult
 from app.domain.rules.types import RoundingPolicy, RuleType
 
 
 class ConsumptionNormBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     rule_type: RuleType
     consumable_id: UUID
     product_id: Optional[UUID] = None
@@ -18,9 +19,10 @@ class ConsumptionNormBase(BaseModel):
     parameters: dict[str, Any]
     unit_id: UUID
     rounding_policy: RoundingPolicy = RoundingPolicy.NONE
-    rounding_precision: int = 2
+    rounding_precision: int = Field(default=2, ge=0, le=4)
     effective_from: date
     effective_to: Optional[date] = None
+    reference_data: Optional[dict[str, Any]] = None
 
 
 class ConsumptionNormCreate(ConsumptionNormBase):
@@ -28,12 +30,15 @@ class ConsumptionNormCreate(ConsumptionNormBase):
 
 
 class ConsumptionNormUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     parameters: Optional[dict[str, Any]] = None
     rounding_policy: Optional[RoundingPolicy] = None
-    rounding_precision: Optional[int] = None
+    rounding_precision: Optional[int] = Field(default=None, ge=0, le=4)
     effective_from: Optional[date] = None
     effective_to: Optional[date] = None
     is_active: Optional[bool] = None
+    reference_data: Optional[dict[str, Any]] = None
+    expected_version: Optional[int] = Field(default=None, ge=1)
 
 
 class ConsumptionNormResponse(ConsumptionNormBase):
@@ -51,6 +56,24 @@ class ConsumptionNormResponse(ConsumptionNormBase):
     process_name: Optional[str] = None
     plant_name: Optional[str] = None
     unit_code: Optional[str] = None
+    product_part_number: Optional[str] = None
+    product_item_id: Optional[str] = None
+
+
+class ConsumptionNormBatchItem(ConsumptionNormUpdate):
+    norm_id: UUID
+    expected_version: int = Field(ge=1)
+
+
+class ConsumptionNormBatchUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    updates: list[ConsumptionNormBatchItem] = Field(min_length=1, max_length=1000)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ConsumptionNormBatchResponse(BaseModel):
+    updated_count: int
+    records: list[ConsumptionNormResponse]
 
 
 class EvaluationRequest(BaseModel):

@@ -5,6 +5,7 @@ from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.db.reliability import database_unavailable
 from app.core.errors import ApplicationError
 from app.domain.purchase_engine.orders import pending_quantity
 from app.repositories import inventory_purchase_reports as repository
@@ -19,8 +20,8 @@ def _database(function):
     def wrapped(*args, **kwargs):
         try:
             return function(*args, **kwargs)
-        except SQLAlchemyError:
-            raise ApplicationError('DATABASE_UNAVAILABLE', 'Database is unavailable.', 503) from None
+        except SQLAlchemyError as error:
+            raise database_unavailable(error) from None
     return wrapped
 
 

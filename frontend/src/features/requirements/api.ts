@@ -193,6 +193,11 @@ export async function rejectPlan(planId: string, reason?: string): Promise<Month
   return response.data;
 }
 
+export async function reopenPlan(planId: string): Promise<MonthlyRequirementPlan> {
+  const response = await requirementsClient.patch<MonthlyRequirementPlan>(`/api/v1/requirements/plans/${planId}/reopen`);
+  return response.data;
+}
+
 export interface FormulaGenerationResponse {
   month: number;
   year: number;

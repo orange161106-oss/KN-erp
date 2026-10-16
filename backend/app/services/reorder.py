@@ -1,6 +1,7 @@
 """Compose a read-only assessment from the authoritative M4.2 report."""
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.db.reliability import database_unavailable
 from app.core.errors import ApplicationError
 from app.domain.inventory_engine.reorder import Calendar, assess
 from app.repositories import projection as repository
@@ -24,8 +25,8 @@ def report(session, data: ReorderRequest):
     if lead:
         try:
             mapped = repository.supplier_mapping_exists(session, data.consumable_id, lead.supplier_id)
-        except SQLAlchemyError:
-            raise ApplicationError('DATABASE_UNAVAILABLE', 'Database is unavailable.', 503) from None
+        except SQLAlchemyError as error:
+            raise database_unavailable(error) from None
         if not mapped:
             raise ApplicationError('SUPPLIER_MAPPING_MISSING', 'The lead-time supplier must be mapped to this consumable.', 409)
         if source.inputs.lead_time and source.inputs.lead_time.supplier_id != lead.supplier_id:

@@ -12,6 +12,10 @@ class CalculationRunRequest(BaseModel):
     force_recalculate: bool = True
 
 
+class CalculatedRevisionApprovalRequest(BaseModel):
+    acknowledge_missing_norms: bool = False
+
+
 class CalculatedRevisionApprovalResponse(BaseModel):
     planning_version_id: UUID
     status: str
@@ -27,7 +31,7 @@ class CalculatedRequirementResponse(BaseModel):
     product_id: UUID
     product_code: Optional[str] = None
     product_name: Optional[str] = None
-    plant_id: UUID
+    plant_id: UUID | None
     plant_name: Optional[str] = None
     process_id: UUID
     process_name: Optional[str] = None
@@ -76,7 +80,9 @@ class ConsumableAggregateItem(BaseModel):
     uom: str
     total_raw_requirement: Decimal
     total_calculated_qty: Decimal
+    total_basic_requirement: Optional[Decimal] = None
     line_items_count: int
+    parts_breakdown: Optional[list[dict[str, Any]]] = None
 
 
 class RequirementCalculationRunResponse(BaseModel):
@@ -89,6 +95,12 @@ class RequirementCalculationRunResponse(BaseModel):
     error_count: int
     summary_by_consumable: list[ConsumableAggregateItem]
     errors: list[RequirementCalculationErrorResponse]
+    has_missing_norms: Optional[bool] = False
+    missing_parts_count: Optional[int] = 0
+    missing_parts_qty: Optional[Decimal] = Decimal('0')
+    no_consumption_norms: Optional[list[dict[str, Any]]] = None
+    duplicate_norm_groups_count: Optional[int] = 0
+    duplicate_groups_warning: Optional[str] = None
 
 
 class MonthlyRequirementPlanCreate(BaseModel):

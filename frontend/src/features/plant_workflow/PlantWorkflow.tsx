@@ -10,6 +10,7 @@ import {
   RotateCcw,
   Clock,
   FileCheck2,
+  Unlock,
 } from 'lucide-react';
 import { useAuth } from '../auth/context';
 import {
@@ -19,6 +20,7 @@ import {
   submitPlan,
   rejectPlan,
   calculateFormulas,
+  reopenPlan,
   bulkUploadItems,
   createSingleLineItem,
   updateLineItem,
@@ -27,6 +29,7 @@ import {
   type UpdateLineItemPayload,
 } from '../requirements/api';
 import PlanGrid from '../requirements/PlanGrid';
+import CentralRequirements from '../requirements/CentralRequirements';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -58,7 +61,14 @@ interface PlantWorkflowProps {
   currentUserId: string;
 }
 
-export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWorkflowProps) {
+export default function PlantWorkflow(props: PlantWorkflowProps) {
+  const {user}=useAuth();
+  const [central,setCentral]=useState(Boolean(user?.is_super_admin));
+  if(!user?.is_super_admin) return <LegacyPlantWorkflow {...props}/>;
+  return <div className="space-y-3 min-w-0"><div className="flex gap-2"><button className="rounded border bg-white px-4 py-2" onClick={()=>setCentral(true)}>Central plan review</button><button className="rounded border bg-white px-4 py-2" onClick={()=>setCentral(false)}>Existing plant plans</button></div>{central?<CentralRequirements/>:<LegacyPlantWorkflow {...props}/>}</div>;
+}
+
+function LegacyPlantWorkflow({ currentUserId: _currentUserId }: PlantWorkflowProps) {
   const { user } = useAuth();
   const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const isAdminOrPlanner = Boolean(
@@ -199,6 +209,17 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
       showToast(msg, 'error');
     } finally {
       setSubmittingReject(false);
+    }
+  };
+
+  const handleReopenPlant = async (planId: string, plantName: string) => {
+    try {
+      await reopenPlan(planId);
+      showToast(`Unlocked ${plantName} plan for editing!`, 'success');
+      await loadAllPlans();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to reopen plan.';
+      showToast(msg, 'error');
     }
   };
 
@@ -482,8 +503,18 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
                 {currentPlantTabPlan && currentPlanStatus !== 'APPROVED' && isAdminOrPlanner && (
                   <button
                     type="button"
+                    disabled={(currentPlantTabPlan.line_items?.length ?? 0) === 0}
+                    title={
+                      (currentPlantTabPlan.line_items?.length ?? 0) === 0
+                        ? 'Cannot approve an empty plan. Add items first.'
+                        : undefined
+                    }
                     onClick={() => handleDirectApprovePlant(currentPlantTabPlan.id, activePlantLabel)}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer transition-colors"
+                    className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg shadow-xs transition-colors ${
+                      (currentPlantTabPlan.line_items?.length ?? 0) === 0
+                        ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed shadow-none'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
+                    }`}
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     <span>Approve {activePlantLabel}</span>
@@ -498,12 +529,25 @@ export default function PlantWorkflow({ currentUserId: _currentUserId }: PlantWo
                   </span>
                 )}
 
-                {/* If APPROVED: Display locked confirmation pill */}
+                {/* If APPROVED: Display locked confirmation pill + Reopen button */}
                 {currentPlantTabPlan && currentPlanStatus === 'APPROVED' && (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200">
-                    <FileCheck2 className="w-3.5 h-3.5" />
-                    Locked & Aggregated
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      <FileCheck2 className="w-3.5 h-3.5" />
+                      Locked & Aggregated
+                    </span>
+                    {isAdminOrPlanner && (
+                      <button
+                        type="button"
+                        onClick={() => handleReopenPlant(currentPlantTabPlan.id, activePlantLabel)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg border border-amber-300 text-amber-800 bg-amber-50 hover:bg-amber-100 shadow-2xs transition-colors cursor-pointer"
+                        title="Reopen approved plan to add or edit line items"
+                      >
+                        <Unlock className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Reopen / Unlock</span>
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             </div>

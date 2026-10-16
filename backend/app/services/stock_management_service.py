@@ -10,8 +10,8 @@ import uuid
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import case, func, select
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.errors import ApplicationError
 from app.models.audit import AuditLog
@@ -1694,6 +1694,9 @@ def get_stock_management(
             StockParameterBatch.month == month,
             StockParameterBatch.year == year,
             StockParameterBatch.status == "active",
+        ).options(
+            joinedload(StockParameterBatch.creator).load_only(User.full_name, User.username),
+            joinedload(StockParameterBatch.updater).load_only(User.full_name, User.username),
         )
     )
 
@@ -1708,8 +1711,8 @@ def get_stock_management(
         summary = StockManagementSummary()
         return StockManagementResponse(metadata=meta, summary=summary, records=[])
 
-    creator = session.get(User, batch.created_by) if batch.created_by else None
-    updater = session.get(User, batch.updated_by) if batch.updated_by else None
+    creator = batch.creator
+    updater = batch.updater
 
     # Fetch all parameters in the batch first to compute multi-category stats accurately
     all_batch_params = session.scalars(
@@ -1853,13 +1856,30 @@ def batch_update_stock_parameters(
                 StockParameterBatch.status == "active",
             ).with_for_update().execution_options(populate_existing=True)
         )
-        if not batch:
-            raise ApplicationError("NOT_FOUND", f"No active stock management batch found for {MONTH_NAMES[req.month - 1]} {req.year}.", 404)
+        if batch is None:
+            raise ApplicationError(
+                "NOT_FOUND",
+                f"No active stock management batch found for {MONTH_NAMES[req.month - 1]} {req.year}.",
+                404,
+            )
+        if req.batch_id is not None and req.batch_id != batch.id:
+            raise ApplicationError("PARAMETERS_CHANGED", "Parameters were replaced. Refresh before saving.", 409)
 
         now_utc = datetime.now(timezone.utc)
+        parameters_by_id = {
+            param.id: param
+            for param in session.scalars(
+                select(StockParameter)
+                .where(
+                    StockParameter.batch_id == batch.id,
+                    StockParameter.id.in_([update.id for update in req.updates]),
+                )
+                .execution_options(populate_existing=True)
+            )
+        }
         for update_item in req.updates:
             param_id = update_item.id if isinstance(update_item.id, uuid.UUID) else uuid.UUID(str(update_item.id))
-            param = session.get(StockParameter, param_id)
+            param = parameters_by_id.get(param_id)
             if not param or param.batch_id != batch.id:
                 raise ApplicationError("INVALID_ROW", "A row does not belong to the selected parameter batch.", 422)
 
@@ -1915,18 +1935,24 @@ def list_stock_parameter_history(
     limit: int = 50,
 ) -> list[StockParameterHistoryItem]:
     """List historical upload batches for stock management."""
-    stmt = select(StockParameterBatch)
+    stmt = select(StockParameterBatch).options(
+        joinedload(StockParameterBatch.uploader).load_only(User.full_name, User.username)
+    )
     if month is not None:
         stmt = stmt.where(StockParameterBatch.month == month)
     if year is not None:
         stmt = stmt.where(StockParameterBatch.year == year)
-    stmt = stmt.order_by(StockParameterBatch.created_at.desc()).limit(limit)
+    stmt = (
+        stmt.order_by(StockParameterBatch.created_at.desc())
+        .limit(limit)
+        .options(joinedload(StockParameterBatch.uploader).load_only(User.full_name, User.username))
+    )
 
     batches = session.scalars(stmt).all()
 
     items: list[StockParameterHistoryItem] = []
     for b in batches:
-        uploader = session.get(User, b.uploaded_by) if b.uploaded_by else None
+        uploader = b.uploader
         items.append(
             StockParameterHistoryItem(
                 batch_id=str(b.id),

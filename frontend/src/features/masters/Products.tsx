@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import axios from 'axios';
-import type { AxiosProgressEvent } from 'axios';
-import { apiClient, getAccessToken, getApiBaseUrl } from '../../api/client';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { apiClient } from '../../api/client';
+import MasterBulkWorkspace from './MasterBulkWorkspace';
+import ProductRowMenu from './ProductRowMenu';
 import { useAuth } from '../auth/context';
 import { TableSkeletonRows } from '../../components/ui/Skeleton';
+import HorizontalTableScroll from '../../components/ui/HorizontalTableScroll';
 
 type ActiveTab = 'consumables' | 'assemble' | 'sales_parts';
 
@@ -48,41 +49,23 @@ interface SalesPartRow {
   is_active: boolean;
 }
 
-interface AssembleRowIssue {
-  row: number;
-  column?: string;
-  error_code: string;
-  message: string;
-  raw_value?: string;
-  suggested_action?: string;
-}
-
-interface AssemblePreviewData {
-  file_token: string;
-  source_filename: string;
-  detected_header_row: number;
-  columns_matched: string[];
-  total_rows: number;
-  rows_to_add: number;
-  rows_to_update: number;
-  errors: AssembleRowIssue[];
-  warning_count: number;
-  error_count: number;
-  can_confirm: boolean;
-}
-
-interface AssembleJobStatus {
-  job_id: string;
-  status: string;
-  stage: string;
-  progress_percent: number;
-  total_rows: number;
-  upserted: number;
-  rows_added: number;
-  rows_updated: number;
-  errors: AssembleRowIssue[];
-  error_message?: string;
-}
+type RowMenuTarget = { category: 'consumables'; row: ConsumableRow } | { category: 'assemble'; row: AssembleRow };
+type InlineEditor = RowMenuTarget & { field?: string; draft: Record<string, string> };
+const INLINE_COLUMNS = {
+  consumables: [
+    ['supplier_id', 'Supplier ID', false], ['supplier_name', 'Supplier name', true], ['item_id', 'Item ID', false],
+    ['category', 'Category', true], ['type_of_material', 'Type of material', true], ['description', 'Description', true],
+    ['output_unit', 'Stock Unit', true], ['rate', 'Rate', true],
+  ],
+  assemble: [
+    ['consumable_item', 'Consumable Item', false], ['part_no_saleable_item', 'Saleable Part No.', false],
+    ['used_for_name_of_saleable_part', 'Saleable Part Name', true], ['used_part_no_prd_order', 'PRD Part No.', true],
+    ['process_name', 'Process', false], ['material_thickness_in_mm_gsm', 'Thickness / GSM', true],
+    ['no_of_process_per_part', 'Process Count', true], ['output_unit', 'Stock Unit', true], ['rate', 'Rate', true],
+  ],
+} as const;
+const cellValue = (row: ConsumableRow | AssembleRow, field: string) =>
+  String((row as unknown as Record<string, unknown>)[field] ?? '');
 
 export default function Products() {
   const { user } = useAuth();
@@ -100,6 +83,13 @@ export default function Products() {
   const canEdit = isAdmin;
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('consumables');
+  const [rowMenu, setRowMenu] = useState<(RowMenuTarget & { x: number; y: number; field?: string }) | null>(null);
+  const [inlineEditor, setInlineEditor] = useState<InlineEditor | null>(null);
+  const [inlineSaving, setInlineSaving] = useState(false);
+  const [inlineError, setInlineError] = useState('');
+  const closeRowMenu = useCallback(() => setRowMenu(null), []);
+  useEffect(closeRowMenu, [activeTab, isAdmin, closeRowMenu]);
+  useEffect(() => { if (!isAdmin) { setInlineEditor(null); setInlineError(''); } }, [isAdmin]);
 
   // Editing state for inline CRUD
   const [editingConsumableId, setEditingConsumableId] = useState<string | null>(null);
@@ -110,20 +100,11 @@ export default function Products() {
   // Loading & Notification states
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Bulk Upload Modal & Progress states
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadPhase, setUploadPhase] = useState<'idle' | 'uploading' | 'parsing'>('idle');
-  const [uploadError, setUploadError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [assemblePreview, setAssemblePreview] = useState<AssemblePreviewData | null>(null);
-  const [assembleJob, setAssembleJob] = useState<AssembleJobStatus | null>(null);
-  const [isConfirming, setIsConfirming] = useState<boolean>(false);
-
   const activeTabLabel = useMemo(() => {
     switch (activeTab) {
       case 'consumables':
@@ -211,8 +192,6 @@ export default function Products() {
   });
 
   // File Upload Drag & Drop State
-  const [dragActive, setDragActive] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ---------------------------------------------------------------------------
   // Data Fetching
@@ -262,21 +241,6 @@ export default function Products() {
     } catch {
       // safe fallback in test environments
     }
-  };
-
-  const startEditConsumable = (row: ConsumableRow) => {
-    setEditingConsumableId(row.id);
-    setConsumableForm({
-      supplier_id: row.supplier_id || '',
-      supplier_name: row.supplier_name || '',
-      item_id: row.item_id || '',
-      category: row.category || '',
-      type_of_material: row.type_of_material || '',
-      description: row.description || '',
-      output_unit: row.output_unit || 'PCS',
-      rate: row.rate !== null && row.rate !== undefined ? String(row.rate) : '',
-    });
-    safeScrollTop();
   };
 
   const cancelEditConsumable = () => {
@@ -342,22 +306,6 @@ export default function Products() {
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const startEditAssemble = (row: AssembleRow) => {
-    setEditingAssembleId(row.id);
-    setAssembleForm({
-      consumable_item: row.consumable_item || '',
-      part_no_saleable_item: row.part_no_saleable_item || '',
-      used_for_name_of_saleable_part: row.used_for_name_of_saleable_part || '',
-      used_part_no_prd_order: row.used_part_no_prd_order || '',
-      process_name: row.process_name || 'ASSEMBLY',
-      material_thickness_in_mm_gsm: row.material_thickness_in_mm_gsm || '',
-      no_of_process_per_part: row.no_of_process_per_part ? String(row.no_of_process_per_part) : '1.0',
-      output_unit: row.output_unit || 'PCS',
-      rate: row.rate !== null && row.rate !== undefined ? String(row.rate) : '',
-    });
-    safeScrollTop();
   };
 
   const cancelEditAssemble = () => {
@@ -503,6 +451,7 @@ export default function Products() {
     setActionLoadingId(id);
     try {
       await apiClient.patch(`/api/v1/masters/product-master/${category}/${id}/deactivate`, {});
+      setInlineEditor(previous => previous?.row.id === id ? null : previous);
       const msg = `Record "${name}" deactivated successfully.`;
       setFeedback({ type: 'success', message: msg });
       setToast({ type: 'success', message: msg });
@@ -514,271 +463,98 @@ export default function Products() {
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // Bulk Excel File Upload & Header Hunter Execution
-  // ---------------------------------------------------------------------------
+  const openRowMenu = (event: React.MouseEvent<HTMLTableRowElement> | React.KeyboardEvent<HTMLTableRowElement>, target: RowMenuTarget) => {
+    if (!isAdmin || submitting || inlineSaving || loading || actionLoadingId) return;
+    event.preventDefault();
+    event.currentTarget.focus({ preventScroll: true });
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const cell = (event.target as HTMLElement).closest('td');
+    const field = cell ? INLINE_COLUMNS[target.category][cell.cellIndex]?.[0] : undefined;
+    setRowMenu({ ...target, field, x: 'clientX' in event ? event.clientX : bounds.left + 24,
+      y: 'clientY' in event ? event.clientY : bounds.top + bounds.height });
+  };
 
-  const handleFileUpload = async (file: File) => {
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.xlsx')) {
-      const err = 'Please select a valid Excel (.xlsx) file.';
-      setUploadError(err);
-      setFeedback({ type: 'error', message: err });
-      return;
+  const editorChanges = (editor: InlineEditor) => Object.fromEntries(INLINE_COLUMNS[editor.category]
+    .filter(([key, , editable]) => editable && editor.draft[key] !== cellValue(editor.row, key))
+    .map(([key]) => [key, editor.draft[key].trim() || null]));
+
+  const leaveInlineEditor = () => {
+    if (inlineSaving) return false;
+    if (inlineEditor && Object.keys(editorChanges(inlineEditor)).length && !window.confirm('Discard the unsaved row edits?')) return false;
+    setInlineEditor(null); setInlineError('');
+    return true;
+  };
+  const changeTab = (tab: ActiveTab) => { if (tab !== activeTab && leaveInlineEditor()) setActiveTab(tab); };
+  const refreshTable = () => { if (leaveInlineEditor()) void loadData(); };
+
+  const beginInlineEdit = (target: RowMenuTarget, field?: string) => {
+    if (!isAdmin || inlineSaving) return;
+    if (field && !INLINE_COLUMNS[target.category].some(([key, , editable]) => key === field && editable)) return;
+    closeRowMenu();
+    if (inlineEditor?.row.id === target.row.id) {
+      setInlineEditor({ ...inlineEditor, field });
+    } else {
+      if (inlineEditor && Object.keys(editorChanges(inlineEditor)).length && !window.confirm('Discard the unsaved row edits?')) return;
+      setInlineEditor({ ...target, field, draft: Object.fromEntries(INLINE_COLUMNS[target.category].map(([key]) => [key, cellValue(target.row, key)])) });
     }
+    setInlineError('');
+  };
 
-    if (file.size > 15 * 1024 * 1024) {
-      const err = 'File size exceeds 15 MB limit. Please select a smaller file.';
-      setUploadError(err);
-      setFeedback({ type: 'error', message: err });
-      return;
-    }
-
-    setSelectedFile(file);
-    setUploading(true);
-    setUploadProgress(0);
-    setUploadPhase('uploading');
-    setUploadError(null);
-    setFeedback(null);
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    const token = getAccessToken();
-    const headers: Record<string, string> = {};
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-
-    // Two-step preview for Consumable for Assemble tab
-    if (activeTab === 'assemble') {
-      try {
-        const response = await axios.post<AssemblePreviewData>(
-          `${getApiBaseUrl()}/api/v1/masters/product-master/assemble/preview`,
-          formData,
-          {
-            headers,
-            timeout: 60000,
-            onUploadProgress: (progressEvent: AxiosProgressEvent) => {
-              if (progressEvent.total) {
-                const percent = Math.round((progressEvent.loaded / progressEvent.total) * 100);
-                setUploadProgress(percent);
-                if (percent >= 100) {
-                  setUploadPhase('parsing');
-                } else {
-                  setUploadPhase('uploading');
-                }
-              }
-            },
-          }
-        );
-
-        setAssemblePreview(response.data);
-        setUploading(false);
-        setUploadProgress(0);
-        setUploadPhase('idle');
-        return;
-      } catch (e: any) {
-        const isTimeout = e?.code === 'ECONNABORTED' || e?.message?.includes('timeout');
-        const errMsg = isTimeout
-          ? 'Preview generation timed out after 60 seconds. High network latency or large row processing took too long. You can click "Retry Upload" below.'
-          : e?.response?.data?.message ||
-            e?.response?.data?.detail ||
-            e?.message ||
-            'Failed to preview assemble file.';
-        setUploadError(errMsg);
-        setFeedback({ type: 'error', message: errMsg });
-        setUploading(false);
-        return;
-      }
-    }
-
-    // Direct upload for consumables and sales_parts tabs
-    let endpoint = '/api/v1/masters/product-master/consumables/bulk';
-    if (activeTab === 'sales_parts') {
-      endpoint = '/api/v1/masters/product-master/sales-parts/bulk';
-    }
-
+  const saveInlineEdit = async () => {
+    if (!inlineEditor || inlineSaving || !isAdmin) return;
+    const editor = inlineEditor;
+    const changes = editorChanges(editor);
+    if (!Object.keys(changes).length) { setInlineEditor(null); return; }
+    setInlineSaving(true); setInlineError('');
     try {
-      const response = await axios.post<{
-        total_rows: number;
-        upserted: number;
-        errors: string[];
-      }>(`${getApiBaseUrl()}${endpoint}`, formData, {
-        headers,
-        timeout: 60000,
-        onUploadProgress: (progressEvent: AxiosProgressEvent) => {
-          if (progressEvent.total) {
-            const percent = Math.round((progressEvent.loaded / progressEvent.total) * 100);
-            setUploadProgress(percent);
-            if (percent >= 100) {
-              setUploadPhase('parsing');
-            } else {
-              setUploadPhase('uploading');
-            }
-          }
-        },
-      });
-
-      const res = response.data;
-      const msg = `Bulk upload complete: ${res.upserted} records successfully upserted out of ${res.total_rows} evaluated rows.`;
-      setFeedback({ type: 'success', message: msg });
-      setToast({ type: 'success', message: msg });
-      if (res.errors && res.errors.length > 0) {
-        console.warn('Bulk upload row notices:', res.errors);
-      }
-
-      setIsUploadModalOpen(false);
-      setUploading(false);
-      setUploadProgress(0);
-      setUploadPhase('idle');
-      setSelectedFile(null);
-      await loadData();
-    } catch (e: any) {
-      const isTimeout = e?.code === 'ECONNABORTED' || e?.message?.includes('timeout');
-      const errMsg = isTimeout
-        ? 'Processing timed out after 60 seconds. High network latency or large row processing took too long. You can click "Retry Upload" below.'
-        : e?.response?.data?.message ||
-          e?.response?.data?.detail ||
-          e?.message ||
-          'Bulk upload failed.';
-      setUploadError(errMsg);
-      setFeedback({ type: 'error', message: errMsg });
-      setUploading(false);
-    }
+      // Send only edited values; never apply intake-form defaults to blank units.
+      const payload = { ...changes, ...(editor.category === 'consumables' && 'supplier_name' in changes
+        ? { supplier_id: editor.row.supplier_id } : {}) };
+      await apiClient.put(`/api/v1/masters/product-master/${editor.category}/${editor.row.id}`, payload);
+      const displayChanges = { ...changes,
+        ...('rate' in changes ? { rate: changes.rate === null ? null : Number(changes.rate) } : {}),
+        ...('no_of_process_per_part' in changes ? { no_of_process_per_part: Number(changes.no_of_process_per_part) } : {}),
+        ...('output_unit' in changes ? { output_unit: changes.output_unit?.toUpperCase() || '' } : {}),
+      };
+      if (editor.category === 'consumables') setConsumables(previous => previous.map(row => row.id === editor.row.id ? { ...row, ...displayChanges } as ConsumableRow : row));
+      else setAssembleRows(previous => previous.map(row => row.id === editor.row.id ? { ...row, ...displayChanges } as AssembleRow : row));
+      setInlineEditor(null);
+      setToast({ type: 'success', message: 'Row changes saved successfully.' });
+    } catch (failure) { setInlineError(failure instanceof Error ? failure.message : 'Unable to save row changes.'); }
+    finally { setInlineSaving(false); }
   };
 
-  const handleConfirmAssemble = async () => {
-    if (!assemblePreview?.file_token) return;
-    setIsConfirming(true);
-    setUploadError(null);
-    try {
-      const token = getAccessToken();
-      const headers: Record<string, string> = {};
-      if (token) headers.Authorization = `Bearer ${token}`;
-
-      const res = await axios.post<AssembleJobStatus>(
-        `${getApiBaseUrl()}/api/v1/masters/product-master/assemble/confirm`,
-        { file_token: assemblePreview.file_token },
-        { headers, timeout: 60000 }
-      );
-
-      const job = res.data;
-      if (job.status === 'completed') {
-        const msg = `Bulk import complete: ${job.upserted} records successfully upserted.`;
-        setFeedback({ type: 'success', message: msg });
-        setToast({ type: 'success', message: msg });
-        setIsUploadModalOpen(false);
-        setAssemblePreview(null);
-        setSelectedFile(null);
-        setIsConfirming(false);
-        await loadData();
-      } else {
-        setAssembleJob(job);
-        pollAssembleJob(job.job_id);
-      }
-    } catch (e: any) {
-      const isTimeout = e?.code === 'ECONNABORTED' || e?.message?.includes('timeout');
-      const errMsg = isTimeout
-        ? 'Import request timed out. Your import may be continuing in the background. You can retry if needed.'
-        : e?.response?.data?.message || e?.response?.data?.detail || e?.message || 'Import confirmation failed.';
-      setUploadError(errMsg);
-      setIsConfirming(false);
-    }
+  const doubleClickCell = (event: React.MouseEvent<HTMLTableRowElement>, target: RowMenuTarget) => {
+    if (event.target instanceof HTMLInputElement) return;
+    const cell = (event.target as HTMLElement).closest('td');
+    const field = cell ? INLINE_COLUMNS[target.category][cell.cellIndex]?.[0] : undefined;
+    if (field) beginInlineEdit(target, field);
   };
 
-  const pollAssembleJob = (jobId: string) => {
-    const interval = setInterval(async () => {
-      try {
-        const token = getAccessToken();
-        const headers: Record<string, string> = {};
-        if (token) headers.Authorization = `Bearer ${token}`;
+  const renderInlineCells = (editor: InlineEditor) => INLINE_COLUMNS[editor.category].map(([key, label, editable]) => {
+    const editing = editable && (!editor.field || editor.field === key);
+    const firstEditable = INLINE_COLUMNS[editor.category].find(([, , mayEdit]) => mayEdit)?.[0];
+    return <td key={key} className="p-2 align-top">
+      {editing ? <input aria-label={`Edit ${label}`} value={editor.draft[key]} disabled={inlineSaving}
+        autoFocus={editor.field === key || (!editor.field && key === firstEditable)}
+        className="w-full min-w-24 rounded border border-blue-500 bg-white px-2 py-1.5 text-xs font-mono focus:outline-2 focus:outline-blue-400"
+        onChange={event => { const value = event.target.value; setInlineEditor(previous => previous ? { ...previous, draft: { ...previous.draft, [key]: value } } : previous); }}
+        onKeyDown={event => {
+          if (event.key === 'Enter' || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's')) { event.preventDefault(); event.stopPropagation(); void saveInlineEdit(); }
+          if (event.key === 'Escape' && !inlineSaving) { event.preventDefault(); event.stopPropagation(); setInlineEditor(null); setInlineError(''); }
+        }}/>
+        : <span className="block px-1 py-1.5">{editor.draft[key] || '—'}</span>}
+    </td>;
+  });
 
-        const res = await axios.get<AssembleJobStatus>(
-          `${getApiBaseUrl()}/api/v1/masters/product-master/assemble/jobs/${jobId}`,
-          { headers }
-        );
-        const job = res.data;
-        setAssembleJob(job);
-
-        if (job.status === 'completed') {
-          clearInterval(interval);
-          const msg = `Bulk import complete: ${job.upserted} records successfully upserted.`;
-          setFeedback({ type: 'success', message: msg });
-          setToast({ type: 'success', message: msg });
-          setIsUploadModalOpen(false);
-          setAssemblePreview(null);
-          setAssembleJob(null);
-          setSelectedFile(null);
-          setIsConfirming(false);
-          await loadData();
-        } else if (job.status === 'failed') {
-          clearInterval(interval);
-          setUploadError(`Import failed: ${job.error_message || 'Background import failed.'}`);
-          setIsConfirming(false);
-        }
-      } catch {
-        clearInterval(interval);
-        setUploadError('Failed to retrieve background job progress.');
-        setIsConfirming(false);
-      }
-    }, 1500);
-  };
-
-  const handleDownloadErrorReport = async () => {
-    if (!assemblePreview?.file_token) return;
-    try {
-      const token = getAccessToken();
-      const url = `${getApiBaseUrl()}/api/v1/masters/product-master/assemble/preview-errors?file_token=${encodeURIComponent(
-        assemblePreview.file_token
-      )}`;
-      const res = await fetch(url, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error('Failed to download error report');
-      const blob = await res.blob();
-      const blobUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = `assemble_import_errors_${assemblePreview.source_filename || 'assemble.xlsx'}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(blobUrl);
-    } catch (err: any) {
-      setUploadError(`Error report download failed: ${err.message}`);
-    }
-  };
-
-  const handleResetUpload = () => {
-    setAssemblePreview(null);
-    setAssembleJob(null);
-    setSelectedFile(null);
-    setUploadError(null);
-    setUploading(false);
-    setIsConfirming(false);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  // Drag and drop handlers
-  const handleDrag = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActive(true);
-    } else if (e.type === 'dragleave') {
-      setDragActive(false);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFileUpload(e.dataTransfer.files[0]);
-    }
-  };
+  const renderInlineActions = (editor: InlineEditor) => <tr><td colSpan={INLINE_COLUMNS[editor.category].length} className="border-b bg-blue-50 px-3 py-2">
+    <div className="flex flex-wrap items-center gap-2 text-xs font-sans">
+      <button type="button" disabled={inlineSaving} onClick={() => void saveInlineEdit()} className="rounded bg-emerald-600 px-3 py-1.5 font-semibold text-white disabled:opacity-50">{inlineSaving ? 'Saving…' : 'Save changes'}</button>
+      <button type="button" disabled={inlineSaving} onClick={() => { setInlineEditor(null); setInlineError(''); }} className="rounded border bg-white px-3 py-1.5">Cancel</button>
+      <span className="text-slate-600">Enter to save · Esc to cancel · Stock Unit is optional</span>
+      {inlineError && <span role="alert" className="text-red-700">{inlineError}</span>}
+    </div>
+  </td></tr>;
 
   // ---------------------------------------------------------------------------
   // Localized Inline Column Search Filters
@@ -850,12 +626,7 @@ export default function Products() {
         {isAdmin && (
           <button
             type="button"
-            onClick={() => {
-              setUploadError(null);
-              setUploadProgress(0);
-              setUploadPhase('idle');
-              setIsUploadModalOpen(true);
-            }}
+            onClick={() => setIsUploadModalOpen(true)}
             className="inline-flex items-center gap-2 bg-erp-orange hover:bg-erp-tenne text-white text-xs sm:text-sm font-semibold px-4 py-2.5 rounded-lg shadow-sm hover:shadow transition-all"
           >
             Bulk Import ☁️
@@ -939,7 +710,7 @@ export default function Products() {
       {/* Top Tabs Bar */}
       <div className="flex border-b border-erp-dark-vanilla/30 space-x-1">
         <button
-          onClick={() => setActiveTab('consumables')}
+          onClick={() => changeTab('consumables')}
           className={`px-5 py-2.5 text-sm font-semibold rounded-t-lg transition-all ${
             activeTab === 'consumables'
               ? 'bg-erp-orange text-white shadow-xs'
@@ -949,7 +720,7 @@ export default function Products() {
           List of Consumables
         </button>
         <button
-          onClick={() => setActiveTab('assemble')}
+          onClick={() => changeTab('assemble')}
           className={`px-5 py-2.5 text-sm font-semibold rounded-t-lg transition-all ${
             activeTab === 'assemble'
               ? 'bg-erp-orange text-white shadow-xs'
@@ -959,7 +730,7 @@ export default function Products() {
           Consumable for Assemble
         </button>
         <button
-          onClick={() => setActiveTab('sales_parts')}
+          onClick={() => changeTab('sales_parts')}
           className={`px-5 py-2.5 text-sm font-semibold rounded-t-lg transition-all ${
             activeTab === 'sales_parts'
               ? 'bg-erp-orange text-white shadow-xs'
@@ -1199,7 +970,7 @@ export default function Products() {
               <div>
                 <h3 className="text-sm font-bold text-erp-chocolate">List of Consumables Table</h3>
                 <p className="text-xs text-erp-chocolate/70 mt-0.5">
-                  Showing {filteredConsumables.length} of {consumables.length} consumables. Use header filters below to narrow results.
+                  Showing {filteredConsumables.length} of {consumables.length} consumables. Use header filters below to narrow results. {isAdmin && 'Double-click a cell to edit, or right-click for cell and row actions.'}
                 </p>
               </div>
               <div className="flex items-center gap-3">
@@ -1222,7 +993,7 @@ export default function Products() {
                   Clear Filters
                 </button>
                 <button
-                  onClick={loadData}
+                  onClick={refreshTable}
                   disabled={loading}
                   className="text-xs text-erp-orange hover:text-erp-tenne hover:underline font-semibold"
                 >
@@ -1231,7 +1002,7 @@ export default function Products() {
               </div>
             </div>
 
-            <div className="overflow-x-auto rounded-lg border border-gray-100 bg-white shadow-xs">
+            <HorizontalTableScroll label="List of Consumables">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-erp-vanilla/35 text-erp-chocolate font-semibold border-b border-gray-200">
                   <tr>
@@ -1331,29 +1102,27 @@ export default function Products() {
                       />
                     </th>
 
-                    {/* 9. Actions Header */}
-                    {isAdmin && (
-                      <th className="p-3 w-24 text-center">
-                        <div>Actions</div>
-                        <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
-                      </th>
-                    )}
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-gray-100 font-mono">
                   {loading ? (
-                    <TableSkeletonRows rows={7} columns={isAdmin ? 9 : 8} />
+                    <TableSkeletonRows rows={7} columns={8} />
                   ) : filteredConsumables.length > 0 ? (
-                    filteredConsumables.map((row) => (
+                    filteredConsumables.map((row) => <React.Fragment key={row.id}>
                       <tr
                         key={row.id}
+                        tabIndex={isAdmin ? 0 : undefined} aria-haspopup={isAdmin ? 'menu' : undefined}
+                        onContextMenu={event => openRowMenu(event, { category: 'consumables', row })}
+                        onDoubleClick={event => doubleClickCell(event, { category: 'consumables', row })}
+                        onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openRowMenu(event, { category: 'consumables', row }); }}
                         className={`transition-colors ${
-                          editingConsumableId === row.id
+                          inlineEditor?.row.id === row.id || rowMenu?.row.id === row.id
                             ? 'bg-erp-orange/10 font-semibold'
                             : 'hover:bg-erp-vanilla/25'
                         }`}
                       >
+                        {inlineEditor?.row.id === row.id ? renderInlineCells(inlineEditor) : <>
                         <td className="p-3 font-mono text-erp-chocolate/75 whitespace-nowrap">
                           {row.supplier_id || '—'}
                         </td>
@@ -1397,41 +1166,20 @@ export default function Products() {
                         <td className="p-3 text-right font-semibold text-erp-tenne">
                           {row.rate !== null && row.rate !== undefined ? row.rate : '—'}
                         </td>
-                        {isAdmin && (
-                          <td className="p-3 text-center whitespace-nowrap">
-                            <div className="flex items-center justify-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => startEditConsumable(row)}
-                                title="Edit consumable"
-                                className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors text-xs"
-                              >
-                                ✏️
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeactivate('consumables', row.id, row.item_id)}
-                                disabled={actionLoadingId === row.id}
-                                title="Delete consumable"
-                                className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
-                              >
-                                {actionLoadingId === row.id ? '…' : '🗑️'}
-                              </button>
-                            </div>
-                          </td>
-                        )}
+                        </>}
                       </tr>
-                    ))
+                      {inlineEditor?.row.id === row.id && renderInlineActions(inlineEditor)}
+                    </React.Fragment>)
                   ) : (
                     <tr>
-                      <td colSpan={isAdmin ? 9 : 8} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
+                      <td colSpan={8} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
                         No consumables match your search filters or the master table is empty.
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
-            </div>
+            </HorizontalTableScroll>
           </div>
         </div>
       )}
@@ -1662,7 +1410,7 @@ export default function Products() {
               <div>
                 <h3 className="text-sm font-bold text-erp-chocolate">Consumable for Assemble Table</h3>
                 <p className="text-xs text-erp-chocolate/70 mt-0.5">
-                  Showing {filteredAssembleRows.length} of {assembleRows.length} mappings.
+                  Showing {filteredAssembleRows.length} of {assembleRows.length} mappings. {isAdmin && 'Double-click a cell to edit, or right-click for cell and row actions.'}
                 </p>
               </div>
               <div className="flex items-center gap-3">
@@ -1686,7 +1434,7 @@ export default function Products() {
                   Clear Filters
                 </button>
                 <button
-                  onClick={loadData}
+                  onClick={refreshTable}
                   disabled={loading}
                   className="text-xs text-erp-orange hover:text-erp-tenne hover:underline font-semibold"
                 >
@@ -1695,7 +1443,7 @@ export default function Products() {
               </div>
             </div>
 
-            <div className="overflow-x-auto rounded-lg border border-gray-100 bg-white shadow-xs">
+            <HorizontalTableScroll label="Consumable for Assemble">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-erp-vanilla/35 text-erp-chocolate font-semibold border-b border-gray-200">
                   <tr>
@@ -1798,29 +1546,27 @@ export default function Products() {
                       />
                     </th>
 
-                    {/* 10. Actions Header */}
-                    {isAdmin && (
-                      <th className="p-3 w-24 text-center">
-                        <div>Actions</div>
-                        <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
-                      </th>
-                    )}
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-gray-100 font-mono">
                   {loading ? (
-                    <TableSkeletonRows rows={7} columns={isAdmin ? 10 : 9} />
+                    <TableSkeletonRows rows={7} columns={9} />
                   ) : filteredAssembleRows.length > 0 ? (
-                    filteredAssembleRows.map((row) => (
+                    filteredAssembleRows.map((row) => <React.Fragment key={row.id}>
                       <tr
                         key={row.id}
+                        tabIndex={isAdmin ? 0 : undefined} aria-haspopup={isAdmin ? 'menu' : undefined}
+                        onContextMenu={event => openRowMenu(event, { category: 'assemble', row })}
+                        onDoubleClick={event => doubleClickCell(event, { category: 'assemble', row })}
+                        onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openRowMenu(event, { category: 'assemble', row }); }}
                         className={`transition-colors ${
-                          editingAssembleId === row.id
+                          inlineEditor?.row.id === row.id || rowMenu?.row.id === row.id
                             ? 'bg-erp-orange/10 font-semibold'
                             : 'hover:bg-erp-vanilla/25'
                         }`}
                       >
+                        {inlineEditor?.row.id === row.id ? renderInlineCells(inlineEditor) : <>
                         <td className="p-3 font-bold text-erp-chocolate whitespace-nowrap">
                           <div className="flex items-center gap-1.5">
                             <span>{row.consumable_item}</span>
@@ -1857,41 +1603,20 @@ export default function Products() {
                         <td className="p-3 text-right font-semibold text-erp-tenne">
                           {row.rate !== null ? `₹${row.rate.toFixed(2)}` : '—'}
                         </td>
-                        {isAdmin && (
-                          <td className="p-3 text-center whitespace-nowrap">
-                            <div className="flex items-center justify-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => startEditAssemble(row)}
-                                title="Edit assembly mapping"
-                                className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors text-xs"
-                              >
-                                ✏️
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeactivate('assemble', row.id, `${row.consumable_item} -> ${row.part_no_saleable_item}`)}
-                                disabled={actionLoadingId === row.id}
-                                title="Delete assembly mapping"
-                                className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
-                              >
-                                {actionLoadingId === row.id ? '…' : '🗑️'}
-                              </button>
-                            </div>
-                          </td>
-                        )}
+                        </>}
                       </tr>
-                    ))
+                      {inlineEditor?.row.id === row.id && renderInlineActions(inlineEditor)}
+                    </React.Fragment>)
                   ) : (
                     <tr>
-                      <td colSpan={isAdmin ? 10 : 9} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
+                      <td colSpan={9} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
                         No assembly mappings match your search filters or the table is empty.
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
-            </div>
+            </HorizontalTableScroll>
           </div>
         </div>
       )}
@@ -2061,7 +1786,7 @@ export default function Products() {
                   Clear Filters
                 </button>
                 <button
-                  onClick={loadData}
+                  onClick={refreshTable}
                   disabled={loading}
                   className="text-xs text-erp-orange hover:text-erp-tenne hover:underline font-semibold"
                 >
@@ -2070,7 +1795,7 @@ export default function Products() {
               </div>
             </div>
 
-            <div className="overflow-x-auto rounded-lg border border-gray-100 bg-white shadow-xs">
+            <HorizontalTableScroll label="List of Sales Parts">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-erp-vanilla/35 text-erp-chocolate font-semibold border-b border-gray-200">
                   <tr>
@@ -2208,293 +1933,32 @@ export default function Products() {
                   )}
                 </tbody>
               </table>
-            </div>
+            </HorizontalTableScroll>
           </div>
         </div>
       )}
       {/* ========================================================================= */}
       {/* BULK UPLOAD MODAL OVERLAY                                                 */}
       {/* ========================================================================= */}
+      {rowMenu && isAdmin && !isUploadModalOpen && <ProductRowMenu key={`${rowMenu.category}:${rowMenu.row.id}`} x={rowMenu.x} y={rowMenu.y}
+        label={rowMenu.category === 'consumables' ? rowMenu.row.item_id : `${rowMenu.row.consumable_item} → ${rowMenu.row.part_no_saleable_item}`}
+        onClose={closeRowMenu} onEdit={() => beginInlineEdit(rowMenu)}
+        onEditCell={rowMenu.field && INLINE_COLUMNS[rowMenu.category].some(([key, , editable]) => key === rowMenu.field && editable)
+          ? () => beginInlineEdit(rowMenu, rowMenu.field) : undefined}
+        onDelete={() => {
+          const target = rowMenu;
+          closeRowMenu();
+          void handleDeactivate(target.category, target.row.id, target.category === 'consumables'
+            ? target.row.item_id : `${target.row.consumable_item} -> ${target.row.part_no_saleable_item}`);
+        }}/>
+      }
       {isUploadModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in duration-200"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="bulk-upload-modal-title"
-        >
-          {/* Backdrop dismiss */}
-          <div
-            className="fixed inset-0 -z-10"
-            onClick={() => !uploading && setIsUploadModalOpen(false)}
-          />
-
-          <div className="bg-white border border-erp-dark-vanilla/30 rounded-2xl max-w-lg w-full p-6 shadow-2xl relative">
-            <div className="flex items-start justify-between pb-3 border-b border-erp-dark-vanilla/20 mb-4">
-              <div>
-                <h2 id="bulk-upload-modal-title" className="text-lg font-bold text-erp-chocolate">
-                  Bulk Excel Intake
-                </h2>
-                <p className="text-xs text-erp-chocolate/70 mt-0.5">
-                  Target: <span className="font-semibold text-erp-orange">{activeTabLabel}</span>
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={uploading || isConfirming}
-                onClick={() => {
-                  handleResetUpload();
-                  setIsUploadModalOpen(false);
-                }}
-                className="text-erp-chocolate/60 hover:text-erp-chocolate p-1.5 rounded hover:bg-erp-vanilla/40 transition-colors disabled:opacity-30 text-sm font-bold"
-                aria-label="Close modal"
-              >
-                ✕
-              </button>
-            </div>
-
-            <p className="text-xs text-erp-chocolate/75 mb-3 leading-relaxed">
-              Upload an unformatted Excel file (.xlsx up to 15MB, max 5,000 rows). Header Hunter scans top rows, drops banners, and maps columns into <span className="font-semibold text-erp-chocolate">{activeTabLabel}</span>.
-            </p>
-
-            <div className="mb-4 flex items-center justify-between text-[11px] bg-erp-vanilla/25 px-2.5 py-1.5 rounded-lg border border-erp-dark-vanilla/20 text-erp-chocolate/70">
-              <span>File limits: <strong className="text-erp-chocolate">Max 15 MB</strong></span>
-              <span>Capacity: <strong className="text-erp-chocolate">Up to 5,000 rows</strong></span>
-            </div>
-
-            {uploadError && (
-              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-900 rounded-md text-xs space-y-2">
-                <div>{uploadError}</div>
-                {selectedFile && !uploading && !isConfirming && (
-                  <div className="flex items-center gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => handleFileUpload(selectedFile)}
-                      className="px-2.5 py-1 bg-red-800 hover:bg-red-900 text-white font-semibold rounded text-[11px] transition-colors"
-                    >
-                      ↻ Retry with {selectedFile.name}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleResetUpload}
-                      className="px-2 py-1 border border-red-300 text-red-800 hover:bg-red-100 rounded text-[11px]"
-                    >
-                      Clear
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {activeTab === 'assemble' && assemblePreview ? (
-              <div className="space-y-4">
-                {/* Header match badge & metadata */}
-                <div className="bg-erp-vanilla/20 border border-erp-dark-vanilla/30 rounded-xl p-3.5 space-y-2">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-erp-chocolate flex items-center gap-1.5">
-                      <span>📄</span>
-                      <span className="truncate max-w-[220px]">{assemblePreview.source_filename}</span>
-                    </span>
-                    <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-[11px] font-medium">
-                      Header Row {assemblePreview.detected_header_row}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-erp-chocolate/70">
-                    Matched <span className="font-semibold text-erp-chocolate">{assemblePreview.columns_matched.length} columns</span> using Header Hunter v2.0.
-                  </p>
-
-                  {/* Summary Stat Badges */}
-                  <div className="grid grid-cols-4 gap-2 pt-1 text-center">
-                    <div className="p-2 bg-white rounded-lg border border-erp-dark-vanilla/20 shadow-xs">
-                      <div className="text-[10px] text-erp-chocolate/60 font-medium">Total Rows</div>
-                      <div className="text-sm font-bold text-erp-chocolate font-mono">{assemblePreview.total_rows}</div>
-                    </div>
-                    <div className="p-2 bg-emerald-50 rounded-lg border border-emerald-200 shadow-xs">
-                      <div className="text-[10px] text-emerald-700 font-medium">Additions</div>
-                      <div className="text-sm font-bold text-emerald-800 font-mono">+{assemblePreview.rows_to_add}</div>
-                    </div>
-                    <div className="p-2 bg-blue-50 rounded-lg border border-blue-200 shadow-xs">
-                      <div className="text-[10px] text-blue-700 font-medium">Updates</div>
-                      <div className="text-sm font-bold text-blue-800 font-mono">↺ {assemblePreview.rows_to_update}</div>
-                    </div>
-                    <div className={`p-2 rounded-lg border shadow-xs ${assemblePreview.error_count > 0 ? 'bg-red-50 border-red-200 text-red-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
-                      <div className="text-[10px] font-medium">{assemblePreview.error_count > 0 ? 'Errors' : 'Notices'}</div>
-                      <div className="text-sm font-bold font-mono">{assemblePreview.error_count + assemblePreview.warning_count}</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Issues display if any */}
-                {assemblePreview.errors && assemblePreview.errors.length > 0 && (
-                  <div className="border border-erp-dark-vanilla/25 rounded-xl p-3 bg-white space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-erp-chocolate">
-                        Row Notices ({assemblePreview.errors.length}{assemblePreview.warning_count + assemblePreview.error_count > assemblePreview.errors.length ? ` of ${assemblePreview.warning_count + assemblePreview.error_count}` : ''})
-                      </span>
-                      <button
-                        type="button"
-                        onClick={handleDownloadErrorReport}
-                        className="text-[11px] text-erp-orange hover:text-erp-chocolate font-semibold flex items-center gap-1 hover:underline"
-                      >
-                        <span>📥</span> Download Error Report (.xlsx)
-                      </button>
-                    </div>
-                    <div className="max-h-32 overflow-y-auto space-y-1 pr-1 text-[11px]">
-                      {assemblePreview.errors.slice(0, 5).map((err, i) => (
-                        <div key={i} className="p-1.5 rounded bg-amber-50/60 border border-amber-200/50 text-erp-chocolate flex items-start gap-1.5">
-                          <span className="font-mono font-bold text-amber-800 min-w-[50px]">Row {err.row}:</span>
-                          <span className="flex-1">{err.message}</span>
-                        </div>
-                      ))}
-                      {assemblePreview.errors.length > 5 && (
-                        <div className="text-center text-[10px] text-erp-chocolate/60 pt-0.5 italic">
-                          + {assemblePreview.errors.length - 5} additional issues recorded. Click Download Error Report for full details.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Confirmation Progress State */}
-                {isConfirming && (
-                  <div className="p-3 bg-white rounded-lg border border-erp-dark-vanilla/25 space-y-2">
-                    <div className="flex justify-between items-center text-xs font-semibold text-erp-chocolate">
-                      <span className="flex items-center gap-1.5">
-                        <svg className="animate-spin h-3.5 w-3.5 text-erp-orange" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
-                        </svg>
-                        <span>{assembleJob?.stage || 'Committing records to database...'}</span>
-                      </span>
-                      <span className="font-mono text-erp-orange font-bold">
-                        {assembleJob?.progress_percent || 0}%
-                      </span>
-                    </div>
-                    <div className="w-full bg-erp-vanilla/60 rounded-full h-2.5 overflow-hidden border border-erp-dark-vanilla/30">
-                      <div
-                        className="bg-erp-orange h-2.5 rounded-full transition-all duration-300 ease-out"
-                        style={{ width: `${assembleJob?.progress_percent || 20}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Modal Buttons */}
-                <div className="flex items-center justify-between pt-2 border-t border-erp-dark-vanilla/20">
-                  <button
-                    type="button"
-                    disabled={isConfirming}
-                    onClick={handleResetUpload}
-                    className="text-xs px-3 py-1.5 border border-erp-dark-vanilla/40 rounded-lg hover:bg-erp-vanilla/40 text-erp-chocolate disabled:opacity-40"
-                  >
-                    Choose Another File
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={isConfirming || !assemblePreview.can_confirm}
-                    onClick={handleConfirmAssemble}
-                    className="text-xs px-4 py-2 bg-erp-orange hover:bg-erp-orange/90 text-white font-bold rounded-lg shadow-sm transition-all disabled:opacity-50 flex items-center gap-1.5"
-                  >
-                    {isConfirming ? (
-                      <>Saving Records...</>
-                    ) : (
-                      <>Confirm & Import {assemblePreview.total_rows} Records ✓</>
-                    )}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <>
-                <div
-                  onDragEnter={handleDrag}
-                  onDragLeave={handleDrag}
-                  onDragOver={handleDrag}
-                  onDrop={handleDrop}
-                  onClick={() => !uploading && fileInputRef.current?.click()}
-                  className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
-                    uploading
-                      ? 'pointer-events-none opacity-60 border-erp-orange bg-erp-orange/5'
-                      : dragActive
-                      ? 'border-erp-orange bg-erp-orange/10'
-                      : 'border-erp-dark-vanilla/40 hover:border-erp-orange bg-erp-vanilla/15 hover:bg-erp-vanilla/30'
-                  }`}
-                >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".xlsx"
-                    className="hidden"
-                    disabled={uploading}
-                    onChange={(e) => {
-                      if (e.target.files && e.target.files[0]) {
-                        handleFileUpload(e.target.files[0]);
-                      }
-                    }}
-                  />
-                  <div className="space-y-1.5">
-                    <div className="text-3xl">📥</div>
-                    <p className="text-xs font-bold text-erp-chocolate">
-                      {uploading ? 'Processing File…' : `Drag & drop ${activeTabLabel} Excel here`}
-                    </p>
-                    <p className="text-[11px] text-erp-chocolate/60">
-                      or click to browse from device (.xlsx up to 15MB)
-                    </p>
-                  </div>
-                </div>
-
-                {/* Progress Bar & Processing States */}
-                {uploading && (
-                  <div className="mt-4 p-3 bg-white rounded-lg border border-erp-dark-vanilla/25 space-y-2">
-                    <div className="flex justify-between items-center text-xs font-semibold text-erp-chocolate">
-                      <span className="flex items-center gap-1.5">
-                        {uploadPhase !== 'parsing' && uploadProgress < 100 ? (
-                          `Uploading: ${uploadProgress}%`
-                        ) : (
-                          <>
-                            <svg className="animate-spin h-3.5 w-3.5 text-erp-orange" viewBox="0 0 24 24" fill="none">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
-                            </svg>
-                            <span>Scanning headers & validating rows...</span>
-                          </>
-                        )}
-                      </span>
-                      <span className="font-mono text-erp-orange font-bold">{uploadProgress}%</span>
-                    </div>
-
-                    <div className="w-full bg-erp-vanilla/60 rounded-full h-2.5 overflow-hidden border border-erp-dark-vanilla/30">
-                      <div
-                        className="bg-erp-orange h-2.5 rounded-full transition-all duration-300 ease-out"
-                        style={{ width: `${uploadProgress}%` }}
-                      />
-                    </div>
-
-                    {(uploadPhase === 'parsing' || uploadProgress === 100) && (
-                      <p className="text-[11px] text-erp-chocolate/60 italic pt-0.5">
-                        Header Hunter is scanning top rows and validating column vocabulary...
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                <div className="mt-4 pt-3 border-t border-erp-dark-vanilla/20 flex items-center justify-between text-[11px] text-erp-chocolate/60">
-                  <span className="font-mono text-erp-topaz font-semibold">Header Hunter v2.0</span>
-                  <button
-                    type="button"
-                    disabled={uploading}
-                    onClick={() => {
-                      handleResetUpload();
-                      setIsUploadModalOpen(false);
-                    }}
-                    className="text-xs px-3 py-1.5 border border-erp-dark-vanilla/40 rounded-lg hover:bg-erp-vanilla/40 transition-colors disabled:opacity-40 text-erp-chocolate"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+        <MasterBulkWorkspace
+          category={activeTab}
+          label={activeTabLabel}
+          onClose={() => setIsUploadModalOpen(false)}
+          onChanged={() => { void loadData(); }}
+        />
       )}
 
       {/* Floating Success Toast */}

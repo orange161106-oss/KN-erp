@@ -256,6 +256,8 @@ def test_requirements_prefix_alias_routes(client, test_data):
 
 
 def test_approval_state_machine_transitions(client, test_data):
+    c1 = test_data["c1"]
+
     # 1. Create a DRAFT plan
     res_plan = client.post("/api/v1/plans", json={"plant_id": "PLANT_I", "month": 3, "year": 2026}, headers=test_data["admin_headers"])
     assert res_plan.status_code == 201
@@ -280,14 +282,41 @@ def test_approval_state_machine_transitions(client, test_data):
     res_unauth_approve = client.patch(f"/api/v1/plans/{plan_id}/approve", headers=test_data["plant_1_headers"])
     assert res_unauth_approve.status_code == 403
 
-    # 6. Admin can approve -> status becomes APPROVED
+    # 6. Admin attempting to approve an empty plan fails with 400
+    res_empty_approve = client.patch(f"/api/v1/plans/{plan_id}/approve", headers=test_data["admin_headers"])
+    assert res_empty_approve.status_code == 400
+    assert "cannot approve an empty plan" in res_empty_approve.text.lower()
+
+    # 7. Add a requirement line item to the plan
+    item_res = client.post(
+        f"/api/v1/plans/{plan_id}/items/single",
+        json={"consumable_id": str(c1.id), "requested_qty": 50.0},
+        headers=test_data["admin_headers"],
+    )
+    assert item_res.status_code == 200
+
+    # 8. Admin can now approve -> status becomes APPROVED
     res_approve = client.patch(f"/api/v1/plans/{plan_id}/approve", headers=test_data["admin_headers"])
     assert res_approve.status_code == 200
     assert res_approve.json()["status"] == "APPROVED"
 
-    # 7. Trying to approve already APPROVED plan returns 400 Bad Request
+    # 9. Trying to approve already APPROVED plan returns 400 Bad Request
     res_dup_approve = client.patch(f"/api/v1/plans/{plan_id}/approve", headers=test_data["admin_headers"])
     assert res_dup_approve.status_code == 400
+
+    # 10. Plant Incharge cannot reopen plan (Requires Admin/Planner)
+    res_unauth_reopen = client.patch(f"/api/v1/plans/{plan_id}/reopen", headers=test_data["plant_1_headers"])
+    assert res_unauth_reopen.status_code == 403
+
+    # 11. Admin can reopen plan -> status becomes DRAFT
+    res_reopen = client.patch(f"/api/v1/plans/{plan_id}/reopen", headers=test_data["admin_headers"])
+    assert res_reopen.status_code == 200
+    assert res_reopen.json()["status"] == "DRAFT"
+
+    # 12. Trying to reopen a plan already in DRAFT returns 400 Bad Request
+    res_dup_reopen = client.patch(f"/api/v1/plans/{plan_id}/reopen", headers=test_data["admin_headers"])
+    assert res_dup_reopen.status_code == 400
+    assert "only approved plans can be reopened" in res_dup_reopen.text.lower()
 
 
 def test_cross_plant_aggregation_math(client, test_data):
@@ -364,11 +393,21 @@ def test_auto_provisioning_all_5_plants_on_fetch(client, test_data):
 
 
 def test_direct_draft_to_approved_by_admin(client, test_data):
+    c1 = test_data["c1"]
+
     # Create plan in DRAFT
     res_plan = client.post("/api/v1/plans", json={"plant_id": "PLANT_III", "month": 5, "year": 2027}, headers=test_data["admin_headers"])
     assert res_plan.status_code == 201
     plan_id = res_plan.json()["id"]
     assert res_plan.json()["status"] == "DRAFT"
+
+    # Add a line item so plan is not empty
+    item_res = client.post(
+        f"/api/v1/plans/{plan_id}/items/single",
+        json={"consumable_id": str(c1.id), "requested_qty": 25.0},
+        headers=test_data["admin_headers"],
+    )
+    assert item_res.status_code == 200
 
     # Admin approves directly from DRAFT without SUBMITTED first
     res_app = client.patch(f"/api/v1/plans/{plan_id}/approve", headers=test_data["admin_headers"])

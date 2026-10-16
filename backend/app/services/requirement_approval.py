@@ -8,7 +8,7 @@ from app.models.plant_workflow import PlantConfirmation
 from app.models.audit import AuditLog
 
 
-def approve(session, identity, user):
+def approve(session, identity, user, acknowledge_missing_norms: bool = False):
     if not user.is_super_admin:
         raise ApplicationError('PERMISSION_DENIED', 'Super Admin approval is required.', 403)
     version = session.scalar(select(PlanningVersion).where(PlanningVersion.id == identity).with_for_update())
@@ -20,20 +20,27 @@ def approve(session, identity, user):
         raise ApplicationError('LATEST_REVISION_REQUIRED', 'Approve the latest revision for this planning period.', 409)
     if version.status == 'APPROVED':
         return {'planning_version_id': version.id, 'status': version.status, 'replayed': True}
-    if version.status != 'CALCULATED' or session.scalar(select(RequirementCalculationError.id)
-            .where(RequirementCalculationError.planning_version_id == identity).limit(1)):
+    errors = list(session.scalars(select(RequirementCalculationError).where(RequirementCalculationError.planning_version_id == identity)))
+    fatal_errors = [e for e in errors if e.error_code not in {'NO_CONSUMPTION_NORM', 'MISSING_CONSUMPTION_NORM'}]
+    missing_norm_errors = [e for e in errors if e.error_code in {'NO_CONSUMPTION_NORM', 'MISSING_CONSUMPTION_NORM'}]
+    if fatal_errors:
         raise ApplicationError('CALCULATION_REQUIRED', 'Run and resolve all calculation errors before approval.', 409)
+    if missing_norm_errors and not acknowledge_missing_norms:
+        raise ApplicationError('CALCULATION_REQUIRED', f'{len(missing_norm_errors)} parts have no consumption norms. Explicit acknowledgement is required before approval.', 409)
     rows = list(session.scalars(select(CalculatedRequirement).where(CalculatedRequirement.planning_version_id == identity)))
     old = version.status
     for row in rows:
+        if row.plant_id is None:
+            continue  # Central release is recorded once on the version, not as a plant confirmation.
         if session.scalar(select(PlantConfirmation.id).where(PlantConfirmation.calculated_requirement_id == row.id)) is None:
             session.add(PlantConfirmation(calculated_requirement_id=row.id, planning_version_id=version.id,
                         plant_id=row.plant_id, confirmed_by=user.id, notes='Super Admin approval of calculated revision'))
     version.status = 'APPROVED'
     version.approved_by = user.id
     version.approved_at = datetime.now(timezone.utc)
+    ack_note = f"; incomplete: {len(missing_norm_errors)} parts without norms explicitly acknowledged" if missing_norm_errors else ""
     session.add(AuditLog(actor_id=user.id, action='APPROVE', entity_type='planning_version', entity_id=version.id,
-        old_values={'status': old}, new_values={'status': 'APPROVED', 'requirement_ids': [str(row.id) for row in rows]},
-        reason='Super Admin approved calculated requirements; no purchase order created'))
+        old_values={'status': old}, new_values={'status': 'APPROVED', 'requirement_ids': [str(row.id) for row in rows], 'acknowledged_missing_count': len(missing_norm_errors)},
+        reason=f'Super Admin approved calculated requirements{ack_note}; no purchase order created'))
     session.commit()
     return {'planning_version_id': version.id, 'status': version.status, 'replayed': False}

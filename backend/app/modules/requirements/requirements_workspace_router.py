@@ -73,7 +73,7 @@ def get_requirements_workspace_records(
 
 
 @router.post("/inspect-excel", response_model=RequirementExcelInspectResponse)
-async def post_inspect_excel(
+def post_inspect_excel(
     user: CanUpdateRequirements,
     session: Annotated[Session, Depends(get_db)],
     file: UploadFile = File(...),
@@ -81,7 +81,7 @@ async def post_inspect_excel(
     year: int = Form(...),
 ):
     """Parses and validates an uploaded Excel sheet against KNL consumable planning columns."""
-    content = await file.read()
+    content = file.file.read()
     return service.inspect_excel_file(
         file_bytes=content,
         filename=file.filename or "uploaded.xlsx",

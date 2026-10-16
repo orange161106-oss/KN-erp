@@ -22,11 +22,11 @@ Database = Annotated[Session, Depends(get_db)]
 
 
 @router.post('/daily-statement/preview', response_model=SourceImport)
-async def preview_daily_statement(session: Database, user: Import, file: UploadFile = File(...),
+def preview_daily_statement(session: Database, user: Import, file: UploadFile = File(...),
                                   sheet_name: str = Form(...), as_of: Timestamp = Form(...),
                                   generated_at: Timestamp = Form(...), exclusions_confirmed: bool = Form(False)):
     from app.services.stock_source import preview
-    return preview(session, await file.read(10 * 1024 * 1024 + 1), file.filename or 'stock.xlsx', sheet_name,
+    return preview(session, file.file.read(10 * 1024 * 1024 + 1), file.filename or 'stock.xlsx', sheet_name,
                    as_of=as_of, generated_at=generated_at, exclusions_confirmed=exclusions_confirmed)
 
 

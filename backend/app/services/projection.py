@@ -5,10 +5,13 @@ from decimal import Decimal
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from app.db.reliability import database_unavailable
 from app.core.errors import ApplicationError
 from app.domain.inventory_engine.projection import Event, Floor, calculate, condition
 from app.models.audit import AuditLog
 from app.models.projection import ProjectionInputSet
+from app.models.prd import PlanningVersion
+from sqlalchemy import select
 from app.repositories import projection as repository
 from app.schemas.projection import ProjectionImportResult, ProjectionInputs, ProjectionReport, RequirementTotal
 from app.services.plant_workflow import get_final_requirements
@@ -32,13 +35,15 @@ def context(session, material_id, version_id):
     version = repository.version(session, version_id)
     if material is None or version is None:
         raise ApplicationError('PROJECTION_REFERENCE_NOT_FOUND', 'Consumable or planning version does not exist.', 404)
+    if material.unit_id is None:
+        raise ApplicationError('STOCK_UNIT_REQUIRED', 'Add the consumable stock unit in Product Master before inventory or purchase planning.', 422)
     totals = get_final_requirements(session, planning_version_id=version_id, consumable_id=material_id)
     # Keep source row identities/rule versions in evidence, rather than just a sum.
     calculations, adjustments, unit = repository.requirement_evidence(session, material_id, version_id, material.unit_id)
     manifest = {'version_id': str(version.id), 'status': version.status,
                 'approved_at': None if version.approved_at is None else utc(version.approved_at).isoformat(),
                 'approved_by': str(version.approved_by) if version.approved_by else None,
-                'totals': sorted([row.model_dump(mode='json') for row in totals], key=lambda row: row['plant_id']),
+                'totals': sorted([row.model_dump(mode='json') for row in totals], key=lambda row: row['plant_id'] or ''),
                 'calculations': [{'id': str(row.id), 'unit_id': str(row.unit_id), 'rule_id': str(row.rule_id),
                                   'rule_version': row.rule_version, 'prd_order_item_id': str(row.prd_order_item_id),
                                   'quantity': format(row.calculated_qty, '.4f')} for row in calculations],
@@ -47,6 +52,11 @@ def context(session, material_id, version_id):
                                  'reviewed_at': utc(row.reviewed_at).isoformat() if row.reviewed_at else None}
                                 for row in adjustments]}
     limitations = []
+    if any(row.plant_id is None for row in totals):
+        latest = session.scalar(select(PlanningVersion).where(PlanningVersion.planning_period == version.planning_period)
+            .order_by(PlanningVersion.version_number.desc()).limit(1))
+        if latest.id != version.id:
+            limitations.append(issue('LATEST_REVISION_REQUIRED', 'A newer production revision exists. Recalculate, approve and reconcile its central demand before purchasing.'))
     if version.approved_at is None or version.approved_by is None or version.status in {'DRAFT', 'SUPERSEDED'}:
         limitations.append(issue('FINAL_REQUIREMENT_NOT_APPROVED', 'The selected version lacks final approval evidence or is draft/superseded.'))
     if not totals:
@@ -61,7 +71,7 @@ def context(session, material_id, version_id):
 def canonical_payload(data):
     payload = data.model_dump(mode='json')
     if payload['demand'] is not None:
-        payload['demand'].sort(key=lambda row: row['plant_id'])
+        payload['demand'].sort(key=lambda row: row['plant_id'] or '')
         for row in payload['demand']:
             if row['events'] is not None:
                 row['events'].sort(key=lambda event: event['source_id'])
@@ -76,7 +86,7 @@ def validate_reconciliation(data, totals):
         return
     authoritative = {row.plant_id: row.final_required_qty for row in totals}
     if {row.plant_id for row in data.demand} != set(authoritative):
-        raise ApplicationError('DEMAND_SCOPE_MISMATCH', 'Demand must account for every plant in this material/version exactly once.', 409)
+        raise ApplicationError('DEMAND_SCOPE_MISMATCH', 'Demand must account for every review scope in this material/version exactly once.', 409)
     for plan in data.demand:
         excluded = plan.fulfilled_quantity + plan.reserved_quantity
         total = authoritative[plan.plant_id]
@@ -121,9 +131,9 @@ def import_inputs(session, data: ProjectionInputs, actor_id, *, enabled):
     except IntegrityError:
         session.rollback()
         raise ApplicationError('PROJECTION_SOURCE_CONFLICT', 'A concurrent source import conflicts; retry the unchanged source set.', 409) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as error:
         session.rollback()
-        raise ApplicationError('DATABASE_UNAVAILABLE', 'Database is unavailable.', 503) from None
+        raise database_unavailable(error) from None
     except Exception:
         session.rollback()
         raise
@@ -132,8 +142,8 @@ def import_inputs(session, data: ProjectionInputs, actor_id, *, enabled):
 def report(session, material_id, version_id, cutoff, source_set_id=None):
     try:
         return _report(session, material_id, version_id, cutoff, source_set_id)
-    except SQLAlchemyError:
-        raise ApplicationError('DATABASE_UNAVAILABLE', 'Database is unavailable.', 503) from None
+    except SQLAlchemyError as error:
+        raise database_unavailable(error) from None
 
 
 def _report(session, material_id, version_id, cutoff, source_set_id):
@@ -182,8 +192,8 @@ def _report(session, material_id, version_id, cutoff, source_set_id):
                 else:
                     receipts.append(Event(row.source_id, row.available_at, remaining))
         for plan in data.demand or []:
-            excluded.extend([{'source_id': str(plan.plant_id), 'reason': 'DEMAND_ALREADY_FULFILLED', 'quantity': plan.fulfilled_quantity},
-                             {'source_id': str(plan.plant_id), 'reason': 'RESERVED_DEMAND_ALREADY_EXCLUDED_FROM_USABLE_STOCK', 'quantity': plan.reserved_quantity}])
+            excluded.extend([{'source_id': str(plan.plant_id) if plan.plant_id else 'CENTRAL', 'reason': 'DEMAND_ALREADY_FULFILLED', 'quantity': plan.fulfilled_quantity},
+                             {'source_id': str(plan.plant_id) if plan.plant_id else 'CENTRAL', 'reason': 'RESERVED_DEMAND_ALREADY_EXCLUDED_FROM_USABLE_STOCK', 'quantity': plan.reserved_quantity}])
             demands.extend(Event(event.source_id, event.at, event.quantity) for event in plan.events or [] if event.quantity)
     values = {'status': 'INCOMPLETE', 'cutoff': cutoff, 'opening_stock': opening}
     if data and snapshot and record.stock_snapshot_id == snapshot.id:

@@ -183,6 +183,10 @@ export default function PRDPlanning() {
 
   // Cell editing
   const handleCellChange = (rowId: string, colKey: keyof PRDRecord & string, value: string) => {
+    if (originalMap.get(rowId)?.status === 'VALIDATED') {
+      setStatusMessage({type:'error',text:'Imported revision history is read-only. Upload a new production revision for changes.'});
+      return;
+    }
     setRecords(prev =>
       prev.map(r => {
         if (r.id !== rowId) return r;
@@ -224,7 +228,11 @@ export default function PRDPlanning() {
     setIsSaving(true);
     setStatusMessage(null);
     try {
-      const payloadRecords = records.map((r, idx) => ({
+      const changedFields: (keyof PRDRecord)[] = ['plant','customer','customer_code','customer_group','product_code','description','planned_quantity','uom','target_period','planning_version','status','remarks'];
+      const payloadRecords = records.filter(row => {
+        const before = originalMap.get(row.id);
+        return !before || changedFields.some(key=>String(row[key]??'').trim()!==String(before[key]??'').trim());
+      }).map((r, idx) => ({
         id: r.id.startsWith('new-') ? null : r.id,
         row_index: idx + 1,
         plant: r.plant,
@@ -339,18 +347,6 @@ export default function PRDPlanning() {
   const columns: ColumnDef<PRDRecord>[] = useMemo(
     () => [
       {
-        key: 'row_index',
-        label: '#',
-        width: 48,
-        align: 'center',
-        isSticky: true,
-        render: (_val, _row, _sel) => (
-          <span className="text-[11px] font-mono text-gray-500 font-medium">
-            {records.findIndex(r => r.id === _row.id) + 1}
-          </span>
-        ),
-      },
-      {
         key: 'customer',
         label: 'Customer',
         width: 140,
@@ -380,6 +376,7 @@ export default function PRDPlanning() {
         label: 'Plant',
         width: 100,
         align: 'left',
+        render: value => value || 'Central',
       },
       {
         key: 'product_code',
@@ -465,7 +462,7 @@ export default function PRDPlanning() {
   );
 
   return (
-    <div className="flex flex-col h-full space-y-2.5">
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-3">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2 bg-white px-3.5 py-2.5 rounded-lg border border-gray-200 shadow-2xs flex-shrink-0">
         <div>
@@ -477,6 +474,7 @@ export default function PRDPlanning() {
           </h1>
           <p className="text-xs text-gray-500 mt-0.5">
             Production Order sales schedules by customer, part, revision, and planning month.
+            {' '}Imported revisions are read-only; upload a new revision for changes.
           </p>
         </div>
 
@@ -538,7 +536,7 @@ export default function PRDPlanning() {
       )}
 
       {/* Workspace Panel */}
-      <div className="flex-1 min-h-0 bg-white border border-gray-300 rounded shadow-xs flex flex-col overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-gray-300 bg-white shadow-xs">
         {/* Toolbar */}
         <Toolbar
           onUpload={() => setShowUploadModal(true)}
@@ -556,7 +554,7 @@ export default function PRDPlanning() {
           selectedCount={selectedRowIds.size}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
-          searchPlaceholder="🔍 Search part, customer, group..."
+          searchPlaceholder="Search part or customer..."
           filters={[
             {
               key: 'customer',
@@ -614,8 +612,9 @@ export default function PRDPlanning() {
         />
 
         {/* Excel Data Grid with Resizable Height and Section 9A presets */}
-        <div className="flex-1 min-h-0">
+        <div className="flex min-h-0 min-w-0 flex-1">
           <DataTable
+            virtualize
             columns={columns}
             data={filteredRecords}
             originalData={originalMap}

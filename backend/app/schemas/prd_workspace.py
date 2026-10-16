@@ -143,6 +143,8 @@ class SalesScheduleImportPreviewResponse(BaseModel):
     can_confirm: bool
     warnings: list[str] = []
     errors: list[str] = []
+    comparison_vs_previous_month: Optional[dict[str, Any]] = None
+    needs_review_rows: list[dict[str, Any]] = []
     file_token: str
 
 
@@ -155,3 +157,5 @@ class SalesScheduleImportConfirmRequest(BaseModel):
     mode: str = "APPEND"
     reason: str = Field(default="Confirmed KNL sales schedule import", max_length=512)
     alias_mappings: Optional[dict[str, UUID]] = None
+    require_route_mapping: bool = False
+

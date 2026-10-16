@@ -21,6 +21,8 @@ dependencies = [
   "bcrypt>=4.0,<6",
   "PyJWT>=2.10,<3",
   "openpyxl>=3.1,<4",
+  "numpy>=2.3,<3",
+  "pandas>=2.2,<4",
   "python-multipart>=0.0.20,<1",
 ]
 

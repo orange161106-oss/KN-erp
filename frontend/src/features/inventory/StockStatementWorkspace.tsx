@@ -207,6 +207,7 @@ export default function StockStatementWorkspace() {
   const [selectedMonth, setSelectedMonth] = useState<number>(initialMonth);
   const [selectedYear, setSelectedYear] = useState<number>(initialYear);
   const [searchQuery, setSearchQuery] = useState('');
+  const settledSearch = useDebouncedValue(searchQuery);
   const [warningsOnly, setWarningsOnly] = useState(false);
   type StatementViewTab = 'CONSUMABLE' | 'OTHER_ITEM' | 'ALL' | 'MISSING';
   const [activeTab, setActiveTab] = useState<StatementViewTab>('CONSUMABLE');
@@ -298,7 +299,7 @@ export default function StockStatementWorkspace() {
       const classParam = activeTab === 'MISSING' ? 'CONSUMABLE' : activeTab;
       const res = await apiClient.get<StockStatementResponse>(
         `/api/v1/inventory/statement?month=${selectedMonth}&year=${selectedYear}&item_class=${classParam}&has_warnings_only=${warningsOnly}${
-          searchQuery ? `&search=${encodeURIComponent(searchQuery)}` : ''
+          settledSearch ? `&search=${encodeURIComponent(settledSearch)}` : ''
         }${storeGroupFilter ? `&store_group=${encodeURIComponent(storeGroupFilter)}` : ''}`
       );
       if (requestId !== loadRequestId.current) return;
@@ -320,13 +321,16 @@ export default function StockStatementWorkspace() {
     } finally {
       if (requestId === loadRequestId.current) setIsLoading(false);
     }
-  }, [selectedMonth, selectedYear, activeTab, warningsOnly, searchQuery, storeGroupFilter]);
+  }, [selectedMonth, selectedYear, activeTab, warningsOnly, settledSearch, storeGroupFilter]);
 
   useEffect(() => {
     setSuccessMsg(null);
     loadData();
+  }, [loadData]);
+
+  useEffect(() => {
     loadMissingData();
-  }, [loadData, loadMissingData]);
+  }, [loadMissingData]);
 
   const handleDeleteStatement = async () => {
     if (!deleteTarget || !canDeleteStatement || deleteInProgress.current) return;
@@ -1311,7 +1315,7 @@ export default function StockStatementWorkspace() {
             data={records}
             selectedIds={selectedIds}
             onSelectionChange={setSelectedIds}
-            isLoading={isLoading}
+            isLoading={isLoading || searchQuery !== settledSearch}
             emptyMessage={
               metadata?.has_statement
                 ? 'No records match your filter criteria.'
@@ -1830,3 +1834,4 @@ export default function StockStatementWorkspace() {
     </div>
   );
 }
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
