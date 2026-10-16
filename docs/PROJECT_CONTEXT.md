@@ -100,7 +100,7 @@ end-to-end automation is not fully delivered merely because CRUD/import screens 
 | Administration (/admin) | Employee full name/ID, base role templates and granular CRUD/plant/alert flags; UserManagement.tsx, services/users.py, models/auth.py |
 | Product master (/masters) | Products/consumables/assembly workflows coexist with older master APIs; services/product_master_service.py and inventory_masters.py |
 | Production mapping (/mappings) | ProductPlant, route steps and ProductProcessConsumable; services/mappings.py |
-| Consumption norms (/rules) | Norm version/effective dates/parameters and simulation; services/rules.py, domain/rules/engine.py and handlers |
+| Consumption norms (/rules) | Norm version/effective dates/parameters; services/rules.py, domain/rules/engine.py and handlers. The owner removed the test calculation panel on 2026-10-16. |
 | Production for sale (/prd) | PRDRecord workspace plus PlanningVersion/PRDOrderItem normalized path; services/prd_workspace.py, prd_source.py, prd.py |
 | Requirement (/requirements) | MonthlyRequirementRecord workspace plus CalculatedRequirement engine records; services/requirements_workspace.py and requirements.py |
 | Plant review (/plant-workflow) | UserPlant scope, confirmations, additional adjustments and review/final aggregate; services/plant_workflow.py |
@@ -372,4 +372,14 @@ Per the owner addendum, all row numbers, counts, and totals are fully dynamic:
 8. Re-uploading preserves R0 and R1 as separate records without summing.
 9. Verified with full test suite: 57 backend tests passed (including 7 dedicated dynamic parser tests in
    `test_dynamic_sales_schedule.py`), 12 frontend vitest tests passed, TypeScript checks passed, and production build succeeded.
+
+## Consumption Norms test panel removal — 2026-10-16
+
+At the owner's request, ConsumptionNorms.tsx no longer renders "Test a consumption
+norm", its Run Calculation form or preview results. Associated evaluation state and
+the page's evaluate API call were removed. Norm creation, file import/export,
+reviewed edits, filters and version history retain their existing behavior.
+Requirement-module calculations, backend evaluation/formula logic, permissions and
+database schema were not changed. The obsolete simulator UI test was removed;
+the eight remaining focused Consumption Norms workflow checks passed.
 

@@ -7,7 +7,7 @@ import NormSetup from './NormSetup';
 import NormImportWorkspace from './NormImportWorkspace';
 import { downloadNormFile } from './normFiles';
 import { NORM_ENDPOINT } from './types';
-import type { ConsumptionNorm, EvaluationResult, NormReferenceData } from './types';
+import type { ConsumptionNorm, NormReferenceData } from './types';
 
 const RULE_TYPES = ['PRODUCTION_RATE', 'AREA_COVERAGE', 'PACKING_RATIO', 'TOOL_LIFE', 'FIXED_QUANTITY', 'PLANT_REQUEST', 'MAINTENANCE', 'MIN_MAX'];
 const REFERENCE_FIELDS = ['part_number', 'part_name', 'used_part_number', 'thickness', 'process_count', 'reference_production_qty', 'reference_schedule_qty'] as const;
@@ -33,7 +33,6 @@ export default function ConsumptionNorms() {
   const canRead = superAdmin || Boolean(modern ? user?.consumption_norms_read : user?.permissions?.some(code => ['norms.read', 'masters.read', 'masters.write'].includes(code)));
   const canCreate = superAdmin || Boolean(modern ? user?.consumption_norms_create : user?.permissions?.some(code => ['norms.write', 'masters.write'].includes(code)));
   const canUpdate = superAdmin || Boolean(modern ? user?.consumption_norms_update : user?.permissions?.some(code => ['norms.write', 'masters.write'].includes(code)));
-  const canCalculate = superAdmin || Boolean(user?.requirements_update || user?.permissions?.includes('requirements.calculate'));
   const [norms, setNorms] = useState<ConsumptionNorm[]>([]);
   const [rows, setRows] = useState<NormRow[]>([]);
   const [original, setOriginal] = useState(new Map<string, NormRow>());
@@ -50,16 +49,9 @@ export default function ConsumptionNorms() {
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [epoch, setEpoch] = useState(0);
-  const [evalNormId, setEvalNormId] = useState('');
-  const [evalQty, setEvalQty] = useState('');
-  const [evalDate, setEvalDate] = useState('');
-  const [requestedQty, setRequestedQty] = useState('');
-  const [evalResult, setEvalResult] = useState<EvaluationResult | null>(null);
-  const [evalError, setEvalError] = useState('');
-  const [evaluating, setEvaluating] = useState(false);
   const pending = useRef(false);
   const requestId = useRef(0);
-  const loadNorms = useCallback(async (preferredId?: string) => {
+  const loadNorms = useCallback(async () => {
     const id = ++requestId.current;
     setLoading(true); setError('');
     try {
@@ -68,7 +60,6 @@ export default function ConsumptionNorms() {
       const records = data.map(gridRow);
       setNorms(data); setRows(records); setOriginal(new Map(records.map(row => [row.id, row])));
       setSelected(new Set()); setEpoch(value => value + 1);
-      setEvalNormId(previous => data.find(norm => norm.id === (preferredId || previous) && norm.is_active)?.id || data.find(norm => norm.is_active)?.id || '');
     } catch (failure) { if (id === requestId.current) setError(failure instanceof Error ? failure.message : 'Could not load consumption norms.'); }
     finally { if (id === requestId.current) setLoading(false); }
   }, []);
@@ -130,19 +121,6 @@ export default function ConsumptionNorms() {
     catch (failure) { setError(failure instanceof Error ? failure.message : 'Download failed.'); }
     finally { pending.current = false; setBusy(false); }
   }
-  async function simulate(event: React.FormEvent) {
-    event.preventDefault();
-    const norm = norms.find(value => value.id === evalNormId);
-    if (!norm || !canCalculate || evaluating) return;
-    setEvaluating(true); setEvalError(''); setEvalResult(null);
-    try {
-      setEvalResult(await apiClient.post<EvaluationResult>(`${NORM_ENDPOINT}/evaluate`, {
-        consumable_id: norm.consumable_id, product_id: norm.product_id || null, process_id: norm.process_id || null,
-        plant_id: norm.plant_id || null, production_quantity: evalQty, as_of_date: evalDate, requested_quantity: requestedQty || null,
-      }));
-    } catch (failure) { setEvalError(failure instanceof Error ? failure.message : 'Calculation failed.'); }
-    finally { setEvaluating(false); }
-  }
   const columns: ColumnDef<NormRow>[] = [
     { key: 'part_number', label: 'Part No.', width: 170, isEditable: true },
     { key: 'part_name', label: 'Used for – Part Name', width: 240, isEditable: true },
@@ -198,7 +176,7 @@ export default function ConsumptionNorms() {
       {error && <p role="alert" className="rounded bg-red-50 p-3 text-red-700">{error}</p>}
       {message && <p role="status" className="rounded bg-green-50 p-3 text-green-800">{message}</p>}
     </section>
-    {showCreate && canCreate && <NormSetup onCancel={() => setShowCreate(false)} onCreated={async id => { await loadNorms(id); setShowCreate(false); setMessage('Consumption norm saved.'); }}/>}
+    {showCreate && canCreate && <NormSetup onCancel={() => setShowCreate(false)} onCreated={async () => { await loadNorms(); setShowCreate(false); setMessage('Consumption norm saved.'); }}/>}
     <section className="h-[520px] min-h-0 flex flex-col overflow-hidden rounded-xl border bg-white">
       <DataTable key={epoch} virtualize columns={columns} data={visible} originalData={original} selectedIds={selected} onSelectionChange={setSelected}
         canUpdate={canUpdate && !busy && !loading} canCreate={false} canDelete={false} isLoading={loading || busy}
@@ -210,23 +188,6 @@ export default function ConsumptionNorms() {
         onSave={save} onDiscardChanges={discard} storageKey="consumption-norms-grid" saveStatus={busy ? 'saving' : 'idle'}
         getRowClassName={row => row.is_active ? '' : 'text-gray-500 bg-gray-50'}
         emptyMessage="No consumption norms match. Upload a workbook or add an approved norm to start."/>
-    </section>
-    <section className="space-y-4 rounded-xl border bg-white p-5">
-      <h3 className="text-lg font-semibold">Test a consumption norm</h3>
-      <p className="text-sm text-gray-600">Preview the approved formula with its source parameters. This does not approve demand, create a purchase order or change stock.</p>
-      <form onSubmit={event => void simulate(event)} className="grid gap-3 sm:grid-cols-4">
-        <label className="text-sm">Norm<select className={`${field} block w-full mt-1`} value={evalNormId} onChange={event => { setEvalNormId(event.target.value); setEvalResult(null); }}><option value="">Choose norm</option>{norms.filter(norm => norm.is_active).map(norm => <option key={norm.id} value={norm.id}>{norm.product_code || 'Global'} · {norm.process_name || 'Any process'} · {norm.consumable_code} [{norm.rule_type} v{norm.version}]</option>)}</select></label>
-        <label className="text-sm">Production quantity<input required type="number" min="0" step="any" className={`${field} block w-full mt-1`} value={evalQty} onChange={event => setEvalQty(event.target.value)}/></label>
-        <label className="text-sm">Calculation date<input required type="date" className={`${field} block w-full mt-1`} value={evalDate} onChange={event => setEvalDate(event.target.value)}/></label>
-        {norms.find(norm => norm.id === evalNormId)?.rule_type === 'PLANT_REQUEST' && <label className="text-sm">Explicit requested quantity<input type="number" min="0" step="any" className={`${field} block w-full mt-1`} value={requestedQty} onChange={event => setRequestedQty(event.target.value)}/></label>}
-        <button type="submit" className={`${button} bg-burnt-orange text-white self-end justify-center`} disabled={evaluating || !evalNormId || !canCalculate}>{evaluating ? 'Calculating…' : 'Run Calculation'}</button>
-      </form>
-      {evalError && <p role="alert" className="text-red-700">{evalError}</p>}
-      {evalResult && <div className="space-y-3 rounded border bg-indigo-50 p-4">
-        <p className="text-xl font-bold">Calculated Output: {evalResult.calculation.final_calculated_requirement} {evalResult.calculation.unit}</p>
-        <p className="text-sm">Raw value: {evalResult.calculation.raw_requirement} · Rounding: {evalResult.calculation.rounding_policy} ({evalResult.calculation.rounding_precision}) · Version: {evalResult.calculation.rule_version}</p>
-        <ol className="space-y-2">{evalResult.calculation.calculation_steps.map((step, index) => <li key={index} className="rounded border bg-white p-3 text-sm"><strong>Step {step.step_number}: {step.description}</strong><p className="font-mono">{step.formula} ⇒ {step.result}</p></li>)}</ol>
-      </div>}
     </section>
     {showImport && canCreate && <NormImportWorkspace canUpdate={canUpdate} onClose={() => setShowImport(false)} onImported={async value => { await loadNorms(); setMessage(value); }}/>}
   </div>;

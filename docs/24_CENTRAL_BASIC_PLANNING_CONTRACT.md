@@ -165,7 +165,7 @@ Manual sequence after database setup:
 
 1. Register/review Product, Consumable, Process and stock-unit masters.
 2. Consumption Norms → template/upload → correct every row → choose approved
-   formula/date/rounding → confirm. Check saved versions and the calculation preview.
+   formula/date/rounding → confirm. Check saved versions and approved parameters.
 3. Production for sale → Upload Excel → select sheet/month/revision and norm date →
    review product/norm matches and reconciliation → confirm.
 4. Requirement → Central requirement plan → preview matching → calculate and save →
@@ -182,3 +182,9 @@ totals. Bulk reference import explicitly supports the owner-reviewed Q × proces
 count choice; other formula families remain available through manual norm maintenance
 and parameter editing. The raw reference workbook requires master/duplicate/rule
 review and is not production-ready simply because it can be opened.
+
+Owner UI clarification — 2026-10-16: Consumption Norms no longer includes the
+"Test a consumption norm" calculation panel. Norm setup, import/export, reviewed
+edits and version history remain available. Requirement calculations continue in
+the Requirement module; existing backend evaluation APIs and formula logic are
+unchanged.

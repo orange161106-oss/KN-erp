@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { apiClient } from '../api/client';
 import { AuthContext } from '../features/auth/context';
@@ -168,18 +168,4 @@ test('download errors are visible and do not create a false successful export', 
   fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('Export access denied.');
   expect(fetch.mock.calls[0][0]).toContain(endpoint + '/export?format=csv');
-});
-
-test('simulator sends canonical scoped inputs and displays backend calculation evidence', async () => {
-  vi.spyOn(apiClient, 'get').mockResolvedValue([norm]);
-  const post = vi.spyOn(apiClient, 'post').mockResolvedValue({ norm_id: 'norm-1', calculation: { rule_type: 'PRODUCTION_RATE', rule_version: 1, parameters: norm.parameters,
-    source_production_qty: '100', raw_requirement: '200', final_calculated_requirement: '200', unit: 'PCS', rounding_policy: 'NONE', rounding_precision: 4,
-    calculation_steps: [{ step_number: 1, description: 'Approved production-rate rule', formula: '100 × 2', result: '200' }] } });
-  page(); await screen.findByRole('cell', { name: 'MAT-1' });
-  fireEvent.change(screen.getByLabelText('Production quantity'), { target: { value: '100' } });
-  fireEvent.change(screen.getByLabelText('Calculation date'), { target: { value: '2026-10-15' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Run Calculation' }));
-  expect(await screen.findByText('Calculated Output: 200 PCS')).toBeInTheDocument();
-  expect(post).toHaveBeenCalledWith(endpoint + '/evaluate', expect.objectContaining({ production_quantity: '100', plant_id: null, product_id: 'product-1', process_id: 'process-1' }));
-  expect(within(screen.getByRole('list')).getByText(/100 × 2/)).toBeInTheDocument();
 });
