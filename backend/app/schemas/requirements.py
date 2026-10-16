@@ -31,6 +31,8 @@ class CalculatedRequirementResponse(BaseModel):
     product_id: UUID
     product_code: Optional[str] = None
     product_name: Optional[str] = None
+    product_part_number: Optional[str] = None
+    product_item_id: Optional[str] = None
     plant_id: UUID | None
     plant_name: Optional[str] = None
     process_id: UUID

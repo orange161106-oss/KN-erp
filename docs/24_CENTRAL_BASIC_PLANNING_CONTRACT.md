@@ -188,3 +188,94 @@ Owner UI clarification — 2026-10-16: Consumption Norms no longer includes the
 edits and version history remain available. Requirement calculations continue in
 the Requirement module; existing backend evaluation APIs and formula logic are
 unchanged.
+
+## October requirement-view repair — 2026-10-16
+
+The owner requested product-wise consumable quantities in both Central requirement
+plan and Existing monthly plans → Consumable Planning Module. For a month whose
+latest revision is BASIC_CENTRAL_V1, the monthly screen now reads the same saved
+CalculatedRequirement rows and delegates Recalculate to basic_planning.calculate.
+It does not maintain a second independent production-derived formula result.
+Manual plan periods retain their earlier behavior/history. Direct requirement-upload
+replacement is blocked for central production months; production and norm changes
+must go through their source screens. Central read/write scope, latest-revision and
+approved-history protection also apply through monthly endpoints.
+
+The hierarchical sales parser previously invented "Nos" without a unit column,
+while existing Product masters used PCS. New schedule imports obtain the matched
+Product Master unit and record that provenance. Existing central schedule batches
+are recognized by their specific historical metadata shape; only their fabricated
+Nos default is interpreted using the current matched master. Saved production rows
+are not rewritten. Calculation evidence records original unit, effective production
+unit and its source. Explicit units from other import formats still fail on mismatch;
+there is no general PCS/NOS conversion or unit equivalence rule.
+
+Monthly queries now eager-load relationships and batch norm audit references rather
+than querying per result/error row. Metadata identifies the production workflow and
+counts its saved result/error rows. Central results/exports include Part No, Item ID
+and product description, with searchable per-product required quantities placed
+before compact configuration diagnostics. Missing-norm notices retain actual source
+quantities and clear after a corrected recalculation. Norm formulas, rates, rounding,
+stock netting and purchase formulas were not changed.
+
+Read-only October verification found 509 source rows (185 positive), no saved valid
+calculations and 1,018 stale stored errors. With the repair, a current preview returned
+66 valid calculation contributions across 31 consumables, 142 source rows without
+linked norms and 17 PROCESS_REQUIRED diagnostics, with no production-unit errors.
+The preview took 3.09 seconds; loading the 1,018 old saved error rows through the
+monthly service took 8.78 seconds on the connected database. These are single
+observations, not a production latency guarantee. No company data was modified or
+approved. Calculate and save must refresh the unapproved October results; genuine
+missing norms/process choices require company-reviewed data.
+
+Verification: 40 distinct focused backend checks passed across the import/central/
+monthly suites and the new consistency file; 9 frontend checks and TypeScript passed.
+The new checks cover fresh and legacy unit provenance, explicit-unit rejection,
+shared quantities, history protection, batched error loading, per-product export and
+central access through monthly endpoints. No database migration is required.
+
+Follow-up live verification: the owner signed into the ERP panel and Calculate and
+save was executed for October R0. The saved result is 65 consolidated source/process/
+consumable lines from 66 norm contributions, across 31 consumables. The two views'
+saved calculation IDs and quantities match. Errors are now 142 NO_CONSUMPTION_NORM
+and 17 PROCESS_REQUIRED; the old 1,018 diagnostics and false production-unit errors
+are gone. No approval or source-data rewrite was performed.
+
+A successful save followed by a timed-out result read previously left stale zero
+rows visible. Central now reports the committed save, removes obsolete results and
+offers Reload results as a read-only recovery. A failed read never automatically
+repeats calculation or enables approval without loaded results. Remote
+connection setup still varied up to 25.09s in one observation; this repair does not
+claim to eliminate provider/network latency.
+
+Central revision/results and monthly metadata/record reads have a bounded 60-second allowance for the
+observed remote connection delay; other GET requests retain 30 seconds. Pending
+reads with different limits do not share incompatible cancellation budgets. The
+manual-planner tab no longer fetches hidden MRP records, and monthly reload clears
+stale timeout messages. Reload results also recovers an initial revision-list
+failure when no revision is selected. Final focused frontend verification: 22
+checks (10 central, 3 monthly, 9 loading), including result/revision recovery,
+hidden-tab loading and timeout budgets. TypeScript passed. Writes remain explicit
+and are never automatically repeated by this recovery.
+
+Monthly metadata uses two database reads, combining version/workflow and actor
+labels and counting saved lines/errors together. Central monthly records reuse the
+selected revision and load only audit provenance columns, avoiding automatic audit
+actor lookups; the record read uses four queries. Sixteen focused backend checks
+passed across consistency/query-budget, manual monthly and direct norm workflows.
+
+## Record-loading optimization — 2026-10-16
+
+Two additive read APIs load each Requirement view through one authenticated request:
+`GET /requirements/basic/workspace` returns central versions, selected_version_id
+and results; optional planning_version_id explicitly selects an existing central
+revision. `GET /requirements/workspace/view` returns records and plan_metadata for
+the supplied month/year and existing filters. Full prefixes remain `/api/v1`.
+Existing read/export endpoints remain compatible, and permission/central plant
+scope checks are retained. No mutation, schema migration or formula change.
+
+The central revision list uses one query with the same latest-across-all-versions
+meaning. Session-pooler port 5432 now uses the documented bounded connection pool;
+the shared hostname no longer incorrectly forces transaction-mode NullPool.
+See validation/RECORD_LOADING_2026-10-16.md for configuration, measured samples,
+worker execution, search debouncing, table virtualization and focused validation.

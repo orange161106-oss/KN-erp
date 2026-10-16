@@ -112,14 +112,14 @@ def create_single_assemble(
 
 
 @router.post("/assemble/preview", response_model=service.AssembleImportPreviewResponse)
-async def preview_assemble_upload(
+def preview_assemble_upload(
     file: UploadFile = File(...),
     session: Annotated[Session, Depends(get_db)] = None,
     current_user: Annotated[CurrentUser, Depends(get_current_user)] = None,
 ) -> service.AssembleImportPreviewResponse:
     if not file.filename or not file.filename.lower().endswith(".xlsx"):
         raise ApplicationError("INVALID_FILE_TYPE", "Only .xlsx Excel files are supported.", 422)
-    contents = await file.read(15 * 1024 * 1024 + 1)
+    contents = file.file.read(15 * 1024 * 1024 + 1)
     if len(contents) > 15 * 1024 * 1024:
         raise ApplicationError("FILE_TOO_LARGE", "File size exceeds the 15 MB limit.", 413)
     return service.execute_with_db_retry(

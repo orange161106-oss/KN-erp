@@ -13,6 +13,7 @@ from app.core.errors import ApplicationError
 from app.db.session import get_db
 from app.schemas.auth import CurrentUser
 from app.schemas.requirements import CalculationRunRequest
+from app.schemas.requirement_loading import CentralWorkspace
 from app.security.permissions import require_feature_flag
 from app.services import basic_planning as service
 from app.services.requirements import get_calculated_requirements, get_calculation_errors
@@ -38,6 +39,11 @@ def central_user(user):
 def versions(user: Read, db: DB):
     central_user(user)
     return service.versions(db)
+
+@router.get('/workspace', response_model=CentralWorkspace)
+def workspace(user: Read, db: DB, planning_version_id: UUID | None = None):
+    central_user(user)
+    return service.workspace(db, planning_version_id)
 
 @router.post('/production-preview')
 def production_preview(user: CreatePRD, db: DB, file: UploadFile = File(...), sheet_name: str = Form('Prd. Order'),
@@ -86,9 +92,10 @@ def export(version_id: UUID, user: Read, db: DB, format: str = Query('xlsx')):
         raise ApplicationError('INVALID_EXPORT_FORMAT', 'Choose xlsx or csv.', 422)
     import csv, io, json
     from openpyxl import Workbook
-    rows = [['Product Code', 'Process', 'Consumable Item ID', 'Consumable Name', 'Production Quantity', 'Basic Requirement', 'Unit', 'Norm ID', 'Norm Version', 'Parameters', 'Steps']]
+    rows = [['Product Code', 'Part No.', 'Product Item ID', 'Product Description', 'Process', 'Consumable Item ID', 'Consumable Name', 'Production Quantity', 'Basic Requirement', 'Unit', 'Norm ID', 'Norm Version', 'Parameters', 'Steps']]
     for item in value['calculations']:
-        rows.append([item.product_code, item.process_name, item.consumable_code, item.consumable_name,
+        rows.append([item.product_code, item.product_part_number, item.product_item_id, item.product_name,
+            item.process_name, item.consumable_code, item.consumable_name,
             str(item.source_production_qty), str(item.calculated_qty), item.uom, str(item.rule_id), item.rule_version,
             json.dumps(item.parameters), json.dumps(item.calculation_steps)])
     rows += [[], ['Consolidated Consumable', 'Basic Requirement', 'Unit', 'Super Admin Approved']]

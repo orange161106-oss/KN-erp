@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     database_url: SecretStr
     db_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
+    db_pool_mode: Literal['auto', 'session', 'transaction'] = 'auto'
     # Per worker: keep the hosted PostgreSQL connection budget bounded.
     db_pool_size: int = Field(default=5, ge=1, le=50)
     db_max_overflow: int = Field(default=5, ge=0, le=50)

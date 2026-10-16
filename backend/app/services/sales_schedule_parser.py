@@ -762,7 +762,9 @@ def parse_sales_schedule_data(
                     "part_no": p_row["part_no"],
                     "description": p_row["description"],
                     "planned_quantity": format(qty, ".4f"),
-                    "uom": "Nos",
+                    # This schedule layout has no production-unit column.
+                    # The importer must use the matched Product Master unit.
+                    "uom": "",
                     "target_period": q_col.planning_period,
                     "planning_version": q_col.revision_label,
                     "revision": q_col.revision_label,

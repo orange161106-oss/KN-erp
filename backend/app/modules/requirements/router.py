@@ -189,7 +189,7 @@ def handle_delete_line_item(
     return delete_single_line_item(session, plan_id, item_id, current_user)
 
 
-async def handle_bulk_upload_items(
+def handle_bulk_upload_items(
     plan_id: UUID,
     file: UploadFile = File(...),
     upload_all_plants: bool = Query(False),
@@ -198,7 +198,7 @@ async def handle_bulk_upload_items(
 ) -> BulkUploadResponse:
     """Accept a CSV or Excel file, extract Item ID and QTY, and bulk upsert records. Supports upload_all_plants."""
     try:
-        content = await file.read()
+        content = file.file.read()
         return bulk_upsert_line_items(
             session,
             plan_id=plan_id,

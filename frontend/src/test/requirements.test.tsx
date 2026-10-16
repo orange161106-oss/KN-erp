@@ -103,11 +103,8 @@ function renderRequirements(defaultTab: 'workspace' | 'mrp' = 'mrp') {
 test('renders Requirements table with Section 7A headers, metadata card, and records', async () => {
   fetchMock.mockImplementation(async input => {
     const urlStr = String(input);
-    if (urlStr.includes('/plan-metadata')) {
-      return jsonResponse(mockMetadata);
-    }
-    if (urlStr.includes('/records')) {
-      return jsonResponse(mockRequirements);
+    if (urlStr.includes('/workspace/view')) {
+      return jsonResponse({records:mockRequirements,plan_metadata:mockMetadata});
     }
     return jsonResponse([]);
   });
@@ -132,6 +129,7 @@ test('renders Requirements table with Section 7A headers, metadata card, and rec
   // Identifying columns rendered
   expect(screen.getByText('Excavator Bucket Arm')).toBeInTheDocument();
   expect(screen.getByText('P-10023')).toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
 test('user can trigger recalculation', async () => {
@@ -147,8 +145,8 @@ test('user can trigger recalculation', async () => {
         plan_metadata: mockMetadata,
       });
     }
-    if (urlStr.includes('/plan-metadata')) {
-      return jsonResponse(mockMetadata);
+    if (urlStr.includes('/workspace/view')) {
+      return jsonResponse({records:mockRequirements,plan_metadata:mockMetadata});
     }
     return jsonResponse(mockRequirements);
   });
@@ -162,4 +160,18 @@ test('user can trigger recalculation', async () => {
   expect(await screen.findByText(/Recalculation completed/)).toBeInTheDocument();
   const call = fetchMock.mock.calls.find(([url, init]) => String(url).includes('/recalculate') && init?.method === 'POST');
   expect(call).toBeDefined();
+});
+
+test('the manual planner does not fetch the hidden consumable grid until its tab opens',async()=>{
+  fetchMock.mockImplementation(async input=>{
+    const path=String(input);
+    if(path.includes('/workspace/view'))return jsonResponse({records:mockRequirements,plan_metadata:mockMetadata});
+    return jsonResponse([]);
+  });
+  renderRequirements('workspace');
+  await screen.findByRole('heading',{name:'Monthly Requirement Planner'});
+  expect(fetchMock.mock.calls.some(([input])=>String(input).includes('/workspace/'))).toBe(false);
+  await userEvent.click(screen.getByRole('button',{name:'Consumable Planning Module (MRP)'}));
+  await screen.findByText('MIG Welding Wire 1.2mm');
+  expect(fetchMock.mock.calls.some(([input])=>String(input).includes('/workspace/view'))).toBe(true);
 });

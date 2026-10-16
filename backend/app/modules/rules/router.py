@@ -66,19 +66,19 @@ def export_norms(session: Annotated[Session, Depends(get_db)], format: str = Que
 
 
 @router.post("/import-preview", response_model=NormImportPreview, dependencies=[Depends(require_norm_permission("create"))])
-async def preview_norm_import(session: Annotated[Session, Depends(get_db)], file: UploadFile = File(...), review: Optional[str] = Form(None)):
-    content = await file.read(norm_imports.MAX_BYTES + 1)
+def preview_norm_import(session: Annotated[Session, Depends(get_db)], file: UploadFile = File(...), review: Optional[str] = Form(None)):
+    content = file.file.read(norm_imports.MAX_BYTES + 1)
     corrections = _review(NormImportCorrections, review) if review else None
     return norm_imports.preview(session, file.filename or "", content, corrections)
 
 
 @router.post("/import-confirm", response_model=NormImportResult, dependencies=[Depends(require_norm_permission("create"))])
-async def confirm_norm_import(session: Annotated[Session, Depends(get_db)],
+def confirm_norm_import(session: Annotated[Session, Depends(get_db)],
     current_user: Annotated[CurrentUser, Depends(get_current_user)], file: UploadFile = File(...), review: str = Form(...)):
     checked = _review(NormImportReview, review)
     if checked.mode == "SUPERSEDE":
         require_norm_permission("update")(current_user)
-    return norm_imports.confirm(session, file.filename or "", await file.read(norm_imports.MAX_BYTES + 1), checked, current_user.id)
+    return norm_imports.confirm(session, file.filename or "", file.file.read(norm_imports.MAX_BYTES + 1), checked, current_user.id)
 
 
 @router.post("/bulk-update", response_model=ConsumptionNormBatchResponse, dependencies=[Depends(require_norm_permission("update"))])

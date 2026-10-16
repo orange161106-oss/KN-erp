@@ -170,19 +170,6 @@ export default function ConsumptionNorms() {
     catch (failure) { setError(failure instanceof Error ? failure.message : 'Download failed.'); }
     finally { pending.current = false; setBusy(false); }
   }
-  async function simulate(event: React.FormEvent) {
-    event.preventDefault();
-    const norm = norms.find(value => value.id === evalNormId);
-    if (!norm || !canCalculate || evaluating) return;
-    setEvaluating(true); setEvalError(''); setEvalResult(null);
-    try {
-      setEvalResult(await apiClient.post<EvaluationResult>(`${NORM_ENDPOINT}/evaluate`, {
-        consumable_id: norm.consumable_id, product_id: norm.product_id || null, process_id: norm.process_id || null,
-        plant_id: norm.plant_id || null, production_quantity: evalQty, as_of_date: evalDate, requested_quantity: requestedQty || null,
-      }));
-    } catch (failure) { setEvalError(failure instanceof Error ? failure.message : 'Calculation failed.'); }
-    finally { setEvaluating(false); }
-  }
   function toggleSchLock(id: string) {
     if (!canUpdate || busy) return;
     setRows(previous => previous.map(row => {

@@ -48,20 +48,21 @@ async function request<T>(endpoint: string, method: string, data?: unknown, time
   }
   return response.status === 204 ? undefined as T : response.json();
 }
-function read<T>(endpoint: string): Promise<T> {
-  const pending = pendingReads.get(endpoint);
+function read<T>(endpoint: string, timeoutMs = 30000): Promise<T> {
+  const key = `${timeoutMs}:${endpoint}`;
+  const pending = pendingReads.get(key);
   if (pending) return pending as Promise<T>;
   const generation = readGeneration;
-  const operation = request<T>(endpoint, 'GET', undefined, 30000).catch(async error => {
+  const operation = request<T>(endpoint, 'GET', undefined, timeoutMs).catch(async error => {
     // Repeat only an explicitly transient read. Account/permission changes and
     // mutations invalidate recovery; writes, schema errors and capacity are never retried.
     if (!(error instanceof ApiError) || !error.retryable || generation !== readGeneration) throw error;
     await new Promise(resolve => setTimeout(resolve, 250));
     if (generation !== readGeneration) throw error;
-    return request<T>(endpoint, 'GET', undefined, 30000);
+    return request<T>(endpoint, 'GET', undefined, timeoutMs);
   });
-  pendingReads.set(endpoint, operation);
-  const clear = () => { if (pendingReads.get(endpoint) === operation) pendingReads.delete(endpoint); };
+  pendingReads.set(key, operation);
+  const clear = () => { if (pendingReads.get(key) === operation) pendingReads.delete(key); };
   // Both outcomes release the entry; failures can always be retried.
   void operation.then(clear, clear);
   return operation;

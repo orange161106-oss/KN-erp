@@ -60,6 +60,7 @@ class MonthlyPlanMetadata(BaseModel):
     updated_by: Optional[str] = None
     updated_by_name: Optional[str] = None
     record_count: int = 0
+    source_workflow: Optional[str] = None
 
 
 class RequirementRowError(BaseModel):

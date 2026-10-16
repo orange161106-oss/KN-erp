@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { apiClient } from '../../api/client';
 import { useAuth } from '../auth/context';
 import { canPerform } from '../../core/rbac';
@@ -54,6 +55,8 @@ export default function PRDPlanning() {
 
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState('');
+  const settledSearch = useDebouncedValue(searchQuery);
+  const loadGeneration = useRef(0);
   const [plantFilter, setPlantFilter] = useState('');
   const [customerFilter, setCustomerFilter] = useState('');
   const [periodFilter, setPeriodFilter] = useState('');
@@ -66,10 +69,11 @@ export default function PRDPlanning() {
 
   // Load records
   const loadRecords = useCallback(async () => {
+    const generation=++loadGeneration.current;
     setIsLoading(true);
     try {
       const params = new URLSearchParams();
-      if (searchQuery) params.append('search', searchQuery);
+      if (settledSearch) params.append('search', settledSearch);
       if (plantFilter) params.append('plant', plantFilter);
       if (customerFilter) params.append('customer', customerFilter);
       if (periodFilter) params.append('target_period', periodFilter);
@@ -78,6 +82,7 @@ export default function PRDPlanning() {
       params.append('limit', '1000');
       const q = params.toString();
       const data = await apiClient.get<PRDRecord[]>(`/api/v1/prd/workspace/records${q ? `?${q}` : ''}`);
+      if(generation!==loadGeneration.current)return;
 
       setRecords(data);
       const orig = new Map<string, PRDRecord>();
@@ -86,17 +91,19 @@ export default function PRDPlanning() {
       setDeletedIds([]);
       setSelectedRowIds(new Set());
     } catch (err) {
+      if(generation!==loadGeneration.current)return;
       setStatusMessage({
         type: 'error',
         text: err instanceof Error ? err.message : 'Failed to fetch PRD workspace records.',
       });
     } finally {
-      setIsLoading(false);
+      if(generation===loadGeneration.current)setIsLoading(false);
     }
-  }, [searchQuery, plantFilter, customerFilter, periodFilter, versionFilter, statusFilter]);
+  }, [settledSearch, plantFilter, customerFilter, periodFilter, versionFilter, statusFilter]);
 
   useEffect(() => {
     void loadRecords();
+    return ()=>{++loadGeneration.current;};
   }, [loadRecords]);
 
   // Unique options for filters

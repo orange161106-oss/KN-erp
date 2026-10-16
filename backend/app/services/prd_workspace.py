@@ -1208,6 +1208,8 @@ def confirm_sales_schedule_import(
                 "planning_period": period,
                 "revision": rev_label,
                 "workflow": "BASIC_CENTRAL_V1",
+                "source_format": "SALES_SCHEDULE_V1",
+                "production_unit_source": "PRODUCT_MASTER",
             },
             staged_data=staged_items,
         )

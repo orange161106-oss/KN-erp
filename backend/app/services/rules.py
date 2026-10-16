@@ -76,7 +76,7 @@ def norm_reference_data(db: Session, ids: list[UUID]) -> dict[UUID, dict]:
     """Read immutable row provenance from the existing audit store in one query."""
     if not ids:
         return {}
-    rows = db.scalars(select(AuditLog).where(AuditLog.entity_type == "ConsumptionNorm",
+    rows = db.execute(select(AuditLog.entity_id, AuditLog.new_values).where(AuditLog.entity_type == "ConsumptionNorm",
         AuditLog.entity_id.in_(ids)).order_by(AuditLog.created_at.desc(), AuditLog.id.desc()))
     result = {}
     for row in rows:

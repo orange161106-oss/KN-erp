@@ -383,3 +383,109 @@ Requirement-module calculations, backend evaluation/formula logic, permissions a
 database schema were not changed. The obsolete simulator UI test was removed;
 the eight remaining focused Consumption Norms workflow checks passed.
 
+## Shared product-wise requirements and October error repair — 2026-10-16
+
+The owner wants the central plan and Existing monthly plans → Consumable Planning
+Module to show the same production-derived consumable demand per product. For the
+latest BASIC_CENTRAL_V1 revision in a selected month, monthly read/export/recalculate
+now reuse central saved rows and calculation service. Manual monthly periods and
+history remain separate. Production-based rows are read-only in the monthly grid;
+edit production/norm sources instead. Central scope and approved-history protection
+remain enforced through the monthly API. Response metadata adds source_workflow;
+calculation responses/exports add product Part No/Item ID/description.
+
+The sales-schedule parser fabricated Nos although its layout contains no unit column.
+Future imports use the matched Product Master unit. Only known historical schedule
+batch metadata permits recovering the old fabricated Nos default; original source
+records remain unchanged and calculation evidence records the provenance. Explicit
+source-unit mismatches still block approval. Monthly relationship loading is batched
+to remove the per-row queries that caused timeouts. Product results precede compact
+diagnostics; missing norm rows retain actual quantities and clear on recalculation.
+
+A read-only check of October R0 found 509 source rows, 185 positive, zero saved valid
+calculations and 1,018 old saved errors. Repaired preview: 66 calculation contributions
+across 31 consumables, 142 source rows missing norms, 17 PROCESS_REQUIRED diagnostics,
+zero false unit errors. These data gaps were not filled with guessed norms/processes.
+Preview took 3.09s and the monthly read of old 1,018 errors took 8.78s in one observation.
+No company records were changed or approved; Calculate and save refreshes unapproved
+results. The former test-panel simulator's orphaned handler from the current merge
+was also removed so TypeScript builds after its earlier owner-requested removal.
+Forty distinct focused backend checks, nine frontend checks and TypeScript passed.
+No migration or manufacturing formula change. Details are in the October repair
+section of 24_CENTRAL_BASIC_PLANNING_CONTRACT.md.
+
+### Live October recalculation and result recovery — 2026-10-16
+
+After the owner signed into the ERP panel, Calculate and save was run once for
+October R0 through the authenticated UI. A fresh read confirmed 65 saved requirement
+lines (66 formula contributions consolidated by source/process/consumable), 31
+consumables and 159 current diagnostics: 142 NO_CONSUMPTION_NORM and 17
+PROCESS_REQUIRED. The 1,018 stale errors were replaced; no PRODUCTION_UNIT_CHANGED
+errors remain. Central and monthly saved line IDs/quantities match exactly. The
+monthly view includes the 65 calculated rows plus 159 explicit configuration rows.
+The plan was not approved, source production was not rewritten and missing company
+norms/processes were not invented.
+
+The write succeeded but its follow-up read timed out, leaving the old zero-row
+result visible. Central now distinguishes a committed save from a failed results
+read, removes obsolete results after saving, and provides Reload results without
+repeating the write or logging out. Reload also clears resolved missing-norm lists;
+approval is disabled until saved results are available. Reload also recovers an
+initial revision-list failure when no revision has loaded, without refreshing the
+page/login.
+
+Live connection latency remains variable: one read-only connection setup took
+25.09s; the following central line/error/summary reads took 1.95/4.16/1.47s, and
+the monthly conversion/read took 16.8s. These are observations, not a latency
+guarantee. No provider settings, connection route, schema or formula changed.
+Central revision/results and monthly records/metadata have a bounded 60-second read
+allowance; other reads retain 30 seconds. Timeouts do not automatically repeat
+writes. The manual planner no longer fetches the hidden MRP screen, and a successful
+monthly reload clears an earlier timeout message. Final focused frontend
+verification: 22 checks (10 central, 3 monthly, 9 loading), including result/revision
+recovery, hidden-tab and timeout-budget regressions; TypeScript also passed.
+
+Monthly metadata now loads revision/workflow/creator/updater together and counts
+calculated/error rows in one statement (two reads total). The central monthly grid
+reuses the selected revision and reads only the audit provenance columns it uses,
+avoiding automatic audit-actor loads (four reads total). Sixteen focused backend
+checks passed for central/monthly consistency, query budgets and direct norm
+workflow, using disposable data. Saved production, quantity formulas and approvals
+remain unchanged.
+
+Final authenticated browser verification loaded both central's 65 saved lines and
+the monthly grid's 224 rows (65 calculated + 159 configuration rows), without a
+timeout alert. The monthly view was left open for the owner. This successful read
+does not guarantee remote database latency for future requests.
+
+## Faster record loading across ERP screens — 2026-10-16
+
+The owner's session-pooler connection uses port 5432. Engine detection incorrectly
+classified every Supabase pooler hostname as transaction mode, using NullPool and
+discarding each connection/startup warm-up. Auto detection now reserves transaction
+mode for port 6543; direct/session mode reuses configured bounded connections with
+LIFO, pre-ping, keepalives and recycling. DB_POOL_MODE can explicitly select mode
+for nonstandard proxies. Prepared statements remain disabled. The configured size,
+overflow and wait settings are now honored, and diagnose reports the real pool.
+No connection URL/provider plan, schema, password or employee grant was changed.
+
+Central Requirement initial/post-save/reload reads use the additive basic/workspace
+API for revisions and saved results together. Monthly uses workspace/view for rows
+and metadata in one authenticated request. Existing endpoints remain compatible;
+central/plant scope and fresh grants remain enforced. The central revision list is
+one query and retains historical/latest selection semantics. Requirement/Purchase
+grids use the existing virtualized DataTable. Production/monthly/Purchase remote
+searches debounce at 300 ms and ignore obsolete result/error responses. Blocking
+norm imports, assembly preview and manual requirement upload use request workers.
+
+Read-only samples: old/new repeated connection rounds 2152/1586 vs 716/923 ms;
+four physical connections became one. Existing Central result services 5218→2618 ms;
+monthly metadata/records 8673→3948 ms. Counts stayed 65 valid lines, 159 configuration
+rows and 31 consumables; monthly saved quantities match exactly. Separate combined
+loader samples were 4738/5016 ms; remote latency still varies, including cold setup.
+Running backend DB health and both registered APIs were verified. No company
+business records were mutated during this performance work. Focused checks:
+90 backend, 31 frontend, TypeScript and Vite production build passed. No migration.
+Details, exact measurement boundaries and cross-team impact are recorded in
+validation/RECORD_LOADING_2026-10-16.md.
+

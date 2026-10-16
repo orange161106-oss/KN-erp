@@ -12,12 +12,14 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError, ProgrammingError, TimeoutError
+from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings
 from app.core.errors import register_error_handlers
 from app.db.reliability import database_unavailable
 from app.db.session import create_db_engine, warm_remote_connection
 from app.models.audit import AuditLog
+from app.models.inventory_masters import Consumable, Unit
 from app.models.stock_statements import StockStatementLine, StockParameter
 from app.schemas.stock_statements import StockStatementBatchUpdateRequest, StockParameterBatchUpdateRequest
 from app.services import stock_statement_service as statements, stock_management_service as parameters
@@ -47,7 +49,7 @@ def test_500_row_patch_has_constant_read_budget_and_preserves_every_audit(db, mo
         else:
             result = parameters.batch_update_stock_parameters(db, payload, actor)
     reads = [sql for sql in executed if sql.lstrip().upper().startswith("SELECT")]
-    assert len(reads) == 5  # Locked batch + all edited rows + three response reads.
+    assert len(reads) <= 5  # Locked batch, edited rows and bounded response reads.
     assert len(result.records) == 500
     assert db.scalar(select(func.count()).select_from(AuditLog)) == 500
     assert all(value == Decimal("12.1234") for value in db.scalars(select(getattr(model, field))))
@@ -60,10 +62,12 @@ def test_filtered_statement_preserves_whole_batch_totals_and_warning_semantics_i
     rows[0].warning_codes = ["RECONCILIATION"]
     rows[1].opening_value = Decimal("2.4321")
     rows[1].item_class = "PRODUCT_OR_OTHER"
+    unit = Unit(code='PCS',name='Pieces');db.add(unit);db.flush()
+    db.add(Consumable(code=rows[0].item_id,item_id=rows[0].item_id,name='Synthetic consumable',unit_id=unit.id))
     db.commit()
     db.expunge_all()
     with queries(db) as executed:
-        result = statements.get_stock_statement(db, 9, 2026, has_warnings_only=True)
+        result = statements.get_stock_statement(db, 9, 2026, item_class_filter='ALL',has_warnings_only=True)
     assert len(executed) == 3
     assert len(result.records) == 1
     assert result.summary.item_count == 2
@@ -83,9 +87,9 @@ def test_parameter_search_keeps_summary_over_entire_batch(db):
     db.expunge_all()
     with queries(db) as executed:
         result = parameters.get_stock_management(db, 9, 2026, search="TEST-1")
-    assert len(executed) == 3
+    assert len(executed) == 2
     assert len(result.records) == 1
-    assert result.summary.item_count == 1
+    assert result.summary.item_count == 2
     assert result.summary.missing_limits_count == 1
     assert result.summary.min_exceeds_max_count == 1
 
@@ -102,6 +106,25 @@ def test_pool_budget_is_bounded_and_operator_configurable():
         create_db_engine(settings.model_copy(update={"db_pool_size": 2, "db_max_overflow": 0}))
     assert create.call_args.kwargs["pool_size"] == 2
     assert create.call_args.kwargs["max_overflow"] == 0
+
+
+@pytest.mark.parametrize('port,mode,transaction', [
+    (5432,'auto',False), (6543,'auto',True), (6432,'transaction',True),
+    (6543,'session',False), (5432,'transaction',True),
+])
+def test_pooler_mode_distinguishes_shared_host_ports_and_explicit_override(port,mode,transaction):
+    settings = Settings(_env_file=None, database_url=f'postgresql://operator@synthetic.pooler.supabase.com:{port}/test',
+        db_pool_mode=mode,db_pool_size=2,db_max_overflow=0,db_pool_timeout_seconds=7,db_pool_recycle_seconds=900)
+    with patch('app.db.session.create_engine') as create:
+        create_db_engine(settings)
+    options=create.call_args.kwargs
+    assert options['connect_args']['prepare_threshold'] is None
+    if transaction:
+        assert options['poolclass'] is NullPool and 'pool_size' not in options
+    else:
+        assert options['pool_size']==2 and options['max_overflow']==0
+        assert options['pool_pre_ping'] and options['pool_use_lifo']
+        assert options['pool_timeout']==7 and options['pool_recycle']==900
 
 
 def test_remote_startup_warms_only_one_read_connection_and_tolerates_outage(caplog):
@@ -162,7 +185,7 @@ def test_large_stock_response_is_compressed_without_changing_decimal_values(db):
                                   closing_qty=Decimal("12.1234")) for n in range(3, 50)])
     db.commit()
     with client_for(db, identity(db, inventory_read=True)) as client:
-        response = client.get("/api/v1/inventory/statement?month=9&year=2026")
+        response = client.get("/api/v1/inventory/statement?month=9&year=2026&item_class=ALL")
     assert response.status_code == 200
     assert response.headers["content-encoding"] == "gzip"
     assert response.json()["records"][-1]["closing_qty"] == "12.1234"

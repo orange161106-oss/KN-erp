@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { apiClient, ApiError } from '../../api/client';
 import DataTable, { type ColumnDef, type HeaderGroupDef } from '../../components/DataTable';
 import Toolbar from '../../components/Toolbar';
@@ -70,37 +71,43 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [selectedCell, setSelectedCell] = useState<{ rowId: string; colKey: keyof PurchaseWorkspaceRecord & string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const settledSearch = useDebouncedValue(searchQuery);
+  const loadGeneration = useRef(0);
   const [statusFilter, setStatusFilter] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
   const loadWorkspace = useCallback(async () => {
+    const generation=++loadGeneration.current;
     setIsLoading(true);
     try {
       const params = new URLSearchParams({
         month: String(selectedMonth),
         year: String(selectedYear),
       });
-      if (searchQuery) params.set('search', searchQuery);
+      if (settledSearch) params.set('search', settledSearch);
       if (statusFilter) params.set('status', statusFilter);
       const data = await apiClient.get<PurchaseWorkspaceResponse>(`/api/v1/purchasing/workspace?${params}`);
+      if(generation!==loadGeneration.current)return;
       setRecords(data.records);
       setPlanMetadata(data.plan_metadata);
       setSelectedRowIds(new Set());
       setMessage(null);
     } catch (error) {
+      if(generation!==loadGeneration.current)return;
       setMessage({
         type: 'error',
         text: error instanceof ApiError ? error.message : 'Failed to load purchase workspace.',
       });
     } finally {
-      setIsLoading(false);
+      if(generation===loadGeneration.current)setIsLoading(false);
     }
-  }, [selectedMonth, selectedYear, searchQuery, statusFilter]);
+  }, [selectedMonth, selectedYear, settledSearch, statusFilter]);
 
   useEffect(() => {
     void loadWorkspace();
+    return ()=>{++loadGeneration.current;};
   }, [loadWorkspace]);
 
   const readySelectedIds = useMemo(
@@ -363,6 +370,7 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
         />
         <div className="flex-1 min-h-0">
           <DataTable
+            virtualize
             columns={columns}
             headerGroups={headerGroups}
             data={records}
