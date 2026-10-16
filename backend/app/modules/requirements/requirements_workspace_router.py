@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.schemas.auth import CurrentUser
 from app.schemas.requirements_workspace import (
     MonthlyPlanMetadata,
+    MRPGRNUploadResponse,
     RequirementBatchUpdateRequest,
     RequirementBatchUpdateResponse,
     RequirementBulkDeleteRequest,
@@ -108,6 +109,28 @@ def post_import_monthly_requirements(
         "inserted_count": count,
         "plan_metadata": meta,
     }
+
+
+@router.post("/upload-grn", response_model=MRPGRNUploadResponse)
+def post_upload_mrp_grn(
+    user: CanUpdateRequirements,
+    session: Annotated[Session, Depends(get_db)],
+    file: UploadFile = File(...),
+    plant_id: str = Form(...),
+    planning_month: int = Form(...),
+    planning_year: int = Form(...),
+):
+    """Ingests store GRN file and performs month-end overwrite upsert."""
+    content = file.file.read()
+    return service.ingest_mrp_grn(
+        session=session,
+        file_bytes=content,
+        filename=file.filename or "grn_upload.xlsx",
+        plant_id=plant_id,
+        planning_month=planning_month,
+        planning_year=planning_year,
+        current_user_id=user.id,
+    )
 
 
 @router.put("/records", response_model=RequirementBatchUpdateResponse)

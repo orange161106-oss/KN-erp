@@ -1,4 +1,5 @@
 import calendar
+import csv
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import io
@@ -52,13 +53,40 @@ def get_monthly_plan_metadata(
         .order_by(PlanningVersion.version_number.desc())
         .limit(1)
     )
+
+    # Check GRN reconciliation status
+    grn_stats = session.execute(
+        select(
+            func.count(MonthlyRequirementRecord.id),
+            func.max(MonthlyRequirementRecord.last_synced_at),
+        ).where(
+            MonthlyRequirementRecord.planning_period == planning_period,
+            MonthlyRequirementRecord.is_deleted == False,  # noqa: E712
+            or_(
+                MonthlyRequirementRecord.grn_received_qty > 0,
+                MonthlyRequirementRecord.last_synced_at.is_not(None),
+                MonthlyRequirementRecord.grn_source_file.is_not(None),
+            ),
+        )
+    ).one()
+    reconciled_count = grn_stats[0] or 0
+    last_synced = grn_stats[1]
+
     if not version:
+        rec_count = session.scalar(
+            select(func.count(MonthlyRequirementRecord.id)).where(
+                MonthlyRequirementRecord.planning_period == planning_period,
+                MonthlyRequirementRecord.is_deleted == False,  # noqa: E712
+            )
+        ) or 0
         return MonthlyPlanMetadata(
-            has_plan=False,
+            has_plan=rec_count > 0,
             planning_month=month,
             planning_year=year,
             planning_period=planning_period,
-            record_count=0,
+            record_count=rec_count,
+            grn_reconciled=bool(reconciled_count > 0),
+            last_grn_synced_at=last_synced,
         )
 
     creator = session.get(User, version.created_by) if version.created_by else None
@@ -88,6 +116,8 @@ def get_monthly_plan_metadata(
         updated_by=str(version.updated_by) if version.updated_by else None,
         updated_by_name=updater.full_name or updater.username if updater else None,
         record_count=rec_count,
+        grn_reconciled=bool(reconciled_count > 0),
+        last_grn_synced_at=last_synced,
     )
 
 
@@ -152,10 +182,22 @@ def calculate_workspace_requirements(
                     msl=format(r.msl, ".4f"),
                     status=r.status,
                     remarks=r.remarks,
+                    # Month-End Overwrite & MRP Balance Tracking
+                    opening_stock=format(getattr(r, "opening_stock", Decimal("0.0")), ".4f"),
+                    grn_received_qty=format(getattr(r, "grn_received_qty", Decimal("0.0")), ".4f"),
+                    consumed_qty=format(getattr(r, "consumed_qty", Decimal("0.0")), ".4f"),
+                    closing_stock=format(getattr(r, "closing_stock", Decimal("0.0")), ".4f"),
+                    gross_requirement=format(getattr(r, "gross_requirement", Decimal("0.0")), ".4f"),
+                    net_order_requirement=format(getattr(r, "net_order_requirement", Decimal("0.0")), ".4f"),
+                    last_synced_at=r.last_synced_at,
+                    grn_source_file=r.grn_source_file,
+                    invoice_no=r.invoice_no,
+                    grn_date=r.grn_date,
                     created_at=r.created_at,
                     updated_at=r.updated_at,
                 )
             )
+
     else:
         # Fallback to existing CalculatedRequirement records
         versions_query = select(PlanningVersion).order_by(PlanningVersion.planning_period, PlanningVersion.version_number.desc())
@@ -1270,3 +1312,368 @@ def export_requirements_excel(
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _normalize_header_key(col_name: Any) -> str:
+    if col_name is None:
+        return ""
+    return str(col_name).strip().lower().replace(" ", "_").replace("-", "_").replace(".", "_")
+
+
+def _normalize_plant_identifier(val: Optional[str]) -> str:
+    if not val:
+        return ""
+    cleaned = str(val).strip().upper().replace(" ", "_").replace("-", "_")
+    roman_map = {
+        "PLANT_I": "PLANT_1",
+        "PLANT_II": "PLANT_2",
+        "PLANT_III": "PLANT_3",
+        "PLANT_IV": "PLANT_4",
+        "PLANT_V": "PLANT_5",
+        "PLANT_1": "PLANT_1",
+        "PLANT_2": "PLANT_2",
+        "PLANT_3": "PLANT_3",
+        "PLANT_4": "PLANT_4",
+        "PLANT_5": "PLANT_5",
+    }
+    return roman_map.get(cleaned, cleaned)
+
+
+def _parse_safe_date(val: Any) -> Optional[datetime]:
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+    if hasattr(val, "year") and hasattr(val, "month") and hasattr(val, "day"):
+        return datetime(val.year, val.month, val.day, tzinfo=timezone.utc)
+    val_str = str(val).strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%m/%d/%Y", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(val_str, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return None
+
+
+def ingest_mrp_grn(
+    session,
+    file_bytes: bytes,
+    filename: str,
+    plant_id: str,
+    planning_month: int,
+    planning_year: int,
+    current_user_id: Optional[UUID] = None,
+) -> dict[str, Any]:
+    """Ingests store GRN file and performs month-end overwrite upsert for MRP consumable records."""
+    if not file_bytes:
+        raise ApplicationError("EMPTY_FILE", "The uploaded GRN file is empty.", 400)
+
+    planning_period = f"{planning_year:04d}-{planning_month:02d}"
+    now = datetime.now(timezone.utc)
+
+    # 1. Parse raw rows from CSV or Excel
+    raw_rows: list[dict[str, Any]] = []
+    is_csv = filename.lower().endswith(".csv")
+
+    if is_csv:
+        text_content = ""
+        for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                text_content = file_bytes.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        if not text_content:
+            text_content = file_bytes.decode("utf-8", errors="replace")
+
+        reader = csv.reader(io.StringIO(text_content))
+        header_row = None
+        for row in reader:
+            if not any(str(c).strip() for c in row):
+                continue
+            if header_row is None:
+                header_row = [_normalize_header_key(c) for c in row]
+                continue
+            row_dict = {}
+            for idx, val in enumerate(row):
+                if idx < len(header_row) and header_row[idx]:
+                    row_dict[header_row[idx]] = val
+            raw_rows.append(row_dict)
+    else:
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+            ws = wb.active
+            header_row = None
+            for row in ws.iter_rows(values_only=True):
+                if not any(row):
+                    continue
+                if header_row is None:
+                    header_row = [_normalize_header_key(c) for c in row]
+                    continue
+                row_dict = {}
+                for idx, val in enumerate(row):
+                    if idx < len(header_row) and header_row[idx]:
+                        row_dict[header_row[idx]] = val
+                raw_rows.append(row_dict)
+        except Exception as exc:
+            raise ApplicationError("INVALID_EXCEL_FORMAT", f"Unable to parse Excel file: {str(exc)}", 400)
+
+    if not raw_rows:
+        raise ApplicationError("EMPTY_DATA", "No data rows found in uploaded GRN file.", 400)
+
+    # 2. Extract and validate consumable items and quantities
+    item_keys = (
+        "item_id", "consumable_id", "item_code", "consumable_code", "material_code",
+        "code", "item_no", "part_no", "part_number", "item", "consumable"
+    )
+    qty_keys = (
+        "grn_qty", "received_qty", "receipt_qty", "grn_quantity", "received_quantity",
+        "quantity", "qty", "received"
+    )
+    invoice_keys = ("invoice_no", "invoice_num", "invoice_number", "bill_no", "grn_no", "grn_number", "challan_no")
+    date_keys = ("grn_date", "receipt_date", "date", "invoice_date")
+    rate_keys = ("rate", "unit_rate", "grn_rate", "price")
+
+    # Aggregate incoming quantities per consumable within this file
+    aggregated_incoming: dict[str, dict[str, Any]] = {}
+
+    for row_idx, r in enumerate(raw_rows, start=1):
+        item_val = None
+        for k in item_keys:
+            if k in r and str(r[k]).strip():
+                item_val = str(r[k]).strip()
+                break
+
+        qty_val = None
+        for k in qty_keys:
+            if k in r and r[k] is not None and str(r[k]).strip() != "":
+                qty_val = r[k]
+                break
+
+        if not item_val or qty_val is None:
+            continue
+
+        try:
+            qty_clean = Decimal(str(qty_val).replace(",", "").strip())
+        except (InvalidOperation, ValueError):
+            continue
+
+        inv_val = None
+        for k in invoice_keys:
+            if k in r and r[k] is not None and str(r[k]).strip():
+                inv_val = str(r[k]).strip()
+                break
+
+        date_val = None
+        for k in date_keys:
+            if k in r and r[k] is not None and str(r[k]).strip():
+                date_val = _parse_safe_date(r[k])
+                break
+
+        rate_val = None
+        for k in rate_keys:
+            if k in r and r[k] is not None and str(r[k]).strip():
+                try:
+                    rate_val = Decimal(str(r[k]).replace(",", "").strip())
+                except (InvalidOperation, ValueError):
+                    pass
+                break
+
+        item_key = item_val.strip().upper()
+        if item_key not in aggregated_incoming:
+            aggregated_incoming[item_key] = {
+                "raw_item": item_val.strip(),
+                "qty": qty_clean,
+                "invoice_no": inv_val,
+                "grn_date": date_val,
+                "rate": rate_val,
+            }
+        else:
+            aggregated_incoming[item_key]["qty"] += qty_clean
+            if inv_val:
+                aggregated_incoming[item_key]["invoice_no"] = inv_val
+            if date_val:
+                aggregated_incoming[item_key]["grn_date"] = date_val
+            if rate_val is not None:
+                aggregated_incoming[item_key]["rate"] = rate_val
+
+    if not aggregated_incoming:
+        raise ApplicationError(
+            "NO_VALID_GRN_ITEMS",
+            "Could not detect valid items or received quantities in uploaded GRN file. Ensure headers include 'item_id' / 'item_code' and 'grn_qty' / 'received_qty'.",
+            400,
+        )
+
+    # 3. Target plant normalization and existing record index
+    target_plant_key = _normalize_plant_identifier(plant_id)
+
+    # Fetch existing records for this month and year
+    existing_records = session.scalars(
+        select(MonthlyRequirementRecord).where(
+            MonthlyRequirementRecord.planning_month == planning_month,
+            MonthlyRequirementRecord.planning_year == planning_year,
+            MonthlyRequirementRecord.is_deleted == False,  # noqa: E712
+        )
+    ).all()
+
+    # Index by normalized plant and consumable code
+    existing_by_code: dict[str, list[MonthlyRequirementRecord]] = {}
+    for rec in existing_records:
+        rec_plant_key = _normalize_plant_identifier(rec.plant_id or rec.plant)
+        if not rec_plant_key or rec_plant_key == target_plant_key:
+            code_key = rec.consumable_code.strip().upper()
+            existing_by_code.setdefault(code_key, []).append(rec)
+
+    # Find active PlanningVersion if any
+    version = session.scalar(
+        select(PlanningVersion)
+        .where(PlanningVersion.planning_period == planning_period)
+        .order_by(PlanningVersion.version_number.desc())
+        .limit(1)
+    )
+
+    updated_count = 0
+    inserted_count = 0
+
+    # 4. Perform month-end overwrite upsert
+    for item_key, entry in aggregated_incoming.items():
+        raw_item = entry["raw_item"]
+        incoming_qty = entry["qty"]
+        inv_no = entry["invoice_no"]
+        grn_dt = entry["grn_date"]
+        rate = entry["rate"]
+
+        # Resolve consumable master
+        consumable = None
+        try:
+            c_uuid = UUID(raw_item)
+            consumable = session.get(Consumable, c_uuid)
+        except (ValueError, TypeError):
+            pass
+        if not consumable:
+            consumable = session.scalar(
+                select(Consumable).where(func.upper(Consumable.code) == raw_item.upper()).limit(1)
+            )
+
+        if consumable:
+            consumable_code = consumable.code
+            consumable_name = consumable.name
+            consumable_uom = getattr(consumable, "output_unit", None) or getattr(consumable, "unit_of_measure", None) or "NOS"
+            if rate is not None and hasattr(consumable, "latest_grn_rate"):
+                consumable.latest_grn_rate = rate
+        else:
+            consumable_code = raw_item
+            consumable_name = raw_item
+            consumable_uom = "NOS"
+
+        matched_recs = existing_by_code.get(consumable_code.strip().upper(), [])
+        if not matched_recs and consumable:
+            matched_recs = existing_by_code.get(raw_item.strip().upper(), [])
+
+        if matched_recs:
+            # Overwrite existing record's grn_received_qty (month-end overwrite, not additive summing)
+            for rec in matched_recs:
+                rec.grn_received_qty = incoming_qty
+                opening = rec.opening_stock if rec.opening_stock is not None else Decimal("0.0")
+                consumed = rec.consumed_qty if rec.consumed_qty is not None else Decimal("0.0")
+                closing = (opening + rec.grn_received_qty) - consumed
+                rec.closing_stock = closing
+
+                gross = rec.gross_requirement if rec.gross_requirement and rec.gross_requirement > Decimal("0") else (rec.scheduled_consumable_qty or Decimal("0.0"))
+                rec.gross_requirement = gross
+                net_req = max(Decimal("0.0"), gross - closing)
+                rec.net_order_requirement = net_req
+
+                # Sync spreadsheet display columns
+                rec.stock_qty = closing
+                rec.shortage_qty = net_req
+                rec.last_synced_at = now
+                rec.grn_source_file = filename
+                if inv_no:
+                    rec.invoice_no = inv_no
+                if grn_dt:
+                    rec.grn_date = grn_dt
+
+                if rec.shortage_qty > Decimal("0"):
+                    rec.status = "Critical shortage" if rec.closing_stock <= Decimal("0") else "Low"
+                else:
+                    rec.status = "Normal"
+
+                rec.updated_at = now
+                updated_count += 1
+        else:
+            # Insert a new record initialized with the uploaded GRN quantity
+            closing = incoming_qty
+            new_rec = MonthlyRequirementRecord(
+                planning_period=planning_period,
+                planning_month=planning_month,
+                planning_year=planning_year,
+                planning_version_id=version.id if version else None,
+                part_name="General",
+                part_number="GENERAL",
+                consumable_code=consumable_code,
+                consumable_name=consumable_name,
+                process_name="Store Receipt",
+                part_thickness=Decimal("0.0000"),
+                process_count=1,
+                production_order_qty=Decimal("0.0000"),
+                scheduled_consumable_qty=Decimal("0.0000"),
+                unit=consumable_uom,
+                plant=plant_id,
+                plant_id=plant_id,
+                opening_stock=Decimal("0.0000"),
+                grn_received_qty=incoming_qty,
+                consumed_qty=Decimal("0.0000"),
+                closing_stock=closing,
+                gross_requirement=Decimal("0.0000"),
+                net_order_requirement=Decimal("0.0000"),
+                stock_qty=closing,
+                shortage_qty=Decimal("0.0000"),
+                po_pending_qty=Decimal("0.0000"),
+                msl=Decimal("0.0000"),
+                status="Normal",
+                last_synced_at=now,
+                grn_source_file=filename,
+                invoice_no=inv_no,
+                grn_date=grn_dt,
+                created_by=current_user_id,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(new_rec)
+            existing_by_code.setdefault(consumable_code.strip().upper(), []).append(new_rec)
+            inserted_count += 1
+
+    # Update version timestamp if available
+    if version:
+        version.updated_at = now
+        if current_user_id:
+            version.updated_by = current_user_id
+
+    # Audit log
+    session.add(
+        AuditLog(
+            actor_id=current_user_id,
+            action="GRN_OVERWRITE_INGEST",
+            entity_type="monthly_requirement_records",
+            entity_id=version.id if version else uuid4(),
+            new_values={
+                "period": planning_period,
+                "plant_id": plant_id,
+                "filename": filename,
+                "updated_count": updated_count,
+                "inserted_count": inserted_count,
+            },
+            reason=f"Ingested GRN month-end overwrite file {filename} for {plant_id} ({planning_period})",
+        )
+    )
+
+    session.commit()
+
+    return {
+        "status": "success",
+        "updated_count": updated_count,
+        "inserted_count": inserted_count,
+        "period": planning_period,
+    }
+

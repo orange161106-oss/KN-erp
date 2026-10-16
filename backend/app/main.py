@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -46,6 +46,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     
     # Attach your new production router here!
     application.include_router(production_router, prefix="/api/v1")
+
+    # Direct /api prefix aliases for MRP GRN
+    from app.modules.requirements.requirements_workspace_router import post_upload_mrp_grn
+    from app.schemas.requirements_workspace import MRPGRNUploadResponse
+    direct_api_router = APIRouter(prefix="/api")
+    direct_api_router.add_api_route("/mrp/upload-grn", post_upload_mrp_grn, methods=["POST"], response_model=MRPGRNUploadResponse, tags=["requirements-workspace"])
+    direct_api_router.add_api_route("/requirements/upload-grn", post_upload_mrp_grn, methods=["POST"], response_model=MRPGRNUploadResponse, tags=["requirements-workspace"])
+    application.include_router(direct_api_router)
     
     return application
 

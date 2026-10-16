@@ -163,3 +163,37 @@ test('user can trigger recalculation', async () => {
   const call = fetchMock.mock.calls.find(([url, init]) => String(url).includes('/recalculate') && init?.method === 'POST');
   expect(call).toBeDefined();
 });
+
+test('MRP toolbar renders Upload GRN button and opens modal with reconciliation badge', async () => {
+  fetchMock.mockImplementation(async input => {
+    const urlStr = String(input);
+    if (urlStr.includes('/plan-metadata')) {
+      return jsonResponse({
+        ...mockMetadata,
+        grn_reconciled: false,
+      });
+    }
+    if (urlStr.includes('/records')) {
+      return jsonResponse(mockRequirements);
+    }
+    return jsonResponse([]);
+  });
+
+  renderRequirements();
+  await screen.findByText('MIG Welding Wire 1.2mm');
+
+  // Verify GRN reconciliation badge
+  expect(screen.getByText('GRN Pending')).toBeInTheDocument();
+
+  // Verify Upload GRN button in MRP toolbar
+  const grnBtn = screen.getByRole('button', { name: /Upload GRN/i });
+  expect(grnBtn).toBeInTheDocument();
+
+  // Click Upload GRN to open modal
+  await userEvent.click(grnBtn);
+
+  expect(await screen.findByText(/Upload Store GRN \(Goods Receipt Note\)/i)).toBeInTheDocument();
+  expect(screen.getByText(/Month-End Overwrite Upsert Engine/i)).toBeInTheDocument();
+  expect(screen.getByLabelText(/Target Plant/i)).toBeInTheDocument();
+});
+

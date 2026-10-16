@@ -316,11 +316,8 @@ describe('Phase 3: Monthly Requirement Planner Frontend', () => {
       expect(screen.getAllByText(/6,?75,?000/).length).toBeGreaterThan(0);
       expect(screen.getAllByText(/2,?25,?000/).length).toBeGreaterThan(0);
 
-      // Open GRN modal
-      const grnBtn = screen.getByRole('button', { name: /Upload GRN/i });
-      await userEvent.click(grnBtn);
-
-      expect(await screen.findByText(/Upload Store GRN \(Goods Receipt Note\)/i)).toBeInTheDocument();
+      // Verify Upload GRN is removed from Plant tab toolbar
+      expect(screen.queryByRole('button', { name: /Upload GRN/i })).not.toBeInTheDocument();
     });
   });
 

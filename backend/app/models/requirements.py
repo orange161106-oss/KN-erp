@@ -140,6 +140,7 @@ class MonthlyRequirementRecord(Base):
         Index("ix_monthly_req_period", "planning_period"),
         Index("ix_monthly_req_consumable", "consumable_code"),
         Index("ix_monthly_req_part", "part_number"),
+        Index("ix_monthly_req_plant_period", "plant_id", "planning_month", "planning_year"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -169,6 +170,7 @@ class MonthlyRequirementRecord(Base):
     # 4. Inventory, Unit & Status
     unit: Mapped[str] = mapped_column(String(32), default="NOS", nullable=False)
     plant: Mapped[str] = mapped_column(String(64), default="Plant 1", nullable=False)
+    plant_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     stock_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
     shortage_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
     po_pending_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
@@ -176,6 +178,18 @@ class MonthlyRequirementRecord(Base):
     status: Mapped[str] = mapped_column(String(64), default="DRAFT", nullable=False)
     remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # 5. Month-End Overwrite & MRP Balance Tracking
+    opening_stock: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0.0")
+    grn_received_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0.0")
+    consumed_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0.0")
+    closing_stock: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0.0")
+    gross_requirement: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0.0")
+    net_order_requirement: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0.0")
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    grn_source_file: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    invoice_no: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    grn_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # 5. Audit
     created_by: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

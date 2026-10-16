@@ -71,5 +71,10 @@ api_router.include_router(inventory_purchase_reports_router)
 api_router.add_api_route("/aggregate/{month}/{year}", handle_get_aggregated_requirements, methods=["GET"], response_model=list[AggregatedRequirementResponse], tags=["monthly-requirements-planner"])
 api_router.add_api_route("/aggregate/{month}/{year}", handle_run_aggregation, methods=["POST"], response_model=AggregationRunResponse, tags=["monthly-requirements-planner"])
 
+from app.modules.requirements.requirements_workspace_router import post_upload_mrp_grn
+from app.schemas.requirements_workspace import MRPGRNUploadResponse
+api_router.add_api_route("/mrp/upload-grn", post_upload_mrp_grn, methods=["POST"], response_model=MRPGRNUploadResponse, tags=["requirements-workspace"])
+api_router.add_api_route("/requirements/upload-grn", post_upload_mrp_grn, methods=["POST"], response_model=MRPGRNUploadResponse, tags=["requirements-workspace"])
+
 
 
