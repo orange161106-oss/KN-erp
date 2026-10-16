@@ -1,4 +1,5 @@
 import calendar
+import csv
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import io
@@ -72,10 +73,13 @@ def get_monthly_plan_metadata(
     from app.services import basic_planning
     central = (metadata or {}).get('workflow') == basic_planning.WORKFLOW
     # A production-based monthly view reads the same saved rows as Central.
+    issues_cnt = 0
     if central:
         counts = [select(func.count(model.id)).where(model.planning_version_id == version.id).scalar_subquery()
             for model in (CalculatedRequirement, RequirementCalculationError)]
-        rec_count = session.scalar(select(counts[0] + counts[1])) or 0
+        calc_cnt = session.scalar(select(counts[0])) or 0
+        issues_cnt = session.scalar(select(counts[1])) or 0
+        rec_count = calc_cnt
     else:
         rec_count = session.scalar(select(func.count(MonthlyRequirementRecord.id)).where(
             MonthlyRequirementRecord.planning_version_id == version.id,
@@ -97,6 +101,7 @@ def get_monthly_plan_metadata(
         updated_by=str(version.updated_by) if version.updated_by else None,
         updated_by_name=updater_name or updater_username,
         record_count=rec_count,
+        issue_count=issues_cnt,
         source_workflow=basic_planning.WORKFLOW if central else None,
     )
 
@@ -1003,11 +1008,12 @@ def recalculate_monthly_requirements(
 
     from app.services import basic_planning
     if basic_planning.is_central_version(session, version.id):
+        from datetime import date
         from app.schemas.requirements import CalculationRunRequest
-        result = basic_planning.calculate(session, CalculationRunRequest(planning_version_id=version.id), current_user_id)
+        result = basic_planning.calculate(session, CalculationRunRequest(planning_version_id=version.id, as_of_date=date(year, month, 1)), current_user_id)
         records = calculate_workspace_requirements(session, month=month, year=year)
         return RequirementRecalculateResponse(
-            message=f"Production-based requirements updated: {result.successful_requirements_count} lines; {result.error_count} configuration issues. These are the same results shown in Central requirement plan.",
+            message=f"Production-based requirements updated: {result.successful_requirements_count} lines; {result.error_count} configuration issues.",
             record_count=len(records), critical_shortages=0, low_stock=0, records=records,
             plan_metadata=get_monthly_plan_metadata(session, month, year))
 
@@ -1314,3 +1320,57 @@ def export_requirements_excel(
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def get_period_calculation_issues(session, *, month: int, year: int) -> list[dict[str, Any]]:
+    planning_period = f"{year:04d}-{month:02d}"
+    version = session.scalar(
+        select(PlanningVersion)
+        .where(PlanningVersion.planning_period == planning_period)
+        .order_by(PlanningVersion.version_number.desc())
+        .limit(1)
+    )
+    if not version:
+        return []
+    errors = session.scalars(
+        select(RequirementCalculationError)
+        .options(
+            joinedload(RequirementCalculationError.product),
+            joinedload(RequirementCalculationError.prd_order_item),
+            joinedload(RequirementCalculationError.consumable),
+        )
+        .where(RequirementCalculationError.planning_version_id == version.id)
+        .order_by(RequirementCalculationError.id)
+    ).all()
+    results = []
+    for err in errors:
+        prod = err.product
+        results.append({
+            "id": str(err.id),
+            "product_code": err.product_code or (prod.code if prod else ""),
+            "part_number": (prod.part_number if prod else "") or err.product_code or "",
+            "item_id": (prod.item_id if prod else "") or "",
+            "product_name": (prod.name if prod else "") or "",
+            "consumable_code": err.consumable.code if err.consumable else "",
+            "error_code": err.error_code,
+            "error_message": err.error_message,
+        })
+    return results
+
+
+def export_period_calculation_issues_csv(session, *, month: int, year: int) -> bytes:
+    issues = get_period_calculation_issues(session, month=month, year=year)
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["Part No.", "Item ID", "Product Code", "Description", "Consumable Item ID", "Issue Code", "Issue Description"])
+    for row in issues:
+        writer.writerow([
+            row["part_number"],
+            row["item_id"],
+            row["product_code"],
+            row["product_name"],
+            row["consumable_code"],
+            row["error_code"],
+            row["error_message"],
+        ])
+    return out.getvalue().encode("utf-8-sig")

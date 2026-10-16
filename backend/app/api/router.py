@@ -8,15 +8,10 @@ from app.modules.masters.mapping_router import router as mapping_router
 from app.modules.masters.router import router as product_customer_router
 from app.modules.masters.product_master_router import router as product_master_router
 from app.modules.masters.master_upload_router import router as master_upload_router
-from app.modules.plant_workflow.router import router as plant_workflow_router
 from app.modules.prd.router import router as prd_router
 from app.modules.requirements.router import (
-    handle_get_aggregated_requirements,
-    handle_run_aggregation,
-    plans_router,
     router as requirements_router,
 )
-from app.schemas.requirements import AggregatedRequirementResponse, AggregationRunResponse
 from app.modules.rules.router import router as rules_router
 from app.modules.requirements.basic_router import router as basic_planning_router
 from app.modules.inventory.router import router as inventory_router
@@ -55,8 +50,6 @@ api_router.include_router(mapping_router)
 api_router.include_router(rules_router)
 api_router.include_router(prd_router)
 api_router.include_router(requirements_router)
-api_router.include_router(plans_router)
-api_router.include_router(plant_workflow_router)
 api_router.include_router(stock_statement_router)
 api_router.include_router(stock_management_router)
 api_router.include_router(inventory_router)
@@ -68,8 +61,6 @@ api_router.include_router(purchase_approval_router)
 api_router.include_router(purchase_workspace_router)
 api_router.include_router(reports_router)
 api_router.include_router(inventory_purchase_reports_router)
-api_router.add_api_route("/aggregate/{month}/{year}", handle_get_aggregated_requirements, methods=["GET"], response_model=list[AggregatedRequirementResponse], tags=["monthly-requirements-planner"])
-api_router.add_api_route("/aggregate/{month}/{year}", handle_run_aggregation, methods=["POST"], response_model=AggregationRunResponse, tags=["monthly-requirements-planner"])
 
 
 

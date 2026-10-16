@@ -162,16 +162,22 @@ test('user can trigger recalculation', async () => {
   expect(call).toBeDefined();
 });
 
-test('the manual planner does not fetch the hidden consumable grid until its tab opens',async()=>{
-  fetchMock.mockImplementation(async input=>{
-    const path=String(input);
-    if(path.includes('/workspace/view'))return jsonResponse({records:mockRequirements,plan_metadata:mockMetadata});
+test('renders directly without tabs and displays compact issues banner when issues exist', async () => {
+  fetchMock.mockImplementation(async input => {
+    const path = String(input);
+    if (path.includes('/workspace/view')) {
+      return jsonResponse({
+        records: mockRequirements,
+        plan_metadata: { ...mockMetadata, issue_count: 3 },
+      });
+    }
     return jsonResponse([]);
   });
-  renderRequirements('workspace');
-  await screen.findByRole('heading',{name:'Monthly Requirement Planner'});
-  expect(fetchMock.mock.calls.some(([input])=>String(input).includes('/workspace/'))).toBe(false);
-  await userEvent.click(screen.getByRole('button',{name:'Consumable Planning Module (MRP)'}));
+
+  renderRequirements();
   await screen.findByText('MIG Welding Wire 1.2mm');
-  expect(fetchMock.mock.calls.some(([input])=>String(input).includes('/workspace/view'))).toBe(true);
+  expect(screen.getByText(/3 issues:/)).toBeInTheDocument();
+  expect(screen.getByText('Download issues list (CSV)')).toBeInTheDocument();
+  expect(screen.queryByText('Central requirement plan')).not.toBeInTheDocument();
+  expect(screen.queryByText('Monthly Requirement Planner')).not.toBeInTheDocument();
 });
