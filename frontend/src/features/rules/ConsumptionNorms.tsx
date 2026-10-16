@@ -10,18 +10,57 @@ import { NORM_ENDPOINT } from './types';
 import type { ConsumptionNorm, NormReferenceData } from './types';
 
 const RULE_TYPES = ['PRODUCTION_RATE', 'AREA_COVERAGE', 'PACKING_RATIO', 'TOOL_LIFE', 'FIXED_QUANTITY', 'PLANT_REQUEST', 'MAINTENANCE', 'MIN_MAX'];
-const REFERENCE_FIELDS = ['part_number', 'part_name', 'used_part_number', 'thickness', 'process_count', 'reference_production_qty', 'reference_schedule_qty'] as const;
-type NormRow = ConsumptionNorm & Record<typeof REFERENCE_FIELDS[number], string> & { parameters_json: string };
-function gridRow(norm: ConsumptionNorm): NormRow {
+const REFERENCE_FIELDS = ['part_number', 'part_name', 'used_part_number', 'thickness', 'process_count', 'reference_production_qty', 'reference_schedule_qty', 'sch', 'prd_order', 'is_general', 'sch_overridden'] as const;
+
+type NormRow = ConsumptionNorm & Record<typeof REFERENCE_FIELDS[number], any> & {
+  s_no: number;
+  parameters_json: string;
+  flags: string;
+};
+
+function gridRow(norm: ConsumptionNorm, index: number, allNorms: ConsumptionNorm[]): NormRow {
   const reference = norm.reference_data || {};
-  return { ...norm,
-    part_number: reference.part_number || norm.product_part_number || norm.product_code || '',
+  const params = norm.parameters || {};
+  const isGeneral = Boolean(reference.is_general ?? params.is_general ?? (!norm.product_id && !reference.part_number));
+  const partNo = reference.part_number || norm.product_part_number || norm.product_code || '';
+  const procCount = String(reference.process_count ?? params.process_count ?? '');
+  const prdOrder = String(reference.reference_production_qty ?? params.prd_order ?? '1');
+  const sch = String(reference.reference_schedule_qty ?? reference.sch ?? params.sch ?? params.rate ?? '');
+
+  const flagList: string[] = [];
+  if (isGeneral) flagList.push('General');
+
+  // Check duplicate group: same product, process, consumable
+  const sameGroup = allNorms.filter(n =>
+    n.id !== norm.id && n.is_active &&
+    String(n.product_id || n.reference_data?.part_number) === String(norm.product_id || reference.part_number) &&
+    String(n.process_id || n.process_name) === String(norm.process_id || norm.process_name) &&
+    String(n.consumable_id || n.consumable_code) === String(norm.consumable_id || norm.consumable_code)
+  );
+  if (sameGroup.length > 0) flagList.push('Duplicate group');
+
+  // Check sch discrepancy
+  const calcSch = Number(prdOrder || 1) * Number(procCount || 0);
+  if (sch && !isGeneral && Number(sch) !== calcSch) {
+    flagList.push('Sch differs');
+  }
+
+  return {
+    ...norm,
+    s_no: index + 1,
+    part_number: partNo,
     part_name: reference.part_name || norm.product_name || '',
     used_part_number: reference.used_part_number || norm.product_part_number || norm.product_code || '',
-    thickness: String(reference.thickness ?? ''), process_count: String(reference.process_count ?? ''),
-    reference_production_qty: String(reference.reference_production_qty ?? ''),
-    reference_schedule_qty: String(reference.reference_schedule_qty ?? ''),
+    thickness: String(reference.thickness ?? ''),
+    process_count: procCount,
+    reference_production_qty: prdOrder,
+    reference_schedule_qty: sch,
+    sch: sch,
+    prd_order: prdOrder,
     parameters_json: JSON.stringify(norm.parameters),
+    is_general: isGeneral,
+    sch_overridden: Boolean(reference.sch_overridden),
+    flags: flagList.join(', ') || 'Normal',
   };
 }
 
@@ -43,6 +82,8 @@ export default function ConsumptionNorms() {
   const [message, setMessage] = useState('');
   const [search, setSearch] = useState('');
   const [processFilter, setProcessFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState<'ALL' | 'PRODUCT_LINKED' | 'GENERAL'>('ALL');
+  const [warningFilter, setWarningFilter] = useState(false);
   const [ruleFilter, setRuleFilter] = useState('');
   const [history, setHistory] = useState(false);
   const [reason, setReason] = useState('');
@@ -57,7 +98,7 @@ export default function ConsumptionNorms() {
     try {
       const data = await apiClient.get<ConsumptionNorm[]>(NORM_ENDPOINT);
       if (id !== requestId.current) return;
-      const records = data.map(gridRow);
+      const records = data.map((norm, idx) => gridRow(norm, idx, data));
       setNorms(data); setRows(records); setOriginal(new Map(records.map(row => [row.id, row])));
       setSelected(new Set()); setEpoch(value => value + 1);
     } catch (failure) { if (id === requestId.current) setError(failure instanceof Error ? failure.message : 'Could not load consumption norms.'); }
@@ -75,10 +116,18 @@ export default function ConsumptionNorms() {
   const dirty = changedRows.length > 0;
   const visible = useMemo(() => {
     const term = search.trim().toLowerCase();
-    return rows.filter(row => (history || row.is_active) && (!processFilter || row.process_name === processFilter) && (!ruleFilter || row.rule_type === ruleFilter) &&
-      (!term || [row.part_number, row.used_part_number, row.part_name, row.product_code, row.product_item_id, row.consumable_code, row.consumable_name]
-        .some(value => String(value || '').toLowerCase().includes(term))));
-  }, [rows, search, processFilter, ruleFilter, history]);
+    return rows.filter(row => {
+      if (!history && !row.is_active) return false;
+      if (processFilter && row.process_name !== processFilter) return false;
+      if (ruleFilter && row.rule_type !== ruleFilter) return false;
+      if (categoryFilter === 'PRODUCT_LINKED' && row.is_general) return false;
+      if (categoryFilter === 'GENERAL' && !row.is_general) return false;
+      if (warningFilter && (!row.flags || row.flags === 'Normal')) return false;
+      if (term && ![row.part_number, row.used_part_number, row.part_name, row.product_code, row.product_item_id, row.consumable_code, row.consumable_name, row.flags]
+        .some(value => String(value || '').toLowerCase().includes(term))) return false;
+      return true;
+    });
+  }, [rows, search, processFilter, ruleFilter, categoryFilter, warningFilter, history]);
   const processes = useMemo(() => [...new Set(rows.map(row => row.process_name).filter((value): value is string => Boolean(value)))].sort(), [rows]);
   function discard() { setRows(Array.from(original.values())); setReason(''); setError(''); setEpoch(value => value + 1); }
   async function save() {
@@ -87,7 +136,7 @@ export default function ConsumptionNorms() {
     if (!reason.trim()) { setError('Enter a change reason before saving.'); return; }
     const updates = [];
     for (const row of changedRows) {
-      let parameters: unknown;
+      let parameters: Record<string, unknown>;
       try { parameters = JSON.parse(row.parameters_json); }
       catch { setError(`Invalid formula parameters for ${row.consumable_code || row.id}. Enter a JSON object.`); return; }
       if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) {
@@ -97,7 +146,7 @@ export default function ConsumptionNorms() {
       if (!Number.isInteger(precision) || precision < 0 || precision > 4) { setError('Decimal places must be an integer from 0 to 4.'); return; }
       const before = original.get(row.id)!;
       const reference: NormReferenceData = { ...before.reference_data };
-      REFERENCE_FIELDS.forEach(key => { reference[key] = row[key] || null; });
+      REFERENCE_FIELDS.forEach(key => { (reference as any)[key] = row[key] ?? null; });
       const update: Record<string, unknown> = { norm_id: row.id, expected_version: before.version };
       if (row.parameters_json !== before.parameters_json) update.parameters = parameters;
       if (REFERENCE_FIELDS.some(key => row[key] !== before[key])) update.reference_data = reference;
@@ -121,27 +170,106 @@ export default function ConsumptionNorms() {
     catch (failure) { setError(failure instanceof Error ? failure.message : 'Download failed.'); }
     finally { pending.current = false; setBusy(false); }
   }
+  async function simulate(event: React.FormEvent) {
+    event.preventDefault();
+    const norm = norms.find(value => value.id === evalNormId);
+    if (!norm || !canCalculate || evaluating) return;
+    setEvaluating(true); setEvalError(''); setEvalResult(null);
+    try {
+      setEvalResult(await apiClient.post<EvaluationResult>(`${NORM_ENDPOINT}/evaluate`, {
+        consumable_id: norm.consumable_id, product_id: norm.product_id || null, process_id: norm.process_id || null,
+        plant_id: norm.plant_id || null, production_quantity: evalQty, as_of_date: evalDate, requested_quantity: requestedQty || null,
+      }));
+    } catch (failure) { setEvalError(failure instanceof Error ? failure.message : 'Calculation failed.'); }
+    finally { setEvaluating(false); }
+  }
+  function toggleSchLock(id: string) {
+    if (!canUpdate || busy) return;
+    setRows(previous => previous.map(row => {
+      if (row.id !== id) return row;
+      const nextOverridden = !row.sch_overridden;
+      const updated = { ...row, sch_overridden: nextOverridden };
+      if (!nextOverridden) {
+        const prd = Number(updated.reference_production_qty || updated.prd_order || 1);
+        const proc = Number(updated.process_count || 0);
+        const newSch = String(prd * proc);
+        updated.reference_schedule_qty = newSch;
+        updated.sch = newSch;
+        try {
+          const parsed = JSON.parse(updated.parameters_json || '{}');
+          parsed.rate = Number(newSch);
+          parsed.sch = Number(newSch);
+          parsed.sch_overridden = false;
+          updated.parameters_json = JSON.stringify(parsed);
+        } catch (_) {}
+      } else {
+        try {
+          const parsed = JSON.parse(updated.parameters_json || '{}');
+          parsed.sch_overridden = true;
+          updated.parameters_json = JSON.stringify(parsed);
+        } catch (_) {}
+      }
+      return updated;
+    }));
+  }
   const columns: ColumnDef<NormRow>[] = [
-    { key: 'part_number', label: 'Part No.', width: 170, isEditable: true },
-    { key: 'part_name', label: 'Used for – Part Name', width: 240, isEditable: true },
-    { key: 'used_part_number', label: 'Used Part No. (PRD Order)', width: 215, isEditable: true },
-    { key: 'product_code', label: 'Product Master Code', width: 170, isEditable: false },
-    { key: 'consumable_code', label: 'Consumable Item ID', width: 170, isEditable: false },
-    { key: 'consumable_name', label: 'Consumable Name', width: 235, isEditable: false },
-    { key: 'process_name', label: 'Process Name', width: 150, isEditable: false },
-    { key: 'thickness', label: 'Part Thickness (mm)', width: 150, type: 'number', isEditable: true },
-    { key: 'process_count', label: 'No. of Process', width: 135, type: 'number', isEditable: true },
-    { key: 'reference_production_qty', label: 'Reference Prd. Order', width: 170, type: 'number', isEditable: true },
-    { key: 'reference_schedule_qty', label: 'Reference Sch', width: 140, type: 'number', isEditable: true },
-    { key: 'unit_code', label: 'Stock Unit', width: 100, isEditable: false },
-    { key: 'rule_type', label: 'Formula Type', width: 165, isEditable: false },
-    { key: 'parameters_json', label: 'Approved Parameters (JSON)', width: 300, isEditable: true },
-    { key: 'rounding_policy', label: 'Rounding', width: 140, isEditable: true },
-    { key: 'rounding_precision', label: 'Decimal Places', width: 120, type: 'number', isEditable: true },
-    { key: 'effective_from', label: 'Effective From', width: 150, type: 'date', isEditable: true },
-    { key: 'effective_to', label: 'Effective Until', width: 150, type: 'date', isEditable: true },
-    { key: 'version', label: 'Version', width: 90, isEditable: false },
-    { key: 'is_active', label: 'Status', width: 110, isEditable: false, render: value => value ? 'Active' : 'Historical' },
+    { key: 's_no', label: 'S. No.', width: 75, isEditable: false },
+    { key: 'part_number', label: 'Part No.', width: 160, isEditable: true },
+    { key: 'part_name', label: 'Used for- Part Name', width: 220, isEditable: true },
+    { key: 'used_part_number', label: 'Used Part no (prd order)', width: 200, isEditable: true },
+    { key: 'consumable_code', label: 'Cons. Item ID', width: 150, isEditable: false },
+    { key: 'consumable_name', label: 'Consumable Name', width: 220, isEditable: false },
+    { key: 'process_name', label: 'Process Name', width: 140, isEditable: false },
+    { key: 'thickness', label: 'Part Thickness in mm', width: 150, type: 'number', isEditable: true },
+    { key: 'process_count', label: 'No. of Process', width: 130, type: 'number', isEditable: true },
+    { key: 'reference_production_qty', label: 'Prd. Order', width: 130, type: 'number', isEditable: true },
+    {
+      key: 'reference_schedule_qty',
+      label: 'Sch',
+      width: 140,
+      type: 'number',
+      isEditable: true,
+      render: (value, row) => (
+        <span className="inline-flex items-center gap-1 font-mono font-medium">
+          <button
+            type="button"
+            className="hover:opacity-75 focus:outline-none"
+            title={row.sch_overridden ? "Override unlocked: Sch won't auto-calculate. Click to lock & recalculate." : "Auto-calculated: Sch = Prd. Order x No.of Process. Click to unlock."}
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleSchLock(row.id);
+            }}
+          >
+            {row.sch_overridden ? '🔓' : '🔒'}
+          </button>
+          {value}
+        </span>
+      ),
+    },
+    { key: 'is_active', label: 'Status', width: 100, isEditable: false, render: value => value ? 'Active' : 'Historical' },
+    {
+      key: 'flags',
+      label: 'Flags',
+      width: 180,
+      isEditable: false,
+      render: value => {
+        if (!value || value === 'Normal') return <span className="text-gray-400">Normal</span>;
+        const badges = String(value).split(', ');
+        return (
+          <div className="flex flex-wrap gap-1 text-xs">
+            {badges.map((b, i) => (
+              <span key={i} className={`rounded px-1.5 py-0.5 font-medium ${
+                b === 'General' ? 'bg-blue-100 text-blue-800' :
+                b.includes('Duplicate') ? 'bg-amber-100 text-amber-800' :
+                b.includes('differs') ? 'bg-orange-100 text-orange-800' : 'bg-gray-100 text-gray-700'
+              }`}>
+                {b}
+              </span>
+            ))}
+          </div>
+        );
+      },
+    },
   ];
   const button = 'inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-40';
   const field = 'rounded border border-gray-300 bg-white px-3 py-2 text-sm';
@@ -164,6 +292,15 @@ export default function ConsumptionNorms() {
       <div className="flex flex-wrap items-center gap-3">
         <input aria-label="Search consumption norms" className={`${field} min-w-64 flex-1`} placeholder="Search Part No., Used Part No., Item ID or consumable name" value={search} onChange={event => setSearch(event.target.value)}/>
         <select aria-label="Filter process" className={field} value={processFilter} onChange={event => setProcessFilter(event.target.value)}><option value="">All processes</option>{processes.map(value => <option key={value}>{value}</option>)}</select>
+        <select aria-label="Filter category" className={field} value={categoryFilter} onChange={event => setCategoryFilter(event.target.value as any)}>
+          <option value="ALL">All Categories</option>
+          <option value="PRODUCT_LINKED">Product-linked only</option>
+          <option value="GENERAL">General consumables only</option>
+        </select>
+        <label className="text-sm flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" checked={warningFilter} onChange={event => setWarningFilter(event.target.checked)}/>
+          Show warnings / duplicates only
+        </label>
         <select aria-label="Filter formula" className={field} value={ruleFilter} onChange={event => setRuleFilter(event.target.value)}><option value="">All formulas</option>{RULE_TYPES.map(value => <option key={value}>{value}</option>)}</select>
         <label className="text-sm flex items-center gap-2"><input type="checkbox" checked={history} onChange={event => setHistory(event.target.checked)}/>Show history</label>
       </div>
@@ -183,7 +320,37 @@ export default function ConsumptionNorms() {
         onCellChange={(id, key, value) => {
           if (!canUpdate || busy) return;
           if (!original.get(id)?.is_active) { setError('Historical versions are read-only. Edit the active version.'); return; }
-          setRows(previous => previous.map(row => row.id === id ? { ...row, [key]: value } : row));
+          setRows(previous => previous.map(row => {
+            if (row.id !== id) return row;
+            const updated = { ...row, [key]: value };
+            if (key === 'reference_schedule_qty' || key === 'sch') {
+              updated.sch_overridden = true;
+              updated.reference_schedule_qty = value;
+              updated.sch = value;
+              try {
+                const parsed = JSON.parse(updated.parameters_json || '{}');
+                parsed.rate = Number(value);
+                parsed.sch = Number(value);
+                parsed.sch_overridden = true;
+                updated.parameters_json = JSON.stringify(parsed);
+              } catch (_) {}
+            }
+            if (key === 'process_count' || key === 'reference_production_qty' || key === 'prd_order') {
+              if (key === 'process_count') updated.process_count = value;
+              if (key === 'reference_production_qty' || key === 'prd_order') {
+                updated.reference_production_qty = value;
+                updated.prd_order = value;
+              }
+              if (!updated.sch_overridden) {
+                const prd = Number(updated.reference_production_qty || 1);
+                const proc = Number(updated.process_count || 0);
+                const newSch = String(prd * proc);
+                updated.reference_schedule_qty = newSch;
+                updated.sch = newSch;
+              }
+            }
+            return updated;
+          }));
         }}
         onSave={save} onDiscardChanges={discard} storageKey="consumption-norms-grid" saveStatus={busy ? 'saving' : 'idle'}
         getRowClassName={row => row.is_active ? '' : 'text-gray-500 bg-gray-50'}

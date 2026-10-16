@@ -236,3 +236,83 @@ def test_bulk_import_batches_master_and_version_reads(db, masters):
         event.remove(db.get_bind(),'before_cursor_execute',record)
     assert result['created_count'] == 20 and len(result['records']) == 20
     assert len(queries) <= 10
+
+
+def test_text_thickness_is_stored_as_reference_text_without_error(db, masters):
+    actor, *_ = masters
+    # Test non-numeric thickness e.g. 'OD22.23 x T 2'
+    row_text = ["1311A01702", "Pivot - Brake", "1311A01702 - 01", "BAA110116QC", "Drill Bit", "Drilling", "OD22.23 x T 2", "2", "100", "200"]
+    source = contents([row_text])
+    preview = norm_imports.preview(db, "norms.xlsx", source)
+    assert preview.valid_count == 1
+    assert preview.invalid_count == 0
+    assert preview.rows[0].thickness == "OD22.23 x T 2"
+    assert len(preview.rows[0].errors) == 0
+
+    result = norm_imports.confirm(db, "norms.xlsx", source, reviewed(preview), actor.id)
+    assert result["created_count"] == 1
+    saved = result["records"][0]
+    assert saved.reference_data["thickness"] == "OD22.23 x T 2"
+
+    # Test numeric thickness e.g. '9.8'
+    row_num = ["1311A01702", "Pivot - Brake", "1311A01702 - 01", "BAA110116QC", "Drill Bit", "Drilling", "9.8", "2", "100", "200"]
+    source_num = contents([row_num])
+    preview_num = norm_imports.preview(db, "norms_num.xlsx", source_num)
+    assert preview_num.valid_count == 1
+    assert preview_num.rows[0].thickness == "9.8"
+
+
+def test_confirm_skip_invalid_imports_valid_rows_and_skips_invalid_rows(db, masters):
+    actor, *_ = masters
+    valid_row = ["1311A01702", "Pivot - Brake", "1311A01702 - 01", "BAA110116QC", "Drill Bit", "Drilling", "OD22.23 x T 2", "2", "100", "200"]
+    invalid_row = ["1311A01702", "Pivot - Brake", "1311A01702 - 01", "NON_EXISTENT_CODE", "Unknown", "Drilling", "1.0", "2", "100", "200"]
+    source = contents([valid_row, invalid_row])
+    preview = norm_imports.preview(db, "norms.xlsx", source)
+
+    assert preview.row_count == 2
+    assert preview.valid_count == 1
+    assert preview.invalid_count == 1
+
+    # Confirm with skip_invalid=False must fail with NORM_IMPORT_VALIDATION_FAILED
+    with pytest.raises(ApplicationError) as failure:
+        norm_imports.confirm(db, "norms.xlsx", source, reviewed(preview, skip_invalid=False), actor.id)
+    assert failure.value.code == "NORM_IMPORT_VALIDATION_FAILED"
+    assert db.scalar(select(ConsumptionNorm)) is None
+
+    # Confirm with skip_invalid=True must succeed, importing valid row and skipping invalid
+    result = norm_imports.confirm(db, "norms.xlsx", source, reviewed(preview, skip_invalid=True), actor.id)
+    assert result["created_count"] == 1
+    assert result["skipped_invalid_count"] == 1
+    assert "1 invalid rows skipped" in result["message"]
+
+    # Verify only the valid row is persisted
+    norms_in_db = list(db.scalars(select(ConsumptionNorm)))
+    assert len(norms_in_db) == 1
+    assert result["records"][0].reference_data["thickness"] == "OD22.23 x T 2"
+    ref_map = rules.norm_reference_data(db, [norms_in_db[0].id])
+    assert ref_map[norms_in_db[0].id]["thickness"] == "OD22.23 x T 2"
+
+
+def test_strict_true_errors(db, masters):
+    actor, *_ = masters
+
+    # 1. Blank Cons. Item ID
+    blank_cons = ["1311A01702", "Pivot - Brake", "1311A01702 - 01", "", "Drill Bit", "Drilling", "1.0", "2", "100", "200"]
+    preview1 = norm_imports.preview(db, "norms.xlsx", contents([blank_cons]))
+    assert preview1.invalid_count == 1
+    codes1 = [e.code for e in preview1.rows[0].errors]
+    assert "CONSUMABLE_CODE_REQUIRED" in codes1
+
+    # 2. Cons. Item ID is numeric '1' or '2'
+    numeric_cons = ["1311A01702", "Pivot - Brake", "1311A01702 - 01", "1", "Drill Bit", "Drilling", "1.0", "2", "100", "200"]
+    preview2 = norm_imports.preview(db, "norms.xlsx", contents([numeric_cons]))
+    assert preview2.invalid_count == 1
+    codes2 = [e.code for e in preview2.rows[0].errors]
+    assert "INVALID_CONSUMABLE_CODE" in codes2
+
+    # 3. Blank Part No on a product-linked row
+    blank_part = ["", "Pivot - Brake", "1311A01702 - 01", "BAA110116QC", "Drill Bit", "Drilling", "1.0", "2", "100", "200"]
+    preview3 = norm_imports.preview(db, "norms.xlsx", contents([blank_part]))
+    assert preview3.invalid_count == 1
+    codes3 = [e.code for e in preview3.rows[0].errors]
+    assert "BLANK_PART_NUMBER" in codes3

@@ -17,6 +17,7 @@ from app.schemas.requirements import (
     AggregatedRequirementResponse,
     AggregationRunResponse,
     BulkUploadResponse,
+    CalculatedRevisionApprovalRequest,
     CalculatedRevisionApprovalResponse,
     CalculatedRequirementResponse,
     CalculationRunRequest,
@@ -48,9 +49,11 @@ plans_router = APIRouter(prefix="/plans", tags=["monthly-requirements-planner"])
 
 @router.post("/planning-versions/{identity}/approve", response_model=CalculatedRevisionApprovalResponse)
 def approve_calculated_revision(identity: UUID, session: Annotated[Session, Depends(get_db)],
-                                user: Annotated[CurrentUser, Depends(get_current_user)]):
+                                user: Annotated[CurrentUser, Depends(get_current_user)],
+                                payload: Optional[CalculatedRevisionApprovalRequest] = None):
     from app.services.requirement_approval import approve
-    return approve(session, identity, user)
+    ack = payload.acknowledge_missing_norms if payload else False
+    return approve(session, identity, user, acknowledge_missing_norms=ack)
 
 
 @router.post(

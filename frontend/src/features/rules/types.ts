@@ -35,6 +35,12 @@ export interface NormReferenceData {
   process_count?: string | null;
   reference_production_qty?: string | null;
   reference_schedule_qty?: string | null;
+  sch?: string | null;
+  prd_order?: string | null;
+  is_general?: boolean;
+  sch_overridden?: boolean;
+  flags?: string[] | null;
+  warnings?: string[] | null;
   source_filename?: string | null;
   source_sha256?: string | null;
   source_row?: number | null;
@@ -59,6 +65,12 @@ export interface NormImportRow {
   unit_code?: string | null;
   action: 'CREATE' | 'EXISTING' | 'CONFLICT' | 'INVALID';
   errors: Array<{ field: string; code: string; message: string }>;
+  is_general?: boolean;
+  is_possible_duplicate?: boolean;
+  sch_differs?: boolean;
+  sch_is_zero?: boolean;
+  change_status?: string;
+  warnings?: string[];
 }
 
 export interface NormImportPreview {
@@ -72,6 +84,10 @@ export interface NormImportPreview {
   duplicate_count: number;
   existing_count: number;
   conflict_count: number;
+  general_count?: number;
+  skipped_total_count?: number;
+  skipped_empty_count?: number;
+  duplicate_groups_count?: number;
   rows: NormImportRow[];
 }
 

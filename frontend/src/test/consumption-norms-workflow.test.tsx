@@ -33,7 +33,7 @@ function page(write = true) {
 function importPage(canUpdate = true) { return render(<NormImportWorkspace canUpdate={canUpdate} onClose={onClose} onImported={onImported}/>); }
 async function chooseFile(name = 'norms.xlsx') {
   fireEvent.change(screen.getByLabelText('Consumption norms file'), { target: { files: [new File(['synthetic'], name)] } });
-  await screen.findByText(/1 rows ·/);
+  await screen.findByText(/\d+ rows ·/);
 }
 function reviewOptions() {
   fireEvent.change(screen.getByLabelText('Approved formula'), { target: { value: 'PRODUCTION_RATE_FROM_PROCESS_COUNT' } });
@@ -95,7 +95,7 @@ test('invalid CSV rows are editable and require revalidation before confirmation
   const post = vi.spyOn(apiClient, 'postFormData').mockResolvedValueOnce(invalid as never).mockResolvedValueOnce(preview as never);
   importPage(); await chooseFile('norms.csv');
   expect(screen.getByRole('button', { name: 'Confirm import' })).toBeDisabled();
-  expect(screen.getByText(/Enter a positive process count/)).toBeInTheDocument();
+  expect(screen.getAllByText(/Enter a positive process count/)[0]).toBeInTheDocument();
   fireEvent.doubleClick(screen.getByRole('cell', { name: '-2' }));
   const editor = screen.getByLabelText('Edit No. of Process');
   fireEvent.change(editor, { target: { value: '2' } }); fireEvent.blur(editor);
@@ -105,6 +105,46 @@ test('invalid CSV rows are editable and require revalidation before confirmation
   expect(JSON.parse(String(post.mock.calls[1][1].get('review'))).rows[0].process_count).toBe('2');
   expect(screen.getByRole('button', { name: 'Confirm import' })).toBeEnabled();
   expect(onImported).not.toHaveBeenCalled();
+});
+
+test('allows importing valid rows while skipping invalid rows with confirmation modal', async () => {
+  const partial = {
+    ...preview,
+    row_count: 2,
+    valid_count: 1,
+    invalid_count: 1,
+    rows: [
+      preview.rows[0],
+      { ...preview.rows[0], id: 'row-2', row_number: 2, consumable_code: '', action: 'INVALID', errors: [{ field: 'consumable_code', code: 'CONSUMABLE_CODE_REQUIRED', message: 'Blank Cons. Item ID.' }] },
+    ],
+  };
+  vi.spyOn(apiClient, 'postFormData')
+    .mockResolvedValueOnce(partial as never)
+    .mockResolvedValueOnce({ created_count: 1, skipped_count: 0, superseded_count: 0, skipped_invalid_count: 1, message: '1 norms created, 0 superseded and 0 existing rows skipped. 1 invalid rows skipped.', records: [norm] } as never);
+
+  importPage();
+  await chooseFile('norms.xlsx');
+  reviewOptions();
+
+  // Summary and filter buttons
+  expect(screen.getByText(/1 valid · 1 invalid/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /Blank Cons\. Item ID \(1\)/i })).toBeInTheDocument();
+
+  // Confirm button is enabled because valid_count > 0
+  const confirmBtn = screen.getByRole('button', { name: 'Confirm import' });
+  expect(confirmBtn).toBeEnabled();
+  fireEvent.click(confirmBtn);
+
+  // Modal dialog appears
+  expect(screen.getByRole('dialog', { name: '' })).toBeInTheDocument();
+  expect(screen.getByText('Import 1 valid rows, skip 1 invalid rows?')).toBeInTheDocument();
+
+  // Click confirm in modal
+  const modalConfirmBtn = screen.getByRole('button', { name: /Import 1 valid rows, skip 1 invalid rows/i });
+  fireEvent.click(modalConfirmBtn);
+
+  await waitFor(() => expect(onImported).toHaveBeenCalledWith(expect.stringContaining('1 invalid rows skipped')));
+  expect(onClose).toHaveBeenCalledOnce();
 });
 
 test('existing conflicts require explicit supersede permission and import failures never report success', async () => {

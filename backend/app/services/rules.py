@@ -91,25 +91,37 @@ def _reference_data(value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]
         return None
     allowed = {"part_number", "part_name", "used_part_number", "thickness", "process_count",
         "reference_production_qty", "reference_schedule_qty", "source_filename", "source_sha256",
-        "source_row", "sheet_name", "formula_choice"}
+        "source_row", "sheet_name", "formula_choice", "sch", "prd_order", "is_general",
+        "sch_overridden", "flags", "import_batch_id", "warnings"}
     if set(value) - allowed:
         raise ApplicationError("INVALID_NORM_REFERENCE", "Unknown consumption norm reference field.", 422)
     result = {}
     for key, item in value.items():
-        if item is not None and (not isinstance(item, (str, int)) or len(str(item)) > 2000):
+        if item is not None and (not isinstance(item, (str, int, float, bool, list, dict)) or len(str(item)) > 4000):
             raise ApplicationError("INVALID_NORM_REFERENCE", f"{key}: use a text reference value.", 422)
         result[key] = item
-    for key in ("thickness", "process_count", "reference_production_qty", "reference_schedule_qty"):
+    for key in ("process_count", "reference_production_qty", "reference_schedule_qty", "sch", "prd_order"):
         raw = result.get(key)
         if raw is None or str(raw).strip() == "":
             continue
         try:
             number = Decimal(str(raw))
-            if not number.is_finite() or number < 0 or (key == "process_count" and number <= 0):
+            if not number.is_finite() or number < 0:
                 raise ValueError
         except (ValueError, ArithmeticError):
             raise ApplicationError("INVALID_NORM_REFERENCE", f"{key}: enter a valid nonnegative number.", 422) from None
         result[key] = str(number)
+    raw_thickness = result.get("thickness")
+    if raw_thickness is not None and str(raw_thickness).strip() != "":
+        raw_t_str = str(raw_thickness).strip()
+        try:
+            num = Decimal(raw_t_str)
+            if num.is_finite() and num >= 0:
+                result["thickness"] = str(num)
+            else:
+                result["thickness"] = raw_t_str
+        except (ValueError, ArithmeticError):
+            result["thickness"] = raw_t_str
     return result
 
 
@@ -190,11 +202,16 @@ def create_consumption_norm(
     except ValidationError:
         raise ApplicationError("INVALID_NORM_PARAMETERS", "Enter valid parameters for the selected formula.", 422) from None
     if reference_data and reference_data.get('formula_choice'):
+        rate_val = Decimal(str(parameters_dict.get('rate', '0')))
+        pc_val = Decimal(str(reference_data.get('process_count') or '0'))
+        ref_sch = reference_data.get('sch') if reference_data.get('sch') is not None else reference_data.get('reference_schedule_qty')
+        sch_val = Decimal(str(ref_sch)) if ref_sch is not None else pc_val
+        valid_rates = {pc_val, sch_val}
         if (reference_data['formula_choice'] != 'PRODUCTION_RATE_FROM_PROCESS_COUNT'
             or data.rule_type != RuleType.PRODUCTION_RATE
-            or Decimal(str(parameters_dict.get('rate', '0'))) != Decimal(str(reference_data.get('process_count') or '0'))
+            or rate_val not in valid_rates
             or Decimal(str(parameters_dict.get('scrap_factor', '0'))) != 0):
-            raise ApplicationError('NORM_APPROVED_FORMULA_CONFLICT', 'For the reviewed production × process-count formula, rate must equal process count and no extra scrap factor may be added.', 422)
+            raise ApplicationError('NORM_APPROVED_FORMULA_CONFLICT', 'For the reviewed production × process-count formula, rate must equal process count or Sch and no extra scrap factor may be added.', 422)
 
     # 3. Determine version and maintain historical immutability
     stmt = (
