@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiClient } from '../../api/client';
 import { useAuth } from '../auth/context';
-import type { BasicTotal } from '../requirements/CentralRequirements';
+export interface BasicTotal {
+  consumable_id: string;
+  consumable_code: string;
+  consumable_name: string;
+  uom: string;
+  final_required_qty: string;
+  is_fully_confirmed: boolean;
+}
 
 type State = 'UNKNOWN'|'APPLICABLE'|'NOT_APPLICABLE';
 const constraints = [['moq','Minimum order quantity'],['pack_size','Pack size'],['order_multiple','Order multiple'],['max_order_quantity','Maximum order quantity'],['max_stock_quantity','Maximum stock quantity']] as const;
