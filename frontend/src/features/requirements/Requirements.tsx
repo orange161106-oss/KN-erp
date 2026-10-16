@@ -215,6 +215,7 @@ function LegacyRequirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' }
       setModifiedRecords(new Map());
       setSelectedRowIds(new Set());
       await loadPlanMetadata();
+      setStatusMessage(null);
     } catch (err) {
       setStatusMessage({
         type: 'error',

@@ -18,18 +18,28 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('monthly_requirement_records', sa.Column('plant_id', sa.String(64), nullable=True))
-    op.add_column('monthly_requirement_records', sa.Column('opening_stock', sa.Numeric(14, 4), server_default='0.0', nullable=False))
-    op.add_column('monthly_requirement_records', sa.Column('grn_received_qty', sa.Numeric(14, 4), server_default='0.0', nullable=False))
-    op.add_column('monthly_requirement_records', sa.Column('consumed_qty', sa.Numeric(14, 4), server_default='0.0', nullable=False))
-    op.add_column('monthly_requirement_records', sa.Column('closing_stock', sa.Numeric(14, 4), server_default='0.0', nullable=False))
-    op.add_column('monthly_requirement_records', sa.Column('gross_requirement', sa.Numeric(14, 4), server_default='0.0', nullable=False))
-    op.add_column('monthly_requirement_records', sa.Column('net_order_requirement', sa.Numeric(14, 4), server_default='0.0', nullable=False))
-    op.add_column('monthly_requirement_records', sa.Column('last_synced_at', sa.DateTime(timezone=True), nullable=True))
-    op.add_column('monthly_requirement_records', sa.Column('grn_source_file', sa.String(255), nullable=True))
-    op.add_column('monthly_requirement_records', sa.Column('invoice_no', sa.String(128), nullable=True))
-    op.add_column('monthly_requirement_records', sa.Column('grn_date', sa.DateTime(timezone=True), nullable=True))
-    op.create_index('ix_monthly_req_plant_period', 'monthly_requirement_records', ['plant_id', 'planning_month', 'planning_year'])
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    mrp_cols = {c['name'] for c in insp.get_columns('monthly_requirement_records')}
+    for col_name, sa_col in [
+        ('plant_id', sa.Column('plant_id', sa.String(64), nullable=True)),
+        ('opening_stock', sa.Column('opening_stock', sa.Numeric(14, 4), server_default='0.0', nullable=False)),
+        ('grn_received_qty', sa.Column('grn_received_qty', sa.Numeric(14, 4), server_default='0.0', nullable=False)),
+        ('consumed_qty', sa.Column('consumed_qty', sa.Numeric(14, 4), server_default='0.0', nullable=False)),
+        ('closing_stock', sa.Column('closing_stock', sa.Numeric(14, 4), server_default='0.0', nullable=False)),
+        ('gross_requirement', sa.Column('gross_requirement', sa.Numeric(14, 4), server_default='0.0', nullable=False)),
+        ('net_order_requirement', sa.Column('net_order_requirement', sa.Numeric(14, 4), server_default='0.0', nullable=False)),
+        ('last_synced_at', sa.Column('last_synced_at', sa.DateTime(timezone=True), nullable=True)),
+        ('grn_source_file', sa.Column('grn_source_file', sa.String(255), nullable=True)),
+        ('invoice_no', sa.Column('invoice_no', sa.String(128), nullable=True)),
+        ('grn_date', sa.Column('grn_date', sa.DateTime(timezone=True), nullable=True)),
+    ]:
+        if col_name not in mrp_cols:
+            op.add_column('monthly_requirement_records', sa_col)
+
+    indexes = {idx['name'] for idx in insp.get_indexes('monthly_requirement_records')}
+    if 'ix_monthly_req_plant_period' not in indexes:
+        op.create_index('ix_monthly_req_plant_period', 'monthly_requirement_records', ['plant_id', 'planning_month', 'planning_year'])
 
 
 def downgrade() -> None:

@@ -216,11 +216,22 @@ def calculate_workspace_requirements(
                 select(RequirementCalculationError).where(RequirementCalculationError.planning_version_id == version.id)
             ).all()
 
+            # Batch fetch related entities to prevent N+1 queries across remote pooler
+            consumable_ids = {r.consumable_id for r in requirements if r.consumable_id} | {e.consumable_id for e in errors if e.consumable_id}
+            plant_ids = {r.plant_id for r in requirements if r.plant_id} | {e.plant_id for e in errors if e.plant_id}
+            process_ids = {r.process_id for r in requirements if r.process_id}
+            product_ids = {r.product_id for r in requirements if r.product_id} | {e.product_id for e in errors if e.product_id}
+
+            materials_map = {c.id: c for c in session.scalars(select(Consumable).where(Consumable.id.in_(consumable_ids))).all()} if consumable_ids else {}
+            plants_map = {p.id: p for p in session.scalars(select(Plant).where(Plant.id.in_(plant_ids))).all()} if plant_ids else {}
+            processes_map = {p.id: p for p in session.scalars(select(Process).where(Process.id.in_(process_ids))).all()} if process_ids else {}
+            products_map = {p.id: p for p in session.scalars(select(Product).where(Product.id.in_(product_ids))).all()} if product_ids else {}
+
             for row in requirements:
-                material = session.get(Consumable, row.consumable_id)
-                plant = session.get(Plant, row.plant_id) if row.plant_id else None
-                process = session.get(Process, row.process_id)
-                product = session.get(Product, row.product_id)
+                material = materials_map.get(row.consumable_id)
+                plant = plants_map.get(row.plant_id) if row.plant_id else None
+                process = processes_map.get(row.process_id)
+                product = products_map.get(row.product_id)
 
                 p_thick = "0.0000"
                 p_count = 1
@@ -260,9 +271,9 @@ def calculate_workspace_requirements(
                 )
 
             for error in errors:
-                plant = session.get(Plant, error.plant_id) if error.plant_id else None
-                product = session.get(Product, error.product_id) if error.product_id else None
-                material = session.get(Consumable, error.consumable_id) if error.consumable_id else None
+                plant = plants_map.get(error.plant_id) if error.plant_id else None
+                product = products_map.get(error.product_id) if error.product_id else None
+                material = materials_map.get(error.consumable_id) if error.consumable_id else None
                 results.append(
                     RequirementWorkspaceRecord(
                         id=str(error.id),

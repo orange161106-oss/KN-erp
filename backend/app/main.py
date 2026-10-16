@@ -40,21 +40,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_error_handlers(application)
     application.add_middleware(GZipMiddleware, minimum_size=2000, compresslevel=4)
     application.add_middleware(SlowRequestMiddleware)
-    
-    # Existing router
+
+    # Health checks at /health and /api/health
+    from app.api.v1.health import router as health_router
+    application.include_router(health_router)
+    application.include_router(health_router, prefix="/api")
+
+    # Existing router (/api/v1 prefix)
     application.include_router(api_router)
-    
+
     # Attach your new production router here!
     application.include_router(production_router, prefix="/api/v1")
 
-    # Direct /api prefix aliases for MRP GRN
-    from app.modules.requirements.requirements_workspace_router import post_upload_mrp_grn
+    # Direct /api prefix aliases for MRP GRN and Workspace
+    from app.modules.requirements.requirements_workspace_router import (
+        get_requirements_workspace_root,
+        post_upload_mrp_grn,
+    )
     from app.schemas.requirements_workspace import MRPGRNUploadResponse
     direct_api_router = APIRouter(prefix="/api")
     direct_api_router.add_api_route("/mrp/upload-grn", post_upload_mrp_grn, methods=["POST"], response_model=MRPGRNUploadResponse, tags=["requirements-workspace"])
     direct_api_router.add_api_route("/requirements/upload-grn", post_upload_mrp_grn, methods=["POST"], response_model=MRPGRNUploadResponse, tags=["requirements-workspace"])
+    direct_api_router.add_api_route("/requirements/workspace", get_requirements_workspace_root, methods=["GET"], tags=["requirements-workspace"])
     application.include_router(direct_api_router)
-    
+
     return application
 
 

@@ -18,22 +18,29 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        'requirement_line_items',
-        sa.Column('formula_qty', sa.Float(), nullable=False, server_default='0.0')
-    )
-    op.add_column(
-        'requirement_line_items',
-        sa.Column('approved_qty', sa.Float(), nullable=False, server_default='0.0')
-    )
-    op.add_column(
-        'requirement_line_items',
-        sa.Column('is_modified', sa.Boolean(), nullable=False, server_default='false')
-    )
-    op.add_column(
-        'requirement_line_items',
-        sa.Column('modification_reason', sa.String(length=512), nullable=True)
-    )
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    existing_cols = {c['name'] for c in insp.get_columns('requirement_line_items')}
+    if 'formula_qty' not in existing_cols:
+        op.add_column(
+            'requirement_line_items',
+            sa.Column('formula_qty', sa.Float(), nullable=False, server_default='0.0')
+        )
+    if 'approved_qty' not in existing_cols:
+        op.add_column(
+            'requirement_line_items',
+            sa.Column('approved_qty', sa.Float(), nullable=False, server_default='0.0')
+        )
+    if 'is_modified' not in existing_cols:
+        op.add_column(
+            'requirement_line_items',
+            sa.Column('is_modified', sa.Boolean(), nullable=False, server_default='false')
+        )
+    if 'modification_reason' not in existing_cols:
+        op.add_column(
+            'requirement_line_items',
+            sa.Column('modification_reason', sa.String(length=512), nullable=True)
+        )
 
 
 def downgrade() -> None:

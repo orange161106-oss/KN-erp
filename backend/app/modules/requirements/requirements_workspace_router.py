@@ -37,6 +37,28 @@ def require_requirements_delete(user: Annotated[CurrentUser, Depends(get_current
 CanDeleteRequirements = Annotated[CurrentUser, Depends(require_requirements_delete)]
 
 
+@router.get("", include_in_schema=True)
+@router.get("/", include_in_schema=True)
+def get_requirements_workspace_root(
+    session: Annotated[Session, Depends(get_db)],
+    month: Optional[int] = Query(None, ge=1, le=12),
+    year: Optional[int] = Query(None, ge=2020, le=2050),
+    planning_period: Optional[str] = None,
+):
+    """Workspace root endpoint returning HTTP 200 with workspace status and plan metadata."""
+    m = month or 10
+    y = year or 2026
+    target_period = planning_period or f"{y:04d}-{m:02d}"
+    meta = service.get_monthly_plan_metadata(session, month=m, year=y)
+    return {
+        "status": "ok",
+        "workspace": "requirements",
+        "planning_period": target_period,
+        "database": "ok",
+        "plan_metadata": meta,
+    }
+
+
 @router.get("/plan-metadata", response_model=MonthlyPlanMetadata)
 def get_monthly_plan_metadata(
     user: CanReadRequirements,
