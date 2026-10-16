@@ -1877,15 +1877,13 @@ def batch_update_stock_parameters(
                 .execution_options(populate_existing=True)
             )
         }
-        for update in req.updates:
-            param = parameters_by_id.get(update.id)
-            if param is None or param.batch_id != batch.id:
-                raise ApplicationError(
-                    "INVALID_PARAMETER_ROW",
-                    "A row does not belong to the selected parameters.",
-                    422,
-                )
-            changes = update.model_dump(exclude_unset=True, exclude={"id"})
+        for update_item in req.updates:
+            param_id = update_item.id if isinstance(update_item.id, uuid.UUID) else uuid.UUID(str(update_item.id))
+            param = parameters_by_id.get(param_id)
+            if not param or param.batch_id != batch.id:
+                raise ApplicationError("INVALID_ROW", "A row does not belong to the selected parameter batch.", 422)
+
+            changes = update_item.model_dump(exclude_unset=True, exclude={"id"})
             if not changes:
                 continue
 
@@ -1937,7 +1935,9 @@ def list_stock_parameter_history(
     limit: int = 50,
 ) -> list[StockParameterHistoryItem]:
     """List historical upload batches for stock management."""
-    stmt = select(StockParameterBatch)
+    stmt = select(StockParameterBatch).options(
+        joinedload(StockParameterBatch.uploader).load_only(User.full_name, User.username)
+    )
     if month is not None:
         stmt = stmt.where(StockParameterBatch.month == month)
     if year is not None:

@@ -20,8 +20,10 @@ logger = logging.getLogger(__name__)
 from app.core.errors import ApplicationError
 from app.models.mappings import ProductPlant, ProductProcessConsumable
 from app.models.masters import Customer, CustomerAlias, Product
+from app.models.rules import ConsumptionNorm
 from app.models.prd import ImportBatch, PlanningVersion, PRDOrderHeader, PRDOrderItem, PRDRecord
 from app.models.production import Plant, Route, RouteStep
+from app.services.basic_norms import match_product
 from app.schemas.prd_workspace import (
     PRDExcelImportResponse,
     PRDExcelInspectResponse,
@@ -646,6 +648,148 @@ def _lookup_or_create_product(
     return existing_prod
 
 
+def get_previous_period_str(period: str) -> str:
+    try:
+        parts = period.split("-")
+        y, m = int(parts[0]), int(parts[1])
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+        return f"{y:04d}-{m:02d}"
+    except Exception:
+        return period
+
+
+def compute_changes_vs_previous_month(
+    session: Session,
+    current_period: str,
+    current_flat_rows: list[dict[str, Any]],
+    current_blocks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    prev_period = get_previous_period_str(current_period)
+
+    # 1. Fetch previous month records from PRDRecord
+    prev_records = session.scalars(
+        select(PRDRecord).where(
+            PRDRecord.target_period == prev_period,
+            PRDRecord.is_deleted.is_(False),
+        )
+    ).all()
+
+    prev_map: dict[tuple[str, str, str], Decimal] = {}
+    prev_blocks: set[str] = set()
+
+    for r in prev_records:
+        cust = (r.customer or "").strip().lower()
+        part = (r.product_code or "").strip().lower()
+        item = ""
+        prev_map[(cust, part, item)] = r.planned_quantity
+        if r.customer:
+            prev_blocks.add(r.customer.strip())
+
+    # If no PRDRecords found, query PRDOrderItem
+    if not prev_records:
+        prev_items = session.execute(
+            select(PRDOrderItem, Customer.name, Product.part_number, Product.item_id)
+            .outerjoin(Customer, PRDOrderItem.customer_id == Customer.id)
+            .outerjoin(Product, PRDOrderItem.product_id == Product.id)
+            .where(PRDOrderItem.target_period == prev_period)
+        ).all()
+        for item_obj, c_name, p_no, i_id in prev_items:
+            cust = (c_name or "").strip().lower()
+            part = (p_no or item_obj.product_code or "").strip().lower()
+            it = (i_id or "").strip().lower()
+            prev_map[(cust, part, it)] = item_obj.planned_quantity
+            if c_name:
+                prev_blocks.add(c_name.strip())
+
+    # Build current month map (group by block/customer, part_no, item_id)
+    current_map: dict[tuple[str, str, str], dict[str, Any]] = {}
+    curr_blocks: set[str] = set()
+
+    for r in current_flat_rows:
+        cust = (r.get("customer") or "").strip()
+        part = (r.get("part_no") or r.get("product_code") or "").strip()
+        item = (r.get("item_id") or "").strip()
+        key = (cust.lower(), part.lower(), item.lower())
+        qty = Decimal(str(r.get("planned_quantity") or "0"))
+        if key not in current_map:
+            current_map[key] = {
+                "customer": cust,
+                "part_no": part,
+                "item_id": item,
+                "description": r.get("description", ""),
+                "planned_quantity": str(qty),
+                "qty_dec": qty,
+            }
+        if cust:
+            curr_blocks.add(cust)
+
+    for b in current_blocks:
+        b_name = b.get("customer_name") or b.get("heading_text")
+        if b_name:
+            curr_blocks.add(b_name.strip())
+
+    parts_added = []
+    parts_removed = []
+    parts_changed = []
+
+    for key, c_data in current_map.items():
+        old_qty = prev_map.get(key)
+        if old_qty is None and (key[0], key[1], "") in prev_map:
+            old_qty = prev_map[(key[0], key[1], "")]
+
+        if old_qty is None:
+            parts_added.append({
+                "customer": c_data["customer"],
+                "part_no": c_data["part_no"],
+                "item_id": c_data["item_id"],
+                "description": c_data["description"],
+                "planned_quantity": c_data["planned_quantity"],
+            })
+        else:
+            new_qty = c_data["qty_dec"]
+            if abs(new_qty - old_qty) > Decimal("0.0001"):
+                parts_changed.append({
+                    "customer": c_data["customer"],
+                    "part_no": c_data["part_no"],
+                    "item_id": c_data["item_id"],
+                    "description": c_data["description"],
+                    "old_quantity": format(old_qty, ".4f"),
+                    "new_quantity": format(new_qty, ".4f"),
+                })
+
+    for key, old_qty in prev_map.items():
+        found = key in current_map or (key[0], key[1], "") in current_map
+        if not found:
+            parts_removed.append({
+                "customer": key[0].title(),
+                "part_no": key[1].upper(),
+                "item_id": key[2].upper(),
+                "planned_quantity": format(old_qty, ".4f"),
+            })
+
+    blocks_added = sorted(list(curr_blocks - prev_blocks))
+    blocks_removed = sorted(list(prev_blocks - curr_blocks))
+
+    return {
+        "current_period": current_period,
+        "previous_period": prev_period,
+        "has_previous_data": bool(prev_map),
+        "added_count": len(parts_added),
+        "removed_count": len(parts_removed),
+        "changed_count": len(parts_changed),
+        "blocks_added_count": len(blocks_added),
+        "blocks_removed_count": len(blocks_removed),
+        "parts_added": parts_added[:200],
+        "parts_removed": parts_removed[:200],
+        "parts_quantity_changed": parts_changed[:200],
+        "blocks_added": blocks_added,
+        "blocks_removed": blocks_removed,
+    }
+
+
 def preview_sales_schedule_upload(
     session: Session,
     file_bytes: bytes,
@@ -653,6 +797,7 @@ def preview_sales_schedule_upload(
     sheet_name: Optional[str] = None,
     target_period: Optional[str] = None,
     revision_label: Optional[str] = None,
+    require_route_mapping: bool = False,
 ) -> SalesScheduleImportPreviewResponse:
     t_start = time.perf_counter()
     _cleanup_stale_staged_files()
@@ -676,81 +821,102 @@ def preview_sales_schedule_upload(
     )
     t_parse_end = time.perf_counter()
 
-    # Check for missing routes in preview so users are alerted upfront (batch lookups to eliminate N+1)
-    t_lookup_start = time.perf_counter()
-    active_plant = session.scalar(select(Plant).where(Plant.is_active.is_(True)))
-    if active_plant:
-        # 1. Batch products
-        all_products = session.scalars(select(Product).where(Product.is_active.is_(True))).all()
-        prod_by_pair: dict[tuple[str, str], Product] = {}
-        prod_by_code: dict[str, Product] = {}
-        prod_by_part: dict[str, list[Product]] = defaultdict(list)
-        prod_by_item: dict[str, list[Product]] = defaultdict(list)
+    # 1. Non-blocking Norms Match check against CURRENT ConsumptionNorms
+    all_products = session.scalars(select(Product).where(Product.is_active.is_(True))).all()
+    active_norm_product_ids = set(session.scalars(
+        select(ConsumptionNorm.product_id).where(ConsumptionNorm.is_active.is_(True)).distinct()
+    ).all())
 
-        for p in all_products:
-            if p.part_number and p.item_id:
-                prod_by_pair[(p.part_number.strip().lower(), p.item_id.strip().lower())] = p
-            if p.code:
-                prod_by_code[p.code.strip().lower()] = p
-            if p.part_number:
-                prod_by_part[p.part_number.strip().lower()].append(p)
-            if p.item_id:
-                prod_by_item[p.item_id.strip().lower()].append(p)
+    for r in parse_result["_all_flat_rows"]:
+        p_part = (r.get("part_no") or "").strip() or None
+        p_item = (r.get("item_id") or "").strip() or None
+        p_code = (r.get("product_code") or "").strip() or None
+        prod = None
+        if p_part and p_item:
+            prod, _ = match_product(all_products, part_number=p_part, item_id=p_item)
+        if not prod and p_code:
+            prod, _ = match_product(all_products, code=p_code)
+        if not prod and p_part:
+            prod, _ = match_product(all_products, part_number=p_part)
+        if not prod and p_item:
+            prod, _ = match_product(all_products, item_id=p_item)
+        has_norm = prod is not None and prod.id in active_norm_product_ids
+        r["norm_match"] = "Matched" if has_norm else "No norms found"
+        r["norms_matched"] = has_norm
 
-        # 2. Batch ProductPlant mappings
-        all_pps = session.scalars(select(ProductPlant).where(ProductPlant.is_active.is_(True))).all()
-        product_plants_by_prod: dict[UUID, list[ProductPlant]] = defaultdict(list)
-        for pp in all_pps:
-            product_plants_by_prod[pp.product_id].append(pp)
+    # Re-slice sample_rows to include norm_match
+    parse_result["sample_rows"] = parse_result["_all_flat_rows"][:50]
 
-        # 3. Batch Routes
-        all_routes = session.scalars(select(Route).where(Route.is_active.is_(True))).all()
-        routes_by_id: dict[UUID, Route] = {r.id: r for r in all_routes}
+    # 2. Check for missing routes ONLY IF require_route_mapping is requested (default False for new workflow)
+    if require_route_mapping:
+        active_plant = session.scalar(select(Plant).where(Plant.is_active.is_(True)))
+        if active_plant:
+            all_pps = session.scalars(select(ProductPlant).where(ProductPlant.is_active.is_(True))).all()
+            product_plants_by_prod: dict[UUID, list[ProductPlant]] = defaultdict(list)
+            for pp in all_pps:
+                product_plants_by_prod[pp.product_id].append(pp)
 
-        # 4. Batch PPC and RouteSteps
-        all_ppcs = session.scalars(select(ProductProcessConsumable).where(ProductProcessConsumable.is_active.is_(True))).all()
-        ppc_proc_by_prod: dict[UUID, set[UUID]] = defaultdict(set)
-        for ppc in all_ppcs:
-            ppc_proc_by_prod[ppc.product_id].add(ppc.process_id)
+            all_routes = session.scalars(select(Route).where(Route.is_active.is_(True))).all()
+            routes_by_id: dict[UUID, Route] = {r.id: r for r in all_routes}
+            all_ppcs = session.scalars(select(ProductProcessConsumable).where(ProductProcessConsumable.is_active.is_(True))).all()
+            ppc_proc_by_prod: dict[UUID, set[UUID]] = defaultdict(set)
+            for ppc in all_ppcs:
+                ppc_proc_by_prod[ppc.product_id].add(ppc.process_id)
+            all_steps = session.scalars(select(RouteStep)).all()
+            route_proc_map: dict[UUID, set[UUID]] = defaultdict(set)
+            for step in all_steps:
+                route_proc_map[step.route_id].add(step.process_id)
 
-        all_steps = session.scalars(select(RouteStep)).all()
-        route_proc_map: dict[UUID, set[UUID]] = defaultdict(set)
-        for step in all_steps:
-            route_proc_map[step.route_id].add(step.process_id)
-        t_lookup_end = time.perf_counter()
+            prod_by_pair: dict[tuple[str, str], Product] = {}
+            prod_by_code: dict[str, Product] = {}
+            for p in all_products:
+                if p.part_number and p.item_id:
+                    prod_by_pair[(p.part_number.strip().lower(), p.item_id.strip().lower())] = p
+                if p.code:
+                    prod_by_code[p.code.strip().lower()] = p
 
-        for r in parse_result["_all_flat_rows"]:
-            p_part = (r.get("part_no") or "").strip() or None
-            p_item = (r.get("item_id") or "").strip() or None
-            p_code = (r.get("product_code") or "").strip()
-            prod = None
-            if p_part and p_item:
-                prod = prod_by_pair.get((p_part.lower(), p_item.lower()))
-            if not prod and p_code:
-                prod = prod_by_code.get(p_code.lower())
-            if not prod and p_part and len(prod_by_part.get(p_part.lower(), [])) == 1:
-                prod = prod_by_part[p_part.lower()][0]
-            if not prod and p_item and len(prod_by_item.get(p_item.lower(), [])) == 1:
-                prod = prod_by_item[p_item.lower()][0]
+            for r in parse_result["_all_flat_rows"]:
+                p_part = (r.get("part_no") or "").strip() or None
+                p_item = (r.get("item_id") or "").strip() or None
+                p_code = (r.get("product_code") or "").strip()
+                prod = None
+                if p_part and p_item:
+                    prod = prod_by_pair.get((p_part.lower(), p_item.lower()))
+                if not prod and p_code:
+                    prod = prod_by_code.get(p_code.lower())
 
-            if prod:
-                r_id = _resolve_route_for_product(
-                    session=session,
-                    product_id=prod.id,
-                    plant_id=active_plant.id,
-                    product_plants_by_prod=product_plants_by_prod,
-                    routes_by_id=routes_by_id,
-                    ppc_proc_by_prod=ppc_proc_by_prod,
-                    route_proc_map=route_proc_map,
-                )
-                if not r_id:
-                    warn = f"Product '{prod.code}' (Part: '{p_part or '-'}', Item: '{p_item or '-'}') has no production route assigned for plant '{active_plant.name}'. Map a valid route before importing."
+                if prod:
+                    r_id = _resolve_route_for_product(
+                        session=session,
+                        product_id=prod.id,
+                        plant_id=active_plant.id,
+                        product_plants_by_prod=product_plants_by_prod,
+                        routes_by_id=routes_by_id,
+                        ppc_proc_by_prod=ppc_proc_by_prod,
+                        route_proc_map=route_proc_map,
+                    )
+                    if not r_id:
+                        warn = f"Product '{prod.code}' (Part: '{p_part or '-'}', Item: '{p_item or '-'}') has no production route assigned for plant '{active_plant.name}'. Map a valid route before importing."
+                        if warn not in parse_result["warnings"]:
+                            parse_result["warnings"].append(warn)
+                else:
+                    warn = f"Part '{p_part or p_item or p_code}' does not exist in Product Master and will require route assignment."
                     if warn not in parse_result["warnings"]:
                         parse_result["warnings"].append(warn)
-            else:
-                warn = f"Part '{p_part or p_item or p_code}' does not exist in Product Master and will require route assignment."
-                if warn not in parse_result["warnings"]:
-                    parse_result["warnings"].append(warn)
+
+    # 3. Changes vs Previous Month
+    rev0 = parse_result["active_revisions"][0] if parse_result.get("active_revisions") else None
+    effective_period = (
+        (rev0.get("planning_period") if isinstance(rev0, dict) else getattr(rev0, "planning_period", None))
+        if rev0
+        else (target_period or "2026-10")
+    ) or (target_period or "2026-10")
+    comparison = compute_changes_vs_previous_month(
+        session=session,
+        current_period=effective_period,
+        current_flat_rows=parse_result["_all_flat_rows"],
+        current_blocks=parse_result["blocks"],
+    )
 
     file_token = str(uuid4())
     _STAGED_FILES[file_token] = (file_bytes, filename, time.time())
@@ -777,6 +943,8 @@ def preview_sales_schedule_upload(
         can_confirm=parse_result["can_confirm"],
         warnings=parse_result["warnings"],
         errors=parse_result["errors"],
+        comparison_vs_previous_month=comparison,
+        needs_review_rows=parse_result.get("needs_review_rows", []),
         file_token=file_token,
     )
 
@@ -792,6 +960,7 @@ def confirm_sales_schedule_import(
     alias_mappings: Optional[dict[str, UUID]] = None,
     mode: str = "APPEND",
     reason: str = "Confirmed KNL sales schedule import",
+    require_route_mapping: bool = False,
 ) -> PRDExcelImportResponse:
     """Confirm and atomically save the verified sales schedule into database."""
     _cleanup_stale_staged_files()
@@ -926,44 +1095,29 @@ def confirm_sales_schedule_import(
             )
 
             # Route resolution and ProductPlant verification
+            target_route_id = _resolve_route_for_product(
+                session,
+                existing_prod.id,
+                plant_obj.id,
+                product_plants_by_prod=product_plants_by_prod,
+                routes_by_id=routes_by_id,
+                ppc_proc_by_prod=ppc_proc_by_prod,
+                route_proc_map=route_proc_map,
+            )
+            if require_route_mapping and not target_route_id:
+                raise ApplicationError(
+                    "ROUTE_REQUIRED",
+                    f"Product '{existing_prod.code}' (Part: '{part_no or '-'}', Item: '{item_id or '-'}') has no production route assigned for plant '{plant_obj.name}'. Map a valid route in Production Mappings before importing.",
+                    422,
+                )
+
             pp = pps_by_prod_plant.get((existing_prod.id, plant_obj.id))
             if pp:
-                route = routes_by_id.get(pp.route_id) if pp.route_id else None
-                if not route or not route.is_active:
-                    target_route_id = _resolve_route_for_product(
-                        session,
-                        existing_prod.id,
-                        plant_obj.id,
-                        product_plants_by_prod=product_plants_by_prod,
-                        routes_by_id=routes_by_id,
-                        ppc_proc_by_prod=ppc_proc_by_prod,
-                        route_proc_map=route_proc_map,
-                    )
-                    if not target_route_id:
-                        raise ApplicationError(
-                            "ROUTE_REQUIRED",
-                            f"Product '{existing_prod.code}' (Part: '{part_no or '-'}', Item: '{item_id or '-'}') has no production route assigned for plant '{plant_obj.name}'. Map a valid route in Production Mappings before importing.",
-                            422,
-                        )
+                if target_route_id:
                     pp.route_id = target_route_id
                 if not pp.is_active:
                     pp.is_active = True
-            else:
-                target_route_id = _resolve_route_for_product(
-                    session,
-                    existing_prod.id,
-                    plant_obj.id,
-                    product_plants_by_prod=product_plants_by_prod,
-                    routes_by_id=routes_by_id,
-                    ppc_proc_by_prod=ppc_proc_by_prod,
-                    route_proc_map=route_proc_map,
-                )
-                if not target_route_id:
-                    raise ApplicationError(
-                        "ROUTE_REQUIRED",
-                        f"Product '{existing_prod.code}' (Part: '{part_no or '-'}', Item: '{item_id or '-'}') has no production route assigned for plant '{plant_obj.name}'. Map a valid route in Production Mappings before importing.",
-                        422,
-                    )
+            elif target_route_id:
                 pp = ProductPlant(
                     product_id=existing_prod.id,
                     plant_id=plant_obj.id,
@@ -1053,6 +1207,7 @@ def confirm_sales_schedule_import(
                 "grand_total": parse_result["grand_total"],
                 "planning_period": period,
                 "revision": rev_label,
+                "workflow": "BASIC_CENTRAL_V1",
             },
             staged_data=staged_items,
         )

@@ -352,119 +352,24 @@ primary-key and uniqueness constraints were unchanged. No company business recor
 were imported/approved/deleted; this verifies schema deployment, not company data
 readiness or production acceptance. No migration was rewritten or blindly stamped.
 
-## Assembly catalog workbook headers — 2026-10-16
+## Restored PRD import UI & Dynamic Sales Schedule importer — 2026-10-16
 
-The Consumable for Assemble bulk catalog parser used a shorter header vocabulary
-than the existing assembly importer. The supplied Assembly Consumable.xlsx therefore
-returned EMPTY_MASTER_UPLOAD despite having assembly rows. The catalog now reuses
-the existing ASSEMBLE_FIELD_MAPPINGS for both preview and save, recognizing the long
-consumable description, saleable part, PRD part, process, thickness, count and
-Output/Unit headers. Undated review/save, permissions, audit and deletion are unchanged.
+The "Production for sale" (PRD) Sales Schedule import modal (`SalesScheduleImportModal.tsx`)
+and two-pass hierarchical parser workflow have been restored, replacing `CentralProductionImport.tsx`.
+Per the owner addendum, all row numbers, counts, and totals are fully dynamic:
+1. Header detection scans for `Part No.` and `Item ID` (case-insensitive, trimmed) anywhere in the sheet,
+   not fixed row 4. Banner rows above the header are parsed dynamically by content/dates.
+2. Supports any column order, any number of revision columns (R0, R1, R2, etc.), and extracts both schedule
+   date and effective month date without hardcoding.
+3. Customer blocks are dynamically recognized from heading rows (Column A, B, or D), part rows, and closing
+   subtotal rows (e.g. `- TOTAL`). Each block is reconciled against its own closing row; grand total cross-checks customer blocks.
+4. Ambiguous/unrecognized rows are captured in `needs_review_rows` with Excel row numbers and excluded from part sums.
+5. Month mismatch validation: file banner month is strictly verified against selected planning month (blocking error).
+6. Non-blocking "Norms match" chip column (`Matched` in emerald, `No norms found` in amber) is dynamically
+   computed against current `ConsumptionNorm` records without requiring Product-Plant Mapping or Routes.
+7. Step 2 preview includes a "Changes vs previous month" panel with metric badges (added, removed, qty changed,
+   block diffs) and a downloadable CSV export button.
+8. Re-uploading preserves R0 and R1 as separate records without summing.
+9. Verified with full test suite: 57 backend tests passed (including 7 dedicated dynamic parser tests in
+   `test_dynamic_sales_schedule.py`), 12 frontend vitest tests passed, TypeScript checks passed, and production build succeeded.
 
-Read-only actual-file parsing produces 611 unique preview mappings from 1,050 data
-rows: 630 have both required identifiers, 420 do not, and 19 repeated mapping keys
-use the existing reported last-row behavior. Numeric Output/Unit values are preserved
-and flagged for actual stock-unit review (439 preview rows); they are not guessed
-as PCS/KG or turned into tool-life rules. An explicit Stock Unit/Unit/UOM column
-still takes precedence. No company workbook or database rows were changed.
-Twenty focused catalog/import checks passed, including the exact display-header
-shape, read-only preview and HTTP preview/save with a separate reviewed stock unit.
-
-## Optional catalog stock units — 2026-10-16
-
-The owner subsequently made Stock Unit optional in both List of Consumables and
-Consumable for Assemble, with later edits allowed. This supersedes the earlier
-require-unit-before-save behavior for these two undated bulk catalogs. Blank and
-numeric source Output/Unit values now preview/save as unassigned units; numeric
-source values remain in the upload report/audit evidence. No PCS/KG labels or
-numeric unit masters are invented. Sales-part behavior is unchanged.
-
-The Stock Unit column and apply-to-unresolved action work after saving with the
-existing masters_update permission. Completing an assembly unit also resolves its
-linked material when unassigned. A different existing canonical unit must be
-reviewed in List of Consumables; stock/supplier history protects unit changes.
-Replacement uploads that omit units preserve existing reviewed material units.
-Canonical Consumable.unit_id is now nullable; public read responses accept null.
-Central norms already reject missing canonical units; legacy calculations, manual
-quantity requests and projection now return explicit unit-required diagnostics.
-
-Migration c002_optional_catalog_stock_units was applied and independently verified
-on the connected database on 2026-10-16 at 04:29:50 UTC (09:59:50 IST). Only unit_id
-nullability and migration metadata changed. Business counts across four affected
-master/audit tables and existing constraints were unchanged. Downgrade refuses to
-invent units for unresolved records. No company records were imported or deleted.
-
-An isolated in-memory save of the supplied assembly file preserved all 611 preview
-mappings with blank units and created no Unit rows. This check found an old process
-resolver that borrowed any existing process and collapsed distinct rows; the new
-catalog now retains exact named processes (legacy monthly behavior is unchanged).
-Verification: 33 focused backend checks, five upload/save-later UI checks and the
-TypeScript check passed. The complete Product Master UI file had 13 passes and one
-pre-existing failure: its employee-create test expects Bulk Import while current
-Products.tsx exposes it only to admins. That permission behavior was not changed.
-
-Saved-state follow-up: the owner's screenshot showed Saved / 611 items and an
-error generated by applying an empty bulk unit, rather than a failed catalog save.
-The unit action is now disabled until a valid label is entered and is explicitly
-optional. Save changes remains available for an authorized editor with saved rows;
-when nothing changed it confirms that all items are already saved and clears stale
-errors, without issuing another mutation. Actual changed rows still use the normal
-audited save endpoint. Five focused upload/save UI checks passed for both catalogs,
-including empty-unit controls, repeat Save confirmation without writes and later
-unit edits. No database or company-data change was needed for this UI correction.
-
-## Product Master row context menu — 2026-10-16
-
-The owner replaced the per-row Edit/Delete icon columns in List of Consumables and
-Consumable for Assemble with a right-click menu styled like the stock grid menu.
-Edit row opens the existing intake form for exactly the clicked record; Update
-Record retains the same API. Delete row retains the existing confirmation and
-soft-deactivation API/history. Read-only users cannot open mutation menus. Existing
-admin authority and the Sales Parts actions are unchanged.
-
-Rows support Shift+F10/the context-menu key. Menus support arrow-key navigation,
-Escape, outside-click/scroll dismissal, focus restoration and viewport clamping.
-The menu renders outside the scrolling table so overflow does not clip it. Loading
-and empty-row column counts were adjusted after removing the two action columns.
-Fifteen Product Master UI checks and TypeScript passed; the previously documented
-employee-create/admin-only entry-point mismatch was excluded. Checks cover both
-tabs, exact chosen-row identity, editing, confirmed/cancelled deletion and read-only
-access. No backend, migration or company record mutation was needed for this UI task.
-
-### Owner clarification: edit inside the table — 2026-10-16
-
-The owner clarified that row editing must not open/scroll to the upper intake form.
-This supersedes the prior Edit row handler described above. Both master lists now
-offer Edit cell plus Edit row in the context menu; double-clicking an editable cell
-also starts its editor. Inputs appear in the selected table row, with a local Save
-changes/Cancel strip. Enter or Ctrl+S saves, Escape cancels. IDs and canonical mapped
-references remain protected. Changing tabs/refreshing prompts before losing edits.
-Successful saves update that row locally without a full-table loading reset or
-scroll-to-top call. Failed saves retain the input and show an error beside the row.
-
-Partial updates reuse the existing PUT master endpoint and send only changed values;
-supplier-name edits retain the original supplier reference. That endpoint now reuses
-catalog optional-unit/history protection and four-place Decimal validation, so blank
-units do not become PCS, numeric units cannot be created, and assembly unit updates
-resolve an unassigned material consistently. Deletion still confirms and deactivates.
-No new migration, formula change or live company edit was required.
-Seventeen relevant UI checks, seventeen isolated backend checks and TypeScript
-passed. The independent employee-create entry-point test remains excluded as noted.
-
-### Product Master horizontal scrolling — 2026-10-16
-
-The owner requested horizontal table scrolling without changing vertical scrolling
-or widths. All three main Product Master tables now use HorizontalTableScroll,
-which adds a native scrollbar above the table, sticky within the existing page
-scroller and synchronized with the original bottom scrollbar. ResizeObserver keeps
-its range aligned when the sidebar or table size changes. Existing table/container
-classes, column widths, full table heights and page vertical scrolling are retained;
-no nested vertical scroll area or global scrollbar styling was introduced.
-
-Focused browser verification used fictional rows in the real Products/AppShell
-components, with no login or company-data mutations. It verified horizontal movement,
-reverse synchronization, assembly scrolling, all three tab renderings, sidebar
-resizing and the sticky bar after vertical page scrolling. The 471-row consumable
-table retained its measured 28,201px content height and 15px page vertical gutter.
-The new component's TypeScript check and the whitespace check passed. Temporary
-preview sources were removed after verification.

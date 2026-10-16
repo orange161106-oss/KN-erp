@@ -49,6 +49,27 @@ export interface PreviewResponse {
   can_confirm: boolean;
   warnings: string[];
   errors: string[];
+  comparison_vs_previous_month?: {
+    current_period: string;
+    previous_period: string;
+    has_previous_data: boolean;
+    added_count: number;
+    removed_count: number;
+    changed_count: number;
+    blocks_added_count: number;
+    blocks_removed_count: number;
+    parts_added: Array<{ customer: string; part_no: string; item_id: string; description: string; planned_quantity: string }>;
+    parts_removed: Array<{ customer: string; part_no: string; item_id: string; planned_quantity: string }>;
+    parts_quantity_changed: Array<{ customer: string; part_no: string; item_id: string; description: string; old_quantity: string; new_quantity: string }>;
+    blocks_added: string[];
+    blocks_removed: string[];
+  } | null;
+  needs_review_rows?: Array<{
+    row_index: number;
+    raw_values: any[];
+    possible_block?: string | null;
+    reason: string;
+  }>;
   file_token: string;
 }
 
@@ -75,6 +96,8 @@ export default function SalesScheduleImportModal({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [previewData, setPreviewData] = useState<PreviewResponse | null>(null);
+  const [showChangesDetails, setShowChangesDetails] = useState(false);
+  const [importMode, setImportMode] = useState<'APPEND' | 'REPLACE'>('APPEND');
 
   // Filter selections
   const [selectedSheet, setSelectedSheet] = useState<string>('');
@@ -137,6 +160,42 @@ export default function SalesScheduleImportModal({
     }
   };
 
+  const handleDownloadChangesCSV = () => {
+    const comp = previewData?.comparison_vs_previous_month;
+    if (!comp) return;
+
+    const lines: string[] = ['Change Type,Customer,Part No,Item ID,Description,Old Qty,New Qty,Diff'];
+
+    comp.parts_added.forEach(p => {
+      lines.push(`Added,"${p.customer}","${p.part_no}","${p.item_id}","${p.description || ''}",,"${p.planned_quantity}","${p.planned_quantity}"`);
+    });
+
+    comp.parts_quantity_changed.forEach(p => {
+      const diff = (parseFloat(p.new_quantity) - parseFloat(p.old_quantity)).toFixed(4);
+      lines.push(`Quantity Changed,"${p.customer}","${p.part_no}","${p.item_id}","${p.description || ''}","${p.old_quantity}","${p.new_quantity}","${diff}"`);
+    });
+
+    comp.parts_removed.forEach(p => {
+      lines.push(`Removed,"${p.customer}","${p.part_no}","${p.item_id}",,"${p.planned_quantity}",,"-${p.planned_quantity}"`);
+    });
+
+    comp.blocks_added.forEach(b => {
+      lines.push(`New Block,"${b}",,,,,,`);
+    });
+
+    comp.blocks_removed.forEach(b => {
+      lines.push(`Missing Block,"${b}",,,,,,`);
+    });
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `changes_vs_${comp.previous_period}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handleConfirmImport = async () => {
     if (!previewData) return;
     setIsLoading(true);
@@ -148,7 +207,7 @@ export default function SalesScheduleImportModal({
         target_period: selectedPeriod || undefined,
         revision_label: selectedRevision || undefined,
         alias_mappings: Object.keys(aliasMappings).length > 0 ? aliasMappings : undefined,
-        mode: 'APPEND',
+        mode: importMode,
         reason: 'Confirmed KNL sales schedule import',
       };
 
@@ -395,10 +454,170 @@ export default function SalesScheduleImportModal({
                   )}
                 </div>
 
-                <div className="text-gray-500 font-mono text-[11px]">
-                  File: {previewData.filename}
+                <div className="flex items-center gap-3">
+                  <label className="text-[11px] text-gray-600 flex items-center gap-1 font-medium">
+                    Import Mode:
+                    <select
+                      value={importMode}
+                      onChange={e => setImportMode(e.target.value as 'APPEND' | 'REPLACE')}
+                      className="px-1.5 py-0.5 border rounded bg-white text-[11px]"
+                    >
+                      <option value="APPEND">Append / New Revision</option>
+                      <option value="REPLACE">Overwrite / Replace Period</option>
+                    </select>
+                  </label>
+                  <div className="text-gray-500 font-mono text-[11px]">
+                    File: {previewData.filename}
+                  </div>
                 </div>
               </div>
+
+              {/* Blocking Errors Banner (e.g. Month mismatch) */}
+              {previewData.errors && previewData.errors.length > 0 && (
+                <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-xs text-red-900 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5 text-red-800">
+                    <span>🚫</span> Import Blocked ({previewData.errors.length} {previewData.errors.length === 1 ? 'Error' : 'Errors'}):
+                  </div>
+                  <ul className="list-disc list-inside space-y-0.5 text-red-700 pl-1 font-medium">
+                    {previewData.errors.map((err, idx) => (
+                      <li key={idx}>{err}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Warnings Banner */}
+              {previewData.warnings && previewData.warnings.length > 0 && (
+                <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs text-amber-900 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5 text-amber-800">
+                    <span>⚠️</span> Warnings ({previewData.warnings.length}):
+                  </div>
+                  <ul className="list-disc list-inside space-y-0.5 text-amber-800 pl-1">
+                    {previewData.warnings.map((warn, idx) => (
+                      <li key={idx}>{warn}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Changes vs Previous Month Panel */}
+              {previewData.comparison_vs_previous_month && (
+                <div className="border border-blue-200 bg-blue-50/40 rounded-lg overflow-hidden shadow-2xs">
+                  <div className="px-3 py-2 bg-blue-50 border-b border-blue-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-blue-900">
+                        🔄 Changes vs Previous Month ({previewData.comparison_vs_previous_month.previous_period})
+                      </span>
+                      {!previewData.comparison_vs_previous_month.has_previous_data && (
+                        <span className="text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                          No previous data found for {previewData.comparison_vs_previous_month.previous_period}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {previewData.comparison_vs_previous_month.has_previous_data && (
+                        <button
+                          type="button"
+                          onClick={handleDownloadChangesCSV}
+                          className="px-2.5 py-1 bg-white hover:bg-blue-50 text-blue-700 border border-blue-300 rounded text-xs font-semibold flex items-center gap-1 shadow-2xs"
+                        >
+                          <span>📥</span> Download changes list (CSV)
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setShowChangesDetails(!showChangesDetails)}
+                        className="text-xs text-blue-700 hover:text-blue-900 font-medium underline"
+                      >
+                        {showChangesDetails ? 'Hide details' : 'View details'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-3 text-xs space-y-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center">
+                      <div className="bg-white border rounded p-2">
+                        <div className="text-[10px] text-gray-500 uppercase font-semibold">Parts Added</div>
+                        <div className="text-base font-bold text-emerald-700">{previewData.comparison_vs_previous_month.added_count}</div>
+                      </div>
+                      <div className="bg-white border rounded p-2">
+                        <div className="text-[10px] text-gray-500 uppercase font-semibold">Parts Removed</div>
+                        <div className="text-base font-bold text-rose-700">{previewData.comparison_vs_previous_month.removed_count}</div>
+                      </div>
+                      <div className="bg-white border rounded p-2">
+                        <div className="text-[10px] text-gray-500 uppercase font-semibold">Qty Changed</div>
+                        <div className="text-base font-bold text-amber-700">{previewData.comparison_vs_previous_month.changed_count}</div>
+                      </div>
+                      <div className="bg-white border rounded p-2">
+                        <div className="text-[10px] text-gray-500 uppercase font-semibold">New Blocks</div>
+                        <div className="text-base font-bold text-indigo-700">{previewData.comparison_vs_previous_month.blocks_added_count}</div>
+                      </div>
+                      <div className="bg-white border rounded p-2">
+                        <div className="text-[10px] text-gray-500 uppercase font-semibold">Missing Blocks</div>
+                        <div className="text-base font-bold text-gray-700">{previewData.comparison_vs_previous_month.blocks_removed_count}</div>
+                      </div>
+                    </div>
+
+                    {showChangesDetails && (
+                      <div className="mt-2 space-y-3 pt-2 border-t border-blue-100 max-h-56 overflow-y-auto">
+                        {previewData.comparison_vs_previous_month.blocks_added.length > 0 && (
+                          <div>
+                            <span className="font-semibold text-indigo-900 text-[11px]">New Customer Blocks: </span>
+                            <span className="text-[11px] text-gray-700">{previewData.comparison_vs_previous_month.blocks_added.join(', ')}</span>
+                          </div>
+                        )}
+                        {previewData.comparison_vs_previous_month.blocks_removed.length > 0 && (
+                          <div>
+                            <span className="font-semibold text-rose-900 text-[11px]">Missing Blocks (in {previewData.comparison_vs_previous_month.previous_period} but not current): </span>
+                            <span className="text-[11px] text-gray-700">{previewData.comparison_vs_previous_month.blocks_removed.join(', ')}</span>
+                          </div>
+                        )}
+                        {previewData.comparison_vs_previous_month.parts_quantity_changed.length > 0 && (
+                          <div>
+                            <div className="font-semibold text-amber-900 text-[11px] mb-1">Quantity Changes (Sample):</div>
+                            <div className="space-y-1">
+                              {previewData.comparison_vs_previous_month.parts_quantity_changed.slice(0, 10).map((p, idx) => (
+                                <div key={idx} className="flex items-center justify-between bg-white px-2 py-1 rounded border text-[11px]">
+                                  <span><strong className="text-gray-900">{p.customer}</strong> — {p.part_no} ({p.item_id || '—'})</span>
+                                  <span className="font-mono">
+                                    <span className="text-gray-500">{p.old_quantity}</span> → <strong className="text-amber-800">{p.new_quantity}</strong>
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Ambiguous / Needs Review Rows Panel */}
+              {previewData.needs_review_rows && previewData.needs_review_rows.length > 0 && (
+                <div className="border border-amber-300 bg-amber-50/60 rounded-lg p-3 text-xs space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-amber-900 flex items-center gap-1.5">
+                      <span>⚠️</span> Ambiguous / Needs Review Rows ({previewData.needs_review_rows.length})
+                    </span>
+                    <span className="text-[11px] text-amber-700">These rows were excluded from part totals</span>
+                  </div>
+                  <div className="max-h-36 overflow-y-auto space-y-1">
+                    {previewData.needs_review_rows.map((nr, idx) => (
+                      <div key={idx} className="bg-white p-2 rounded border border-amber-200 flex items-start justify-between gap-2 text-[11px]">
+                        <div>
+                          <span className="font-bold text-gray-800">Row {nr.row_index}:</span>{' '}
+                          <span className="text-amber-900">{nr.reason}</span>
+                          {nr.possible_block && <span className="ml-2 text-gray-500 font-mono">(Near: {nr.possible_block})</span>}
+                        </div>
+                        <div className="text-gray-400 font-mono text-[10px] truncate max-w-xs">
+                          {JSON.stringify(nr.raw_values.filter((v: any) => v !== null && v !== ''))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Unmapped Aliases Resolver Card */}
               {previewData.unmapped_aliases.length > 0 && (
@@ -504,11 +723,11 @@ export default function SalesScheduleImportModal({
                 </div>
               </div>
 
-              {/* Data Preview Table (First 50 Rows with Customer Columns) */}
+              {/* Data Preview Table (First 50 Rows with Customer Columns and Norms Match) */}
               <div className="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-2xs">
                 <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 flex items-center justify-between text-xs">
                   <span className="font-bold text-gray-800">
-                    Flat Grid Data Preview (First 50 rows showing Customer columns)
+                    Flat Grid Data Preview (First 50 rows showing Customer columns and Norms match)
                   </span>
                   <span className="text-gray-500">Every row has distinct Customer & Customer ID</span>
                 </div>
@@ -517,15 +736,16 @@ export default function SalesScheduleImportModal({
                     <thead className="bg-gray-100 text-gray-700 sticky top-0 z-10 border-b">
                       <tr>
                         <th className="p-2 w-12 text-center">Row</th>
-                        <th className="p-2 w-32">Customer</th>
-                        <th className="p-2 w-28">Customer ID</th>
-                        <th className="p-2 w-24">Group</th>
-                        <th className="p-2 w-32">Part No.</th>
-                        <th className="p-2 w-28">Item ID</th>
-                        <th className="p-2 w-48">Description</th>
-                        <th className="p-2 w-24 text-right">Plan Qty</th>
-                        <th className="p-2 w-16 text-center">Unit</th>
-                        <th className="p-2 w-20 text-center">Rev</th>
+                        <th className="p-2 w-28">Customer</th>
+                        <th className="p-2 w-24">Customer ID</th>
+                        <th className="p-2 w-20">Group</th>
+                        <th className="p-2 w-28">Part No.</th>
+                        <th className="p-2 w-24">Item ID</th>
+                        <th className="p-2 w-40">Description</th>
+                        <th className="p-2 w-20 text-right">Plan Qty</th>
+                        <th className="p-2 w-14 text-center">Unit</th>
+                        <th className="p-2 w-14 text-center">Rev</th>
+                        <th className="p-2 w-28 text-center">Norms Match</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 font-mono text-[11px]">
@@ -541,6 +761,17 @@ export default function SalesScheduleImportModal({
                           <td className="p-2 text-right font-bold text-gray-900">{r.planned_quantity}</td>
                           <td className="p-2 text-center text-gray-600">{r.uom}</td>
                           <td className="p-2 text-center text-indigo-700 font-bold">{r.revision}</td>
+                          <td className="p-2 text-center">
+                            {r.norm_match === 'Matched' ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                Matched ✓
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-300">
+                                No norms found
+                              </span>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

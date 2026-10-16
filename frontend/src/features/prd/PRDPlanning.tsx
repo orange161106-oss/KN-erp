@@ -5,7 +5,7 @@ import { canPerform } from '../../core/rbac';
 import DataTable, { type ColumnDef } from '../../components/DataTable';
 import Toolbar from '../../components/Toolbar';
 import ConfirmDialog from '../../components/ConfirmDialog';
-import SalesScheduleImportModal from './CentralProductionImport';
+import SalesScheduleImportModal from './SalesScheduleImportModal';
 
 export interface PRDRecord {
   id: string;
@@ -458,7 +458,7 @@ export default function PRDPlanning() {
         align: 'left',
       },
     ],
-    []
+    [records]
   );
 
   return (
