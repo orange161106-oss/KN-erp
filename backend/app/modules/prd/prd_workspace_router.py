@@ -150,6 +150,7 @@ def confirm_sales_schedule(
         alias_mappings=data.alias_mappings,
         mode=data.mode,
         reason=data.reason,
+        require_route_mapping=data.require_route_mapping,
     )
 
 

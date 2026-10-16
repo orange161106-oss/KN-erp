@@ -351,3 +351,25 @@ schema gate passed. Counts in eight business/history tables and protected foreig
 primary-key and uniqueness constraints were unchanged. No company business records
 were imported/approved/deleted; this verifies schema deployment, not company data
 readiness or production acceptance. No migration was rewritten or blindly stamped.
+
+## Restored PRD import UI & Dynamic Sales Schedule importer — 2026-10-16
+
+The "Production for sale" (PRD) Sales Schedule import modal (`SalesScheduleImportModal.tsx`)
+and two-pass hierarchical parser workflow have been restored, replacing `CentralProductionImport.tsx`.
+Per the owner addendum, all row numbers, counts, and totals are fully dynamic:
+1. Header detection scans for `Part No.` and `Item ID` (case-insensitive, trimmed) anywhere in the sheet,
+   not fixed row 4. Banner rows above the header are parsed dynamically by content/dates.
+2. Supports any column order, any number of revision columns (R0, R1, R2, etc.), and extracts both schedule
+   date and effective month date without hardcoding.
+3. Customer blocks are dynamically recognized from heading rows (Column A, B, or D), part rows, and closing
+   subtotal rows (e.g. `- TOTAL`). Each block is reconciled against its own closing row; grand total cross-checks customer blocks.
+4. Ambiguous/unrecognized rows are captured in `needs_review_rows` with Excel row numbers and excluded from part sums.
+5. Month mismatch validation: file banner month is strictly verified against selected planning month (blocking error).
+6. Non-blocking "Norms match" chip column (`Matched` in emerald, `No norms found` in amber) is dynamically
+   computed against current `ConsumptionNorm` records without requiring Product-Plant Mapping or Routes.
+7. Step 2 preview includes a "Changes vs previous month" panel with metric badges (added, removed, qty changed,
+   block diffs) and a downloadable CSV export button.
+8. Re-uploading preserves R0 and R1 as separate records without summing.
+9. Verified with full test suite: 57 backend tests passed (including 7 dedicated dynamic parser tests in
+   `test_dynamic_sales_schedule.py`), 12 frontend vitest tests passed, TypeScript checks passed, and production build succeeded.
+
