@@ -27,8 +27,8 @@ class ProductionRateParams(BaseModel):
     @field_validator("rate")
     @classmethod
     def validate_rate(cls, v: Decimal) -> Decimal:
-        if v <= 0:
-            raise ParameterValidationError("Production rate must be greater than zero.")
+        if v < 0:
+            raise ParameterValidationError("Production rate cannot be negative.")
         return v
 
     @field_validator("scrap_factor")

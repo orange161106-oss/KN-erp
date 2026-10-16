@@ -9,7 +9,7 @@ from app.schemas.rules import ConsumptionNormResponse
 
 
 class NormImportRowInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     row_number: int = Field(ge=1)
     part_number: str = Field(default="", max_length=128)
     part_name: str = Field(default="", max_length=255)
@@ -37,6 +37,12 @@ class NormImportRow(NormImportRowInput):
     unit_code: str | None = None
     action: Literal["CREATE", "EXISTING", "CONFLICT", "INVALID"] = "CREATE"
     errors: list[NormImportError] = Field(default_factory=list)
+    is_general: bool = False
+    is_possible_duplicate: bool = False
+    sch_differs: bool = False
+    sch_is_zero: bool = False
+    change_status: Literal["unchanged", "changed", "new"] = "new"
+    warnings: list[str] = Field(default_factory=list)
 
 
 class NormImportPreview(BaseModel):
@@ -50,6 +56,10 @@ class NormImportPreview(BaseModel):
     duplicate_count: int
     existing_count: int
     conflict_count: int
+    general_count: int = 0
+    skipped_total_count: int = 0
+    skipped_empty_count: int = 0
+    duplicate_groups_count: int = 0
     rows: list[NormImportRow]
 
 
@@ -67,12 +77,14 @@ class NormImportReview(NormImportCorrections):
     rounding_precision: int = Field(default=4, ge=0, le=4)
     mode: Literal["CREATE", "SUPERSEDE"] = "CREATE"
     reason: str = Field(min_length=1, max_length=2000)
+    skip_invalid: bool = False
 
 
 class NormImportResult(BaseModel):
     created_count: int
     skipped_count: int
     superseded_count: int
+    skipped_invalid_count: int = 0
     replayed: bool = False
     records: list[ConsumptionNormResponse]
     message: str

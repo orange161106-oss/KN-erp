@@ -190,26 +190,57 @@ def preview(db, version_id, as_of):
     if not version or not is_central_version(db, version_id):
         raise ApplicationError('CENTRAL_VERSION_REQUIRED', 'Choose a central production revision.', 404)
     items = list(db.scalars(select(PRDOrderItem).where(PRDOrderItem.planning_version_id == version_id).order_by(PRDOrderItem.source_row_number)))
-    products = list(db.scalars(select(Product).where(Product.id.in_({row.product_id for row in items}))))
+    products = list(db.scalars(select(Product).where(Product.id.in_({row.product_id for row in items if row.product_id}))))
     norms = load_product_norms(db, [p.id for p in products])
+    
+    seen_norm_keys = defaultdict(list)
+    for n in norms:
+        if n.is_active and not (n.parameters or {}).get('is_general'):
+            seen_norm_keys[(n.product_id, n.process_id, n.consumable_id)].append(n)
+    duplicate_groups_count = sum(1 for choices in seen_norm_keys.values() if len(choices) > 1)
+
     calculations, errors, sources = [], [], []
+    no_consumption_norms = []
+
     for item in items:
+        # For each product row where R0 == 0 or blank: skip (requirement = 0, no error)
+        if item.planned_quantity == 0 or item.planned_quantity is None:
+            sources.append({
+                'id': item.id, 'source_row_number': item.source_row_number, 'product_code': item.product_code,
+                'production_quantity': item.planned_quantity or Decimal('0'), 'unit': item.uom, 'norm_count': 0, 'matched': True
+            })
+            continue
+
         product, issue = match_product(products, product_id=item.product_id, code=item.product_code)
         if issue:
             selected, issues = [], [{'code': issue, 'message': 'The source product is missing, inactive or its code changed.'}]
         else:
-            selected, issues = applicable_norms(norms, product.id, as_of)
+            selected, issues = applicable_norms(norms, product.id, as_of, ignore_dates=True, allow_duplicates=True, allow_missing=True)
+            if not selected and not issues:
+                no_consumption_norms.append({
+                    'prd_order_item_id': str(item.id),
+                    'source_row_number': item.source_row_number,
+                    'product_id': str(product.id) if product else None,
+                    'product_code': product.code,
+                    'part_number': product.part_number or item.product_code,
+                    'item_id': product.item_id,
+                    'part_description': product.name,
+                    'planned_quantity': item.planned_quantity,
+                    'unit': item.uom,
+                })
         if product and item.uom.casefold() != product.uom.casefold():
             issues.append({'code': 'PRODUCTION_UNIT_CHANGED', 'message': 'Production unit differs from the reviewed master. Reconcile a new production revision.'})
         for issue in issues:
             errors.append({'prd_order_item_id': item.id, 'source_row_number': item.source_row_number, 'product_id': item.product_id,
                 'product_code': item.product_code, **issue})
         sources.append({'id': item.id, 'source_row_number': item.source_row_number, 'product_code': item.product_code,
-            'production_quantity': item.planned_quantity, 'unit': item.uom, 'norm_count': len(selected), 'matched': not issues})
+            'production_quantity': item.planned_quantity, 'unit': item.uom, 'norm_count': len(selected), 'matched': not issues and bool(selected)})
         for norm in selected:
+            sch_val = Decimal(str(norm.parameters.get('sch') if norm.parameters.get('sch') is not None else norm.parameters.get('rate', '0')))
+            params = {**norm.parameters, 'rate': str(sch_val)}
             try:
                 result = evaluate_rule(RuleCalculationInput(rule_type=RuleType(norm.rule_type), rule_version=norm.version,
-                    parameters=norm.parameters, production_quantity=item.planned_quantity, unit=norm.unit.code,
+                    parameters=params, production_quantity=item.planned_quantity, unit=norm.unit.code,
                     rounding_policy=RoundingPolicy.parse(norm.rounding_policy), rounding_precision=norm.rounding_precision))
                 if result.final_calculated_requirement > Decimal('9999999999.9999') or result.raw_requirement > Decimal('9999999999.9999'):
                     raise ApplicationError('REQUIREMENT_TOO_LARGE', 'Calculated requirement exceeds the supported stored quantity.', 422)
@@ -225,10 +256,10 @@ def preview(db, version_id, as_of):
                     'message': 'The stored formula parameters are invalid. Review the norm before calculating.'})
                 continue
             calculations.append({'prd_order_item_id': item.id, 'source_row_number': item.source_row_number, 'product_id': product.id,
-                'product_code': product.code, 'product_name': product.name, 'process_id': norm.process_id, 'process_name': norm.process.name,
+                'product_code': product.code, 'product_name': product.name, 'process_id': norm.process_id, 'process_name': norm.process.name if norm.process else '',
                 'consumable_id': norm.consumable_id, 'consumable_code': norm.consumable.code, 'consumable_name': norm.consumable.name,
                 'rule_id': norm.id, 'rule_type': norm.rule_type, 'rule_version': norm.version, 'parameters': norm.parameters,
-                'source_production_qty': item.planned_quantity, 'raw_requirement': result.raw_requirement,
+                'sch': sch_val, 'source_production_qty': item.planned_quantity, 'raw_requirement': result.raw_requirement,
                 'rounding_policy': result.rounding_policy.value, 'rounding_precision': result.rounding_precision,
                 'calculated_qty': result.final_calculated_requirement, 'unit_id': norm.unit_id, 'uom': norm.unit.code,
                 'calculation_steps': [step.model_dump(mode='json') for step in result.calculation_steps]})
@@ -237,13 +268,50 @@ def preview(db, version_id, as_of):
         key = row['consumable_id']
         if key not in totals:
             totals[key] = {name: row[name] for name in ('consumable_id', 'consumable_code', 'consumable_name', 'uom')}
-            totals[key].update(total_raw_requirement=Decimal('0'), total_calculated_qty=Decimal('0'), line_items_count=0)
+            totals[key].update(
+                total_raw_requirement=Decimal('0'),
+                total_calculated_qty=Decimal('0'),
+                total_basic_requirement=Decimal('0'),
+                line_items_count=0,
+                parts_breakdown=[]
+            )
         totals[key]['total_raw_requirement'] += row['raw_requirement']
         totals[key]['total_calculated_qty'] += row['calculated_qty']
+        totals[key]['total_basic_requirement'] += row['calculated_qty']
         totals[key]['line_items_count'] += 1
-    value = {'planning_version_id': version.id, 'planning_period': version.planning_period, 'revision_label': version.revision_label,
-        'status': version.status, 'as_of_date': as_of, 'complete': bool(items) and not errors, 'sources': sources,
-        'calculations': calculations, 'summary_by_consumable': sorted(totals.values(), key=lambda r: r['consumable_code']), 'errors': errors}
+        totals[key]['parts_breakdown'].append({
+            'source_row_number': row['source_row_number'],
+            'product_code': row['product_code'],
+            'product_name': row['product_name'],
+            'production_quantity': row['source_production_qty'],
+            'sch': row['sch'],
+            'line_requirement': row['calculated_qty'],
+            'process_name': row['process_name']
+        })
+    duplicate_groups_warning = (
+        f"{duplicate_groups_count} norm groups in Consumption Norms share the same Part No, Process and Consumable. "
+        "Both were included in the calculation. If this is unexpected, review duplicate norms in Consumption Norms."
+        if duplicate_groups_count > 0 else None
+    )
+    missing_parts_qty = sum((row['planned_quantity'] for row in no_consumption_norms), Decimal('0'))
+    value = {
+        'planning_version_id': version.id,
+        'planning_period': version.planning_period,
+        'revision_label': version.revision_label,
+        'status': version.status,
+        'as_of_date': as_of,
+        'complete': bool(items) and not errors and not no_consumption_norms,
+        'has_missing_norms': bool(no_consumption_norms),
+        'missing_parts_count': len(no_consumption_norms),
+        'missing_parts_qty': missing_parts_qty,
+        'no_consumption_norms': no_consumption_norms,
+        'duplicate_norm_groups_count': duplicate_groups_count,
+        'duplicate_groups_warning': duplicate_groups_warning,
+        'sources': sources,
+        'calculations': calculations,
+        'summary_by_consumable': sorted(totals.values(), key=lambda r: r['consumable_code']),
+        'errors': errors
+    }
     value['review_token'] = digest(value)
     return value
 
@@ -266,28 +334,138 @@ def calculate(db, req, actor):
         data = preview(db, version.id, effective_date)
         db.execute(delete(CalculatedRequirement).where(CalculatedRequirement.planning_version_id == version.id))
         db.execute(delete(RequirementCalculationError).where(RequirementCalculationError.planning_version_id == version.id))
+        consolidated = {}
         for row in data['calculations']:
-            fields = {key: value for key, value in row.items() if key not in {'source_row_number', 'product_code', 'product_name', 'process_name', 'consumable_code', 'consumable_name'}}
-            db.add(CalculatedRequirement(planning_version_id=version.id, plant_id=None, **fields,
-                explanation_payload={'workflow': WORKFLOW, 'as_of_date': str(data['as_of_date']), 'production_source': {
-                    'prd_order_item_id': str(row['prd_order_item_id']), 'source_row_number': row['source_row_number'],
-                    'planned_quantity': str(row['source_production_qty'])}, 'rule_id': str(row['rule_id']),
-                    'rule_version': row['rule_version'], 'parameters': row['parameters'], 'raw_requirement': str(row['raw_requirement']),
-                    'steps': row['calculation_steps']}))
+            key = (str(row['prd_order_item_id']), str(row['process_id']), str(row['consumable_id']))
+            if key not in consolidated:
+                consolidated[key] = {
+                    'planning_version_id': version.id,
+                    'plant_id': None,
+                    'prd_order_item_id': UUID(str(row['prd_order_item_id'])),
+                    'product_id': UUID(str(row['product_id'])),
+                    'process_id': UUID(str(row['process_id'])),
+                    'consumable_id': UUID(str(row['consumable_id'])),
+                    'rule_id': UUID(str(row['rule_id'])),
+                    'rule_type': row['rule_type'],
+                    'rule_version': row['rule_version'],
+                    'parameters': row['parameters'],
+                    'source_production_qty': row['source_production_qty'],
+                    'raw_requirement': row['raw_requirement'],
+                    'rounding_policy': row['rounding_policy'],
+                    'rounding_precision': row['rounding_precision'],
+                    'calculated_qty': row['calculated_qty'],
+                    'unit_id': UUID(str(row['unit_id'])),
+                    'uom': row['uom'],
+                    'calculation_steps': list(row['calculation_steps']),
+                    'norms_included': [{
+                        'rule_id': str(row['rule_id']),
+                        'parameters': row['parameters'],
+                        'raw_requirement': str(row['raw_requirement']),
+                        'calculated_qty': str(row['calculated_qty']),
+                        'steps': row['calculation_steps']
+                    }],
+                    'source_row_number': row['source_row_number']
+                }
+            else:
+                existing = consolidated[key]
+                existing['raw_requirement'] += row['raw_requirement']
+                existing['calculated_qty'] += row['calculated_qty']
+                existing['calculation_steps'].extend(row['calculation_steps'])
+                existing['norms_included'].append({
+                    'rule_id': str(row['rule_id']),
+                    'parameters': row['parameters'],
+                    'raw_requirement': str(row['raw_requirement']),
+                    'calculated_qty': str(row['calculated_qty']),
+                    'steps': row['calculation_steps']
+                })
+
+        for row in consolidated.values():
+            db.add(CalculatedRequirement(
+                planning_version_id=version.id,
+                plant_id=None,
+                prd_order_item_id=row['prd_order_item_id'],
+                product_id=row['product_id'],
+                process_id=row['process_id'],
+                consumable_id=row['consumable_id'],
+                rule_id=row['rule_id'],
+                rule_type=row['rule_type'],
+                rule_version=row['rule_version'],
+                parameters=row['parameters'],
+                source_production_qty=row['source_production_qty'],
+                raw_requirement=row['raw_requirement'],
+                rounding_policy=row['rounding_policy'],
+                rounding_precision=row['rounding_precision'],
+                calculated_qty=row['calculated_qty'],
+                unit_id=row['unit_id'],
+                uom=row['uom'],
+                calculation_steps=row['calculation_steps'],
+                explanation_payload={
+                    'workflow': WORKFLOW,
+                    'as_of_date': str(data['as_of_date']),
+                    'production_source': {
+                        'prd_order_item_id': str(row['prd_order_item_id']),
+                        'source_row_number': row['source_row_number'],
+                        'planned_quantity': str(row['source_production_qty'])
+                    },
+                    'rule_id': str(row['rule_id']),
+                    'rule_version': row['rule_version'],
+                    'parameters': row['parameters'],
+                    'raw_requirement': str(row['raw_requirement']),
+                    'steps': row['calculation_steps'],
+                    'norms_included': row['norms_included'],
+                    'total_calculated_qty': str(row['calculated_qty'])
+                }
+            ))
+        for missing in data['no_consumption_norms']:
+            db.add(RequirementCalculationError(
+                planning_version_id=version.id,
+                prd_order_item_id=UUID(str(missing['prd_order_item_id'])),
+                product_id=UUID(str(missing['product_id'])) if missing.get('product_id') else None,
+                consumable_id=None,
+                error_code='NO_CONSUMPTION_NORM',
+                error_message=f"Part {missing['part_number']} has planned production of {missing['planned_quantity']} but no consumption norms defined.",
+                context_data={
+                    'source_row_number': missing['source_row_number'],
+                    'part_number': missing['part_number'],
+                    'item_id': missing['item_id'],
+                    'planned_quantity': str(missing['planned_quantity'])
+                }
+            ))
         for issue in data['errors']:
-            db.add(RequirementCalculationError(planning_version_id=version.id, prd_order_item_id=issue['prd_order_item_id'],
-                product_id=issue['product_id'], consumable_id=issue.get('consumable_id'), error_code=issue['code'],
-                error_message=issue['message'], context_data={'source_row_number': issue['source_row_number']}))
+            db.add(RequirementCalculationError(
+                planning_version_id=version.id,
+                prd_order_item_id=UUID(str(issue['prd_order_item_id'])),
+                product_id=UUID(str(issue['product_id'])) if issue.get('product_id') else None,
+                consumable_id=UUID(str(issue['consumable_id'])) if issue.get('consumable_id') else None,
+                error_code=issue['code'],
+                error_message=issue['message'],
+                context_data={'source_row_number': issue['source_row_number']}
+            ))
         version.status = 'CALCULATED' if data['complete'] else 'CALCULATED_WITH_ERRORS'
         version.calculated_at = datetime.now(timezone.utc)
+        total_errs = len(data['errors']) + len(data['no_consumption_norms'])
         db.add(AuditLog(actor_id=actor, action='CALCULATE', entity_type='planning_version', entity_id=version.id,
             new_values={'workflow': WORKFLOW, 'review_token': data['review_token'], 'status': version.status,
-                'calculation_count': len(data['calculations']), 'error_count': len(data['errors'])}, reason='Central basic requirements; stock is applied downstream after consolidation'))
+                'calculation_count': len(data['calculations']), 'error_count': total_errs,
+                'missing_norms_count': len(data['no_consumption_norms'])}, reason='Central basic requirements; stock is applied downstream after consolidation'))
         db.commit()
-        return RequirementCalculationRunResponse(planning_version_id=version.id, planning_period=version.planning_period,
-            revision_label=version.revision_label, status=version.status, total_items_processed=len(data['sources']),
-            successful_requirements_count=len(data['calculations']), error_count=len(data['errors']),
-            summary_by_consumable=data['summary_by_consumable'], errors=get_calculation_errors(db, version.id))
+        return RequirementCalculationRunResponse(
+            planning_version_id=version.id,
+            planning_period=version.planning_period,
+            revision_label=version.revision_label,
+            status=version.status,
+            total_items_processed=len(data['sources']),
+            successful_requirements_count=len(data['calculations']),
+            error_count=total_errs,
+            summary_by_consumable=data['summary_by_consumable'],
+            errors=get_calculation_errors(db, version.id),
+            has_missing_norms=data['has_missing_norms'],
+            missing_parts_count=data['missing_parts_count'],
+            missing_parts_qty=data['missing_parts_qty'],
+            no_consumption_norms=data['no_consumption_norms'],
+            duplicate_norm_groups_count=data['duplicate_norm_groups_count'],
+            duplicate_groups_warning=data['duplicate_groups_warning'],
+        )
     except Exception:
         db.rollback()
         raise

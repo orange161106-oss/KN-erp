@@ -69,7 +69,7 @@ def is_production_rule(norm):
     )
 
 
-def applicable_norms(norms, product_id: UUID, as_of: date, plant_id: UUID | None = None):
+def applicable_norms(norms, product_id: UUID, as_of: date, plant_id: UUID | None = None, *, ignore_dates: bool = False, allow_duplicates: bool = False, allow_missing: bool = False):
     """Choose one version per process/material, favoring an explicitly supplied plant.
 
     Plant-independent plans do not borrow another plant's parameters. Conflicting
@@ -79,7 +79,9 @@ def applicable_norms(norms, product_id: UUID, as_of: date, plant_id: UUID | None
     for norm in norms:
         if not norm.is_active or norm.product_id != product_id:
             continue
-        if norm.effective_from > as_of or (norm.effective_to is not None and norm.effective_to < as_of):
+        if (norm.parameters or {}).get("is_general"):
+            continue
+        if not ignore_dates and (norm.effective_from > as_of or (norm.effective_to is not None and norm.effective_to < as_of)):
             continue
         if norm.plant_id is not None and norm.plant_id != plant_id:
             continue
@@ -90,25 +92,28 @@ def applicable_norms(norms, product_id: UUID, as_of: date, plant_id: UUID | None
         choices = [n for n in choices if int(n.plant_id is not None) == specificity]
         version = max(n.version for n in choices)
         choices = [n for n in choices if n.version == version]
-        if len(choices) != 1:
-            errors.append({"code": "AMBIGUOUS_NORM", "process_id": identity[0], "consumable_id": identity[1],
+        if len(choices) != 1 and not allow_duplicates:
+            errors.append({"code": "AMBIGUOUS_NORM", "process_id": str(identity[0]) if identity[0] else None,
+                           "consumable_id": str(identity[1]) if identity[1] else None,
                            "message": "Several active norms have the same scope and version. Review the norm history."})
             continue
-        norm = choices[0]
-        issue = None
-        if not norm.process_id or not norm.process or not norm.process.is_active:
-            issue = ("PROCESS_REQUIRED", "Choose an active process on the product's consumption norm.")
-        elif not norm.consumable or not norm.consumable.is_active:
-            issue = ("CONSUMABLE_INACTIVE", "The norm's consumable must be active.")
-        elif not norm.unit or not norm.unit.is_active or norm.unit_id != norm.consumable.unit_id:
-            issue = ("NORM_UNIT_MISMATCH", "Use the consumable's approved stock unit; no conversion factor is assumed.")
-        elif not is_production_rule(norm):
-            issue = ("WRONG_CALCULATION_STAGE", "Stock policies and manual requests are not production-derived basic demand.")
-        if issue:
-            errors.append({"code": issue[0], "norm_id": norm.id, "process_id": identity[0],
-                           "consumable_id": identity[1], "message": issue[1]})
-        else:
-            selected.append(norm)
-    if not candidates:
+        for norm in choices:
+            issue = None
+            if not norm.process_id or not norm.process or not norm.process.is_active:
+                issue = ("PROCESS_REQUIRED", "Choose an active process on the product's consumption norm.")
+            elif not norm.consumable or not norm.consumable.is_active:
+                issue = ("CONSUMABLE_INACTIVE", "The norm's consumable must be active.")
+            elif not norm.unit or not norm.unit.is_active or norm.unit_id != norm.consumable.unit_id:
+                issue = ("NORM_UNIT_MISMATCH", "Use the consumable's approved stock unit; no conversion factor is assumed.")
+            elif not is_production_rule(norm):
+                issue = ("WRONG_CALCULATION_STAGE", "Stock policies and manual requests are not production-derived basic demand.")
+            if issue:
+                errors.append({"code": issue[0], "norm_id": str(norm.id),
+                               "process_id": str(identity[0]) if identity[0] else None,
+                               "consumable_id": str(identity[1]) if identity[1] else None,
+                               "message": issue[1]})
+            else:
+                selected.append(norm)
+    if not candidates and not allow_missing:
         errors.append({"code": "MISSING_CONSUMPTION_NORM", "message": "No active, effective product consumption norm matches this planning scope and date."})
     return selected, errors
