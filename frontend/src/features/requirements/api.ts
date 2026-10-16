@@ -10,6 +10,11 @@ export interface RequirementLineItem {
   formula_qty?: number;
   requested_qty: number;
   approved_qty?: number;
+  rate?: number;
+  receipt_qty?: number;
+  receipt_value?: number;
+  order_value?: number;
+  latest_grn_rate?: number | null;
   is_modified?: boolean;
   modification_reason?: string | null;
   item_id?: string | null;
@@ -39,6 +44,9 @@ export interface UpdateLineItemPayload {
   formula_qty?: number;
   requested_qty?: number;
   approved_qty?: number;
+  rate?: number;
+  receipt_qty?: number;
+  receipt_value?: number;
   is_modified?: boolean;
   modification_reason?: string;
   serial_no?: number;
@@ -66,6 +74,28 @@ export interface BulkUploadResponse {
   errors: string[];
   items: RequirementLineItem[];
   plants_affected?: string[];
+}
+
+export interface GRNParsedItem {
+  item_code: string;
+  received_qty: number;
+  unit_rate: number;
+  total_amount: number;
+  consumable_matched: boolean;
+  consumable_name?: string | null;
+}
+
+export interface GRNUploadResponse {
+  grn_id?: string | null;
+  grn_no: string;
+  grn_date?: string | null;
+  vendor_name?: string | null;
+  total_items: number;
+  total_receipt_qty: number;
+  total_receipt_value: number;
+  consumables_updated: number;
+  requirement_lines_updated: number;
+  items: GRNParsedItem[];
 }
 
 export interface AggregatedRequirementRecord {
@@ -239,3 +269,27 @@ export async function fetchAggregatedRequirements(
   );
   return response.data;
 }
+
+export async function uploadGRNFile(
+  file: File,
+  month?: number,
+  year?: number
+): Promise<GRNUploadResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await requirementsClient.post<GRNUploadResponse>(
+    '/api/v1/requirements/grn/upload',
+    formData,
+    {
+      params: {
+        ...(month !== undefined && month !== null ? { month } : {}),
+        ...(year !== undefined && year !== null ? { year } : {}),
+      },
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    }
+  );
+  return response.data;
+}
+

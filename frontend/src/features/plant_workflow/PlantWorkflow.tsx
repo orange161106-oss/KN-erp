@@ -25,6 +25,7 @@ import {
   createSingleLineItem,
   updateLineItem,
   deleteLineItem,
+  uploadGRNFile,
   type MonthlyRequirementPlan,
   type UpdateLineItemPayload,
 } from '../requirements/api';
@@ -592,6 +593,26 @@ function LegacyPlantWorkflow({ currentUserId: _currentUserId }: PlantWorkflowPro
                   await loadAllPlans();
                 } catch (e: unknown) {
                   let msg = 'Bulk upload failed.';
+                  if (axios.isAxiosError(e)) {
+                    msg = e.response?.data?.detail || e.response?.data?.message || e.message || msg;
+                  } else if (e instanceof Error) {
+                    msg = e.message;
+                  }
+                  showToast(msg, 'error');
+                  throw e;
+                }
+              }}
+              onUploadGRN={async (f: File) => {
+                try {
+                  const res = await uploadGRNFile(f, selectedMonth, selectedYear);
+                  showToast(
+                    `GRN ${res.grn_no} processed! Updated ${res.consumables_updated} rates and ${res.requirement_lines_updated} line items (Receipt Value: ₹${res.total_receipt_value.toFixed(2)}).`,
+                    'success'
+                  );
+                  await loadAllPlans();
+                  return res;
+                } catch (e: unknown) {
+                  let msg = 'GRN upload failed.';
                   if (axios.isAxiosError(e)) {
                     msg = e.response?.data?.detail || e.response?.data?.message || e.message || msg;
                   } else if (e instanceof Error) {

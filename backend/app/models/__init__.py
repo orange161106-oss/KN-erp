@@ -1,7 +1,7 @@
 """Import shared ORM models so Alembic can discover their metadata."""
 
 from app.models.alerts import InventoryAlert
-from app.models.grn import GRN, GRNItem, GoodsReceiptRecord
+from app.models.grn import GRN, GRNItem, GoodsReceiptRecord, GRNLineItem, GRNRecord
 from app.models.purchase_approval import PurchaseApproval
 from app.models.purchase_order import PurchaseDemandEvidence, PurchaseOrder, PurchaseOrderItem
  
@@ -44,6 +44,8 @@ __all__ = [
     "GRN",
     "GRNItem",
     "GoodsReceiptRecord",
+    "GRNRecord",
+    "GRNLineItem",
     "PRDRecord",
     "PurchaseDemandEvidence",
     "PurchaseOrder",

@@ -128,6 +128,9 @@ class RequirementLineItemUpdate(BaseModel):
     formula_qty: Optional[float] = None
     requested_qty: Optional[float] = Field(default=None, ge=0)
     approved_qty: Optional[float] = None
+    rate: Optional[float] = None
+    receipt_qty: Optional[float] = None
+    receipt_value: Optional[float] = None
     is_modified: Optional[bool] = None
     modification_reason: Optional[str] = None
     serial_no: Optional[int] = None
@@ -147,6 +150,11 @@ class RequirementLineItemResponse(BaseModel):
     formula_qty: float = 0.0
     requested_qty: float = 0.0
     approved_qty: float = 0.0
+    rate: float = 0.0
+    receipt_qty: float = 0.0
+    receipt_value: float = 0.0
+    order_value: float = 0.0
+    latest_grn_rate: Optional[float] = None
     is_modified: bool = False
     modification_reason: Optional[str] = None
     item_id: Optional[str] = None
@@ -156,6 +164,28 @@ class RequirementLineItemResponse(BaseModel):
     description: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+class GRNParsedItemResponse(BaseModel):
+    item_code: str
+    received_qty: float = 0.0
+    unit_rate: float = 0.0
+    total_amount: float = 0.0
+    consumable_matched: bool = False
+    consumable_name: Optional[str] = None
+
+
+class GRNUploadResponse(BaseModel):
+    grn_id: Optional[UUID] = None
+    grn_no: str
+    grn_date: Optional[datetime] = None
+    vendor_name: Optional[str] = None
+    total_items: int = 0
+    total_receipt_qty: float = 0.0
+    total_receipt_value: float = 0.0
+    consumables_updated: int = 0
+    requirement_lines_updated: int = 0
+    items: list[GRNParsedItemResponse] = Field(default_factory=list)
 
 
 class RejectPlanRequest(BaseModel):

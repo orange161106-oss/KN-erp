@@ -20,6 +20,10 @@ describe('Phase 3: Monthly Requirement Planner Frontend', () => {
         plan_id: 'plan-101',
         consumable_id: 'con-1',
         requested_qty: 1500,
+        rate: 450,
+        receipt_qty: 500,
+        order_value: 675000,
+        receipt_value: 225000,
         item_id: 'WLD-WIRE-01',
         consumable_name: 'MIG Welding Wire 1.2mm',
         unit: 'Kg',
@@ -144,6 +148,30 @@ describe('Phase 3: Monthly Requirement Planner Frontend', () => {
           headers: { 'Content-Type': 'multipart/form-data' },
         })
       );
+
+      // uploadGRNFile
+      const grnFile = new File(['grn_no,item_code,qty,rate\nGRN-01,WLD-WIRE-01,50,450'], 'grn.csv', { type: 'text/csv' });
+      postSpy.mockResolvedValueOnce({
+        data: {
+          grn_no: 'GRN-01',
+          total_items: 1,
+          total_receipt_qty: 50,
+          total_receipt_value: 22500,
+          consumables_updated: 1,
+          requirement_lines_updated: 1,
+          items: [],
+        },
+      });
+      const grnRes = await api.uploadGRNFile(grnFile, 10, 2026);
+      expect(grnRes.grn_no).toBe('GRN-01');
+      expect(postSpy).toHaveBeenCalledWith(
+        '/api/v1/requirements/grn/upload',
+        expect.any(FormData),
+        expect.objectContaining({
+          params: { month: 10, year: 2026 },
+          headers: { 'Content-Type': 'multipart/form-data' },
+        })
+      );
     });
   });
 
@@ -259,6 +287,40 @@ describe('Phase 3: Monthly Requirement Planner Frontend', () => {
         expect(uploadSpy).toHaveBeenCalledWith('plan-101', testFile);
       });
       expect(await screen.findByText(/Successfully uploaded and parsed 5 items/)).toBeInTheDocument();
+    });
+
+    it('renders GRN rate & receipt columns and opens GRN upload modal', async () => {
+      vi.spyOn(api, 'fetchPlans').mockResolvedValue([mockPlanDraft]);
+
+      const adminUser = {
+        id: 'admin-1',
+        username: 'admin',
+        roles: ['ADMIN'],
+        permissions: ['*'],
+      };
+
+      renderWithUser(adminUser);
+
+      expect(await screen.findByText('Requirement Line Items')).toBeInTheDocument();
+      await screen.findByText('WLD-WIRE-01');
+
+      // Check GRN columns
+      expect(screen.getByText('Latest Rate (₹)')).toBeInTheDocument();
+      expect(screen.getByText('Receipt QTY')).toBeInTheDocument();
+      expect(screen.getByText('Order Value (₹)')).toBeInTheDocument();
+      expect(screen.getByText('Receipt Value (₹)')).toBeInTheDocument();
+
+      // Check row values for item-1
+      expect(screen.getByText(/450\.00/)).toBeInTheDocument();
+      expect(screen.getByText('500')).toBeInTheDocument();
+      expect(screen.getAllByText(/6,?75,?000/).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/2,?25,?000/).length).toBeGreaterThan(0);
+
+      // Open GRN modal
+      const grnBtn = screen.getByRole('button', { name: /Upload GRN/i });
+      await userEvent.click(grnBtn);
+
+      expect(await screen.findByText(/Upload Store GRN \(Goods Receipt Note\)/i)).toBeInTheDocument();
     });
   });
 

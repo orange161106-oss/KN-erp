@@ -22,6 +22,7 @@ from app.schemas.requirements import (
     CalculatedRequirementResponse,
     CalculationRunRequest,
     FormulaGenerationResponse,
+    GRNUploadResponse,
     MonthlyRequirementPlanCreate,
     MonthlyRequirementPlanResponse,
     RejectPlanRequest,
@@ -248,7 +249,7 @@ def require_admin_or_planner_role(user: CurrentUser) -> CurrentUser:
     if user.is_super_admin or getattr(user, "is_superuser", False):
         return user
     roles_normalized = [str(r).upper().strip() for r in (user.roles or [])]
-    if any(r in ("ADMIN", "SUPER ADMIN", "SUPER_ADMIN", "PLANNER") for r in roles_normalized):
+    if any(r in ("ADMIN", "SUPER ADMIN", "SUPER_ADMIN", "PLANNER", "MATERIALS_PLANNER", "MATERIALS PLANNER") for r in roles_normalized):
         return user
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
@@ -441,6 +442,30 @@ def handle_get_aggregated_requirements(
     return get_aggregated_requirements(session, month=month, year=year)
 
 
+def handle_upload_grn(
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    file: UploadFile = File(...),
+    month: Optional[int] = Query(None),
+    year: Optional[int] = Query(None),
+) -> GRNUploadResponse:
+    """Ingest Goods Receipt Note (GRN) file, update consumable latest rate, and update requirement plan receipts."""
+    require_admin_or_planner_role(current_user)
+
+    filename = file.filename or "grn_import.xlsx"
+    contents = file.file.read()
+
+    from app.services.grn_service import process_grn_ingestion
+    return process_grn_ingestion(
+        db=session,
+        file_bytes=contents,
+        filename=filename,
+        user_id=getattr(current_user, "id", None),
+        target_month=month,
+        target_year=year,
+    )
+
+
 # Register endpoints on /requirements/plans and /requirements/aggregate
 router.add_api_route("/plans", handle_get_plans, methods=["GET"], response_model=list[MonthlyRequirementPlanResponse])
 router.add_api_route("/plans", handle_create_plan, methods=["POST"], response_model=MonthlyRequirementPlanResponse, status_code=status.HTTP_201_CREATED)
@@ -455,6 +480,7 @@ router.add_api_route("/plans/{plan_id}/reject", handle_reject_plan, methods=["PA
 router.add_api_route("/plans/{plan_id}/reopen", handle_reopen_plan, methods=["PATCH", "POST"], response_model=MonthlyRequirementPlanResponse)
 router.add_api_route("/aggregate/{month}/{year}", handle_get_aggregated_requirements, methods=["GET"], response_model=list[AggregatedRequirementResponse])
 router.add_api_route("/aggregate/{month}/{year}", handle_run_aggregation, methods=["POST"], response_model=AggregationRunResponse)
+router.add_api_route("/grn/upload", handle_upload_grn, methods=["POST"], response_model=GRNUploadResponse)
 
 # Register endpoints on /plans directly
 plans_router.add_api_route("", handle_get_plans, methods=["GET"], response_model=list[MonthlyRequirementPlanResponse])
@@ -470,5 +496,6 @@ plans_router.add_api_route("/{plan_id}/reject", handle_reject_plan, methods=["PA
 plans_router.add_api_route("/{plan_id}/reopen", handle_reopen_plan, methods=["PATCH", "POST"], response_model=MonthlyRequirementPlanResponse)
 plans_router.add_api_route("/aggregate/{month}/{year}", handle_get_aggregated_requirements, methods=["GET"], response_model=list[AggregatedRequirementResponse])
 plans_router.add_api_route("/aggregate/{month}/{year}", handle_run_aggregation, methods=["POST"], response_model=AggregationRunResponse)
+plans_router.add_api_route("/grn/upload", handle_upload_grn, methods=["POST"], response_model=GRNUploadResponse)
 
 

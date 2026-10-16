@@ -240,6 +240,9 @@ class RequirementLineItem(Base):
     formula_qty: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
     requested_qty: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
     approved_qty: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
+    rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
+    receipt_qty: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
+    receipt_value: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
     is_modified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
     modification_reason: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

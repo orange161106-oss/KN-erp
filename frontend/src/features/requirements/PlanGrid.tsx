@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import axios from 'axios';
 import {
   Upload,
   FileSpreadsheet,
@@ -10,9 +11,18 @@ import {
   Trash2,
   Check,
   X,
+  FileText,
+  CheckCircle2,
+  AlertCircle,
 } from 'lucide-react';
 import { useAuth } from '../auth/context';
-import type { MonthlyRequirementPlan, RequirementLineItem, UpdateLineItemPayload } from './api';
+import {
+  uploadGRNFile,
+  type MonthlyRequirementPlan,
+  type RequirementLineItem,
+  type UpdateLineItemPayload,
+  type GRNUploadResponse,
+} from './api';
 
 interface PlanGridProps {
   plan: MonthlyRequirementPlan | null;
@@ -20,6 +30,7 @@ interface PlanGridProps {
   loading?: boolean;
   uploading?: boolean;
   onUpload: (file: File, uploadAllPlants?: boolean) => Promise<void>;
+  onUploadGRN?: (file: File) => Promise<GRNUploadResponse | void>;
   onAddItem?: () => void;
   onUpdateItem?: (itemId: string, data: UpdateLineItemPayload) => Promise<void>;
   onDeleteItem?: (itemId: string) => Promise<void>;
@@ -33,6 +44,7 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
   loading = false,
   uploading = false,
   onUpload,
+  onUploadGRN,
   onAddItem,
   onUpdateItem,
   onDeleteItem,
@@ -45,17 +57,28 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
     user?.is_superuser ||
     user?.roles?.includes('ADMIN') ||
     user?.roles?.includes('PLANNER') ||
+    user?.roles?.includes('MATERIALS_PLANNER') ||
     user?.role === 'ADMIN' ||
-    user?.role === 'PLANNER'
+    user?.role === 'PLANNER' ||
+    user?.role === 'MATERIALS_PLANNER'
   );
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modalFileInputRef = useRef<HTMLInputElement>(null);
+  const grnFileInputRef = useRef<HTMLInputElement>(null);
+
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [uploadAllPlants, setUploadAllPlants] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isModalUploading, setIsModalUploading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // GRN Modal State
+  const [isGrnModalOpen, setIsGrnModalOpen] = useState(false);
+  const [selectedGrnFile, setSelectedGrnFile] = useState<File | null>(null);
+  const [isGrnUploading, setIsGrnUploading] = useState(false);
+  const [grnUploadResult, setGrnUploadResult] = useState<GRNUploadResponse | null>(null);
+  const [grnError, setGrnError] = useState<string | null>(null);
 
   const resetUploadModalState = () => {
     setSelectedFile(null);
@@ -68,9 +91,20 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
     }
   };
 
+  const resetGrnModalState = () => {
+    setSelectedGrnFile(null);
+    setIsGrnUploading(false);
+    setGrnUploadResult(null);
+    setGrnError(null);
+    if (grnFileInputRef.current) {
+      grnFileInputRef.current.value = '';
+    }
+  };
+
   // Explicitly reset upload state whenever plan ID or plant ID changes
   useEffect(() => {
     resetUploadModalState();
+    resetGrnModalState();
   }, [plan?.id, plan?.plant_id]);
 
   // Inline editing state
@@ -162,6 +196,36 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
     }
   };
 
+  const handleConfirmGrnUpload = async () => {
+    if (!selectedGrnFile) return;
+    setIsGrnUploading(true);
+    setGrnError(null);
+    try {
+      if (onUploadGRN) {
+        const res = await onUploadGRN(selectedGrnFile);
+        if (res && typeof res === 'object' && 'grn_no' in res) {
+          setGrnUploadResult(res as GRNUploadResponse);
+        } else {
+          setIsGrnModalOpen(false);
+          resetGrnModalState();
+        }
+      } else {
+        const res = await uploadGRNFile(selectedGrnFile, plan?.month, plan?.year);
+        setGrnUploadResult(res);
+      }
+    } catch (err: unknown) {
+      let msg = 'GRN upload failed';
+      if (axios.isAxiosError(err)) {
+        msg = err.response?.data?.detail || err.response?.data?.message || err.message || msg;
+      } else if (err instanceof Error) {
+        msg = err.message;
+      }
+      setGrnError(msg);
+    } finally {
+      setIsGrnUploading(false);
+    }
+  };
+
   const filteredItems = items.filter((item) => {
     if (!searchQuery.trim()) return true;
     const query = searchQuery.toLowerCase();
@@ -172,6 +236,18 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
   });
 
   const totalRequestedQty = items.reduce((acc, it) => acc + (Number(it.requested_qty) || 0), 0);
+  const totalOrderValue = items.reduce((acc, it) => {
+    const rate = Number(it.rate || it.latest_grn_rate || 0);
+    const qty = Number(it.approved_qty || it.requested_qty || 0);
+    const val = Number(it.order_value) || (qty * rate);
+    return acc + (val > 0 ? val : 0);
+  }, 0);
+  const totalReceiptValue = items.reduce((acc, it) => {
+    const rate = Number(it.rate || it.latest_grn_rate || 0);
+    const qty = Number(it.receipt_qty || 0);
+    const val = Number(it.receipt_value) || (qty * rate);
+    return acc + (val > 0 ? val : 0);
+  }, 0);
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden flex flex-col">
@@ -279,6 +355,23 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
               </>
             )}
           </button>
+
+          {/* Action: Upload GRN Button (Admin / Planner) */}
+          {isAdminOrPlanner && (
+            <button
+              type="button"
+              onClick={() => {
+                resetGrnModalState();
+                setIsGrnModalOpen(true);
+              }}
+              disabled={loading}
+              title="Upload store Goods Receipt Note (GRN) to update latest purchase rates and store receipts"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 hover:border-emerald-400"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />
+              <span>Upload GRN</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -407,6 +500,167 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
         </div>
       )}
 
+      {/* GRN Upload Modal */}
+      {isGrnModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-lg w-full overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="p-5 border-b border-gray-200 flex items-center justify-between bg-emerald-50/50">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-100 text-emerald-800 rounded-lg">
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-gray-900">Upload Store GRN (Goods Receipt Note)</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Target Period: {plan?.month ? `${plan.month}/${plan.year}` : 'Current Month'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsGrnModalOpen(false);
+                  resetGrnModalState();
+                }}
+                className="p-1 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="p-3 bg-gray-50 rounded-xl border border-gray-200 text-xs text-gray-600 leading-relaxed">
+                <span className="font-semibold text-gray-800 block mb-1">
+                  Automated Purchase Rate & Receipt Matching:
+                </span>
+                Upload Excel/CSV store receipt notes. The ingestion engine parses GRN Number, Vendor, Item Codes, Received Quantities, and Unit Rates. It updates latest unit rates in the consumable catalog and attributes receipts to active requirement plans.
+              </div>
+
+              {grnError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2.5 text-xs text-red-700">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                  <span>{grnError}</span>
+                </div>
+              )}
+
+              {grnUploadResult ? (
+                <div className="p-4 bg-emerald-50/60 border border-emerald-200 rounded-xl space-y-3">
+                  <div className="flex items-center gap-2 text-emerald-800 font-bold text-sm">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                    <span>GRN Ingested Successfully!</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
+                      <span className="text-gray-500 block text-[10px] uppercase font-semibold">GRN No</span>
+                      <span className="font-mono font-bold text-gray-900">{grnUploadResult.grn_no}</span>
+                    </div>
+                    <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
+                      <span className="text-gray-500 block text-[10px] uppercase font-semibold">Vendor</span>
+                      <span className="font-semibold text-gray-900 truncate block" title={grnUploadResult.vendor_name || 'N/A'}>
+                        {grnUploadResult.vendor_name || 'N/A'}
+                      </span>
+                    </div>
+                    <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
+                      <span className="text-gray-500 block text-[10px] uppercase font-semibold">Items Processed</span>
+                      <span className="font-semibold text-gray-900">{grnUploadResult.total_items} items</span>
+                    </div>
+                    <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
+                      <span className="text-gray-500 block text-[10px] uppercase font-semibold">Total Receipt Value</span>
+                      <span className="font-mono font-bold text-emerald-700">
+                        ₹{grnUploadResult.total_receipt_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-emerald-800">
+                    Updated <strong>{grnUploadResult.consumables_updated}</strong> catalog rates and <strong>{grnUploadResult.requirement_lines_updated}</strong> requirement plan line items.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <input
+                    type="file"
+                    ref={grnFileInputRef}
+                    accept=".xlsx,.xls,.csv"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        setSelectedGrnFile(file);
+                        setGrnError(null);
+                      }
+                    }}
+                    className="hidden"
+                  />
+
+                  <div
+                    onClick={() => grnFileInputRef.current?.click()}
+                    className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors ${
+                      selectedGrnFile
+                        ? 'border-emerald-500 bg-emerald-50/30'
+                        : 'border-gray-300 hover:border-emerald-500 bg-gray-50/50 hover:bg-emerald-50/20'
+                    }`}
+                  >
+                    <FileText className="w-8 h-8 text-emerald-600 mx-auto mb-2" />
+                    {selectedGrnFile ? (
+                      <div>
+                        <p className="text-xs font-bold text-gray-900">
+                          Selected: <span className="text-emerald-700">{selectedGrnFile.name}</span>
+                        </p>
+                        <p className="text-[11px] text-gray-500 mt-1">
+                          {(selectedGrnFile.size / 1024).toFixed(1)} KB • Click to change file
+                        </p>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="text-xs font-semibold text-gray-800">
+                          Click to select GRN Excel or CSV file
+                        </p>
+                        <p className="text-[11px] text-gray-400 mt-1">
+                          Flexible column detection: GRN No, Date, Item Code, Received QTY, Rate
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsGrnModalOpen(false);
+                    resetGrnModalState();
+                  }}
+                  className="px-3.5 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 cursor-pointer"
+                >
+                  {grnUploadResult ? 'Close' : 'Cancel'}
+                </button>
+                {!grnUploadResult && (
+                  <button
+                    type="button"
+                    onClick={handleConfirmGrnUpload}
+                    disabled={!selectedGrnFile || isGrnUploading}
+                    className={`inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer ${
+                      !selectedGrnFile || isGrnUploading
+                        ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    }`}
+                  >
+                    {isGrnUploading ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Processing GRN...</span>
+                      </>
+                    ) : (
+                      <span>Upload GRN</span>
+                    )}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Grid Table */}
       <div className="overflow-x-auto min-h-[320px]">
         {loading ? (
@@ -436,6 +690,18 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
                   <span className="sr-only">QTY</span>
                   <span title="Plant Requested QTY">Requested QTY</span>
                 </th>
+                <th className="py-3 px-3 w-28 text-right font-medium text-gray-600">
+                  <span title="Latest Rate (₹)">Latest Rate (₹)</span>
+                </th>
+                <th className="py-3 px-3 w-28 text-right font-medium text-gray-600">
+                  <span title="Receipt QTY">Receipt QTY</span>
+                </th>
+                <th className="py-3 px-3 w-32 text-right font-medium text-gray-600">
+                  <span title="Order Value (₹)">Order Value (₹)</span>
+                </th>
+                <th className="py-3 px-3 w-32 text-right font-medium text-emerald-700">
+                  <span title="Receipt Value (₹)">Receipt Value (₹)</span>
+                </th>
                 <th className="py-3 px-3 w-40 text-center">
                   <span>Variance / Status</span>
                 </th>
@@ -446,7 +712,7 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
               {filteredItems.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={canEdit ? 9 : 8}
+                    colSpan={canEdit ? 13 : 12}
                     className="py-16 px-4 text-center text-gray-400 font-medium"
                   >
                     <div className="flex flex-col items-center justify-center space-y-2">
@@ -557,6 +823,62 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
                         </span>
                       )}
                     </td>
+
+                    {/* Latest Rate (₹) */}
+                    <td className="py-3 px-3 text-right font-mono text-gray-700">
+                      {(() => {
+                        const effectiveRate = Number(item.rate || item.latest_grn_rate || 0);
+                        if (effectiveRate <= 0) return <span className="text-gray-300">-</span>;
+                        return (
+                          <span title={`Latest Unit Rate: ₹${effectiveRate.toFixed(2)}`}>
+                            ₹{effectiveRate.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        );
+                      })()}
+                    </td>
+
+                    {/* Receipt QTY */}
+                    <td className="py-3 px-3 text-right font-mono">
+                      {(() => {
+                        const recQty = Number(item.receipt_qty || 0);
+                        const reqQty = Number(item.requested_qty || 0);
+                        if (recQty <= 0) return <span className="text-gray-300">-</span>;
+                        const isFullyReceived = reqQty > 0 && recQty >= reqQty;
+                        return (
+                          <span
+                            className={`inline-flex items-center gap-1 font-semibold ${
+                              isFullyReceived ? 'text-emerald-700' : 'text-blue-700'
+                            }`}
+                            title={`Received ${recQty} of ${reqQty}`}
+                          >
+                            {recQty.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                          </span>
+                        );
+                      })()}
+                    </td>
+
+                    {/* Order Value (₹) */}
+                    <td className="py-3 px-3 text-right font-mono font-medium text-gray-800">
+                      {(() => {
+                        const effectiveRate = Number(item.rate || item.latest_grn_rate || 0);
+                        const effectiveQty = Number(item.approved_qty || item.requested_qty || 0);
+                        const ordVal = Number(item.order_value) || (effectiveQty * effectiveRate);
+                        if (ordVal <= 0) return <span className="text-gray-300">-</span>;
+                        return `₹${ordVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                      })()}
+                    </td>
+
+                    {/* Receipt Value (₹) */}
+                    <td className="py-3 px-3 text-right font-mono font-medium text-emerald-800">
+                      {(() => {
+                        const effectiveRate = Number(item.rate || item.latest_grn_rate || 0);
+                        const recQty = Number(item.receipt_qty || 0);
+                        const recVal = Number(item.receipt_value) || (recQty * effectiveRate);
+                        if (recVal <= 0) return <span className="text-gray-300">-</span>;
+                        return `₹${recVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                      })()}
+                    </td>
+
                     {/* Variance / Modification Status */}
                     <td className="py-3 px-3 text-center">
                       {isModified ? (
@@ -660,13 +982,29 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
             Showing <strong className="text-gray-700">{filteredItems.length}</strong> of{' '}
             <strong className="text-gray-700">{items.length}</strong> total line items
           </span>
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
             <span>
               Cumulative Requirement:{' '}
               <strong className="text-gray-900 font-mono text-sm">
                 {totalRequestedQty.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
               </strong>
             </span>
+            {totalOrderValue > 0 && (
+              <span>
+                Total Planned Value:{' '}
+                <strong className="text-gray-900 font-mono text-sm">
+                  ₹{totalOrderValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </strong>
+              </span>
+            )}
+            {totalReceiptValue > 0 && (
+              <span>
+                Total Receipts:{' '}
+                <strong className="text-emerald-700 font-mono text-sm">
+                  ₹{totalReceiptValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </strong>
+              </span>
+            )}
           </div>
         </div>
       )}

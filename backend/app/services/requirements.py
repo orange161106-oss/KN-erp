@@ -641,6 +641,23 @@ def _to_line_item_response(item: RequirementLineItem) -> RequirementLineItemResp
         or (f_qty > 0.0 and abs(r_qty - f_qty) > 0.0001)
     )
 
+    rate = float(getattr(item, "rate", 0.0) or 0.0)
+    latest_grn = None
+    if item.consumable:
+        latest_grn_val = getattr(item.consumable, "latest_grn_rate", None)
+        if latest_grn_val is not None:
+            latest_grn = float(latest_grn_val)
+        if rate == 0.0:
+            if latest_grn and latest_grn > 0.0:
+                rate = latest_grn
+            elif getattr(item.consumable, "rate", None) is not None:
+                rate = float(item.consumable.rate or 0.0)
+
+    receipt_qty = float(getattr(item, "receipt_qty", 0.0) or 0.0)
+    receipt_val = float(getattr(item, "receipt_value", 0.0) or (receipt_qty * rate))
+    order_qty = a_qty if a_qty > 0.0 else r_qty
+    order_val = float(order_qty * rate)
+
     return RequirementLineItemResponse(
         id=item.id,
         plan_id=item.plan_id,
@@ -650,6 +667,11 @@ def _to_line_item_response(item: RequirementLineItem) -> RequirementLineItemResp
         formula_qty=f_qty,
         requested_qty=r_qty,
         approved_qty=a_qty,
+        rate=rate,
+        receipt_qty=receipt_qty,
+        receipt_value=receipt_val,
+        order_value=order_val,
+        latest_grn_rate=latest_grn,
         is_modified=is_mod,
         modification_reason=getattr(item, "modification_reason", None),
         item_id=item_id,

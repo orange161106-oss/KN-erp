@@ -30,6 +30,7 @@ import {
   rejectPlan,
   calculateFormulas,
   runAggregation,
+  uploadGRNFile,
   type MonthlyRequirementPlan,
   type AggregationRunResponse,
   type SingleLineItemPayload,
@@ -229,6 +230,27 @@ export const RequirementWorkspace: React.FC = () => {
       if (modalFileInputRef.current) {
         modalFileInputRef.current.value = '';
       }
+    }
+  };
+
+  const handleUploadGRN = async (file: File) => {
+    try {
+      const res = await uploadGRNFile(file, selectedMonth, selectedYear);
+      showToast(
+        `GRN ${res.grn_no} uploaded! Updated ${res.consumables_updated} rates and ${res.requirement_lines_updated} line items (Receipt Value: ₹${res.total_receipt_value.toFixed(2)}).`,
+        'success'
+      );
+      await loadPlans();
+      return res;
+    } catch (err: unknown) {
+      let msg = 'GRN upload failed';
+      if (axios.isAxiosError(err)) {
+        msg = err.response?.data?.detail || err.response?.data?.message || err.message || msg;
+      } else if (err instanceof Error) {
+        msg = err.message;
+      }
+      showToast(msg, 'error');
+      throw err;
     }
   };
 
@@ -611,6 +633,7 @@ export const RequirementWorkspace: React.FC = () => {
         loading={loading}
         uploading={uploading}
         onUpload={(file) => handleUpload(file, false)}
+        onUploadGRN={handleUploadGRN}
         onAddItem={() => setIsAddModalOpen(true)}
         onUpdateItem={handleUpdateItem}
         onDeleteItem={handleDeleteItem}
