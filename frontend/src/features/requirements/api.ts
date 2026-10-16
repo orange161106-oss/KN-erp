@@ -7,7 +7,11 @@ export interface RequirementLineItem {
   consumable_id: string;
   serial_no?: number | null;
   part_no?: string | null;
+  formula_qty?: number;
   requested_qty: number;
+  approved_qty?: number;
+  is_modified?: boolean;
+  modification_reason?: string | null;
   item_id?: string | null;
   item_code?: string | null;
   consumable_name?: string | null;
@@ -24,18 +28,26 @@ export interface SingleLineItemPayload {
   part_no?: string;
   unit?: string;
   serial_no?: number;
+  formula_qty?: number;
   requested_qty: number;
+  approved_qty?: number;
+  is_modified?: boolean;
+  modification_reason?: string;
 }
 
 export interface UpdateLineItemPayload {
+  formula_qty?: number;
   requested_qty?: number;
+  approved_qty?: number;
+  is_modified?: boolean;
+  modification_reason?: string;
   serial_no?: number;
   part_no?: string;
   unit?: string;
   item_description?: string;
 }
 
-export type RequirementPlanStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | string;
+export type RequirementPlanStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED' | string;
 
 export interface MonthlyRequirementPlan {
   id: string;
@@ -173,6 +185,38 @@ export async function submitPlan(planId: string): Promise<MonthlyRequirementPlan
 
 export async function approvePlan(planId: string): Promise<MonthlyRequirementPlan> {
   const response = await requirementsClient.patch<MonthlyRequirementPlan>(`/api/v1/requirements/plans/${planId}/approve`);
+  return response.data;
+}
+
+export async function rejectPlan(planId: string, reason?: string): Promise<MonthlyRequirementPlan> {
+  const response = await requirementsClient.patch<MonthlyRequirementPlan>(`/api/v1/requirements/plans/${planId}/reject`, { reason });
+  return response.data;
+}
+
+export interface FormulaGenerationResponse {
+  month: number;
+  year: number;
+  plans_updated: string[];
+  total_items_computed: number;
+  message: string;
+}
+
+export async function calculateFormulas(
+  month: number,
+  year: number,
+  plantId?: string
+): Promise<FormulaGenerationResponse> {
+  const response = await requirementsClient.post<FormulaGenerationResponse>(
+    '/api/v1/requirements/plans/calculate-formulas',
+    null,
+    {
+      params: {
+        month,
+        year,
+        ...(plantId ? { plant_id: plantId } : {}),
+      },
+    }
+  );
   return response.data;
 }
 

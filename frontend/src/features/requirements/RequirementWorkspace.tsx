@@ -15,6 +15,7 @@ import {
   FileCheck2,
   Upload,
   FileSpreadsheet,
+  RotateCcw,
 } from 'lucide-react';
 import { useAuth } from '../auth/context';
 import {
@@ -26,6 +27,8 @@ import {
   deleteLineItem,
   submitPlan,
   approvePlan,
+  rejectPlan,
+  calculateFormulas,
   runAggregation,
   type MonthlyRequirementPlan,
   type AggregationRunResponse,
@@ -125,6 +128,14 @@ export const RequirementWorkspace: React.FC = () => {
   // Aggregation Modal State
   const [aggregationResult, setAggregationResult] = useState<AggregationRunResponse | null>(null);
   const [aggregationLoading, setAggregationLoading] = useState<boolean>(false);
+
+  // Formula Generation State
+  const [computingFormulas, setComputingFormulas] = useState<boolean>(false);
+
+  // Reject Modal State
+  const [isRejectModalOpen, setIsRejectModalOpen] = useState<boolean>(false);
+  const [rejectionReason, setRejectionReason] = useState<string>('');
+  const [rejecting, setRejecting] = useState<boolean>(false);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ type, message });
@@ -314,6 +325,50 @@ export const RequirementWorkspace: React.FC = () => {
     }
   };
 
+  const handleRejectPlan = async () => {
+    if (!activePlan) return;
+    setRejecting(true);
+    try {
+      await rejectPlan(activePlan.id, rejectionReason.trim() || undefined);
+      showToast(`Plan for ${selectedPlant} rejected for revisions.`, 'info');
+      setIsRejectModalOpen(false);
+      setRejectionReason('');
+      await loadPlans();
+    } catch (err: unknown) {
+      let msg = 'Failed to reject plan';
+      if (axios.isAxiosError(err)) {
+        msg = err.response?.data?.detail || err.response?.data?.message || err.message || msg;
+      } else if (err instanceof Error) {
+        msg = err.message;
+      }
+      showToast(msg, 'error');
+    } finally {
+      setRejecting(false);
+    }
+  };
+
+  const handleComputeFormulas = async () => {
+    setComputingFormulas(true);
+    try {
+      const res = await calculateFormulas(selectedMonth, selectedYear);
+      showToast(
+        res.message || `Formula demand computed for ${res.plans_updated.length} plants (${res.total_items_computed} items)!`,
+        'success'
+      );
+      await loadPlans();
+    } catch (err: unknown) {
+      let msg = 'Failed to calculate formula requirements';
+      if (axios.isAxiosError(err)) {
+        msg = err.response?.data?.detail || err.response?.data?.message || err.message || msg;
+      } else if (err instanceof Error) {
+        msg = err.message;
+      }
+      showToast(msg, 'error');
+    } finally {
+      setComputingFormulas(false);
+    }
+  };
+
   const handleRunAggregation = async () => {
     setAggregationLoading(true);
     try {
@@ -335,18 +390,21 @@ export const RequirementWorkspace: React.FC = () => {
   const isDraft = !activePlan || activePlan?.status?.toUpperCase() === 'DRAFT';
   const isSubmitted = activePlan?.status?.toUpperCase() === 'SUBMITTED';
   const isApproved = activePlan?.status?.toUpperCase() === 'APPROVED';
+  const isRejected = activePlan?.status?.toUpperCase() === 'REJECTED';
 
-  // Plant incharge can submit if it's their assigned plant (or admin/planner)
+  // Plant incharge can submit if it's their assigned plant (or admin/planner) and status is DRAFT or REJECTED
   const canSubmit = Boolean(
-    isDraft &&
+    (isDraft || isRejected) &&
       activePlan &&
       (isAdminOrPlanner ||
         !user?.assigned_plant ||
         user.assigned_plant.toUpperCase() === selectedPlant.toUpperCase())
   );
 
-  // Admin or Planner can approve
+  // Admin or Planner can approve or reject
   const canApprove = Boolean(isSubmitted && isAdminOrPlanner);
+  const canReject = Boolean(isSubmitted && isAdminOrPlanner);
+  const isPlanLocked = isApproved || (!isAdminOrPlanner && isSubmitted);
 
   return (
     <div className="font-['Plus_Jakarta_Sans',sans-serif] bg-gray-50 min-h-screen p-4 sm:p-6 flex flex-col space-y-5">
@@ -411,15 +469,29 @@ export const RequirementWorkspace: React.FC = () => {
               <span>Smart Bulk Upload</span>
             </button>
 
+            {/* Global Action: Compute Formula Demands (Admin/Planner only) */}
+            {isAdminOrPlanner && (
+              <button
+                type="button"
+                onClick={handleComputeFormulas}
+                disabled={computingFormulas}
+                title="Compute initial plant requirements across all 5 facilities using Production Orders and Consumption Norms"
+                className="inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-orange-600 hover:bg-orange-700 text-white shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <Sparkles className={`w-3.5 h-3.5 ${computingFormulas ? 'animate-spin' : ''}`} />
+                <span>{computingFormulas ? 'Computing Formulas...' : 'Compute Formula Demands'}</span>
+              </button>
+            )}
+
             {/* Global Action: Run Monthly Aggregation (Admin/Planner only) */}
             {isAdminOrPlanner && (
               <button
                 type="button"
                 onClick={handleRunAggregation}
                 disabled={aggregationLoading}
-                className="inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-orange-600 hover:bg-orange-700 text-white shadow-2xs transition-colors cursor-pointer"
+                className="inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-white hover:bg-gray-50 text-gray-800 border border-gray-300 shadow-2xs transition-colors cursor-pointer"
               >
-                <Sparkles className={`w-3.5 h-3.5 ${aggregationLoading ? 'animate-spin' : ''}`} />
+                <Sparkles className={`w-3.5 h-3.5 ${aggregationLoading ? 'animate-spin text-orange-600' : 'text-orange-600'}`} />
                 <span>{aggregationLoading ? 'Aggregating Requirements...' : 'Run Monthly Aggregation'}</span>
               </button>
             )}
@@ -509,6 +581,8 @@ export const RequirementWorkspace: React.FC = () => {
                       ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
                       : activePlan.status === 'SUBMITTED'
                       ? 'bg-blue-50 text-blue-800 border-blue-300'
+                      : activePlan.status === 'REJECTED'
+                      ? 'bg-rose-50 text-rose-800 border-rose-300'
                       : 'bg-amber-50 text-amber-800 border-amber-300'
                   }`}
                 >
@@ -540,8 +614,8 @@ export const RequirementWorkspace: React.FC = () => {
         onAddItem={() => setIsAddModalOpen(true)}
         onUpdateItem={handleUpdateItem}
         onDeleteItem={handleDeleteItem}
-        canUpload={isDraft}
-        canEdit={isDraft}
+        canUpload={!isPlanLocked}
+        canEdit={!isPlanLocked}
       />
 
       {/* State Machine Action Panel (Floating Bottom Card) */}
@@ -554,6 +628,8 @@ export const RequirementWorkspace: React.FC = () => {
                   ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
                   : isSubmitted
                   ? 'bg-blue-50 text-blue-600 border-blue-200'
+                  : isRejected
+                  ? 'bg-rose-50 text-rose-600 border-rose-200'
                   : 'bg-amber-50 text-amber-600 border-amber-200'
               }`}
             >
@@ -561,6 +637,8 @@ export const RequirementWorkspace: React.FC = () => {
                 <FileCheck2 className="w-5 h-5" />
               ) : isSubmitted ? (
                 <Clock className="w-5 h-5" />
+              ) : isRejected ? (
+                <AlertTriangle className="w-5 h-5" />
               ) : (
                 <Send className="w-5 h-5" />
               )}
@@ -575,16 +653,17 @@ export const RequirementWorkspace: React.FC = () => {
                 </span>
               </div>
               <p className="text-xs text-gray-500 mt-0.5">
-                {isDraft && 'Plan is in DRAFT. Add items, edit quantities, or upload spreadsheet before submitting for approval.'}
-                {isSubmitted && 'Plan is SUBMITTED for approval. Awaiting sign-off from Admin or Planner.'}
+                {isDraft && 'Plan is in DRAFT. Review formula demands, edit shopfloor quantities, or upload spreadsheet before submitting for approval.'}
+                {isSubmitted && 'Plan is SUBMITTED for approval. Awaiting review and sign-off from Admin or Planner.'}
                 {isApproved && 'Plan is APPROVED. Line items are locked and eligible for cross-plant MRP aggregation.'}
+                {isRejected && 'Plan is in REJECTED status. Revisions were requested by admin. Review quantities and resubmit.'}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
-            {/* If DRAFT & Plant Incharge: Submit for Approval */}
-            {isDraft && canSubmit && (
+          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto justify-end">
+            {/* If DRAFT or REJECTED & Plant Incharge: Submit for Approval */}
+            {(isDraft || isRejected) && canSubmit && (
               <button
                 type="button"
                 onClick={handleSubmitPlan}
@@ -601,21 +680,37 @@ export const RequirementWorkspace: React.FC = () => {
                 }`}
               >
                 <Send className="w-3.5 h-3.5" />
-                <span>{actionLoading === 'submit' ? 'Submitting...' : 'Submit for Approval'}</span>
+                <span>
+                  {actionLoading === 'submit'
+                    ? 'Submitting...'
+                    : isRejected
+                    ? 'Re-submit for Approval'
+                    : 'Submit for Approval'}
+                </span>
               </button>
             )}
 
-            {/* If SUBMITTED & Admin/Planner: Approve Plan */}
-            {isSubmitted && canApprove && (
-              <button
-                type="button"
-                onClick={handleApprovePlan}
-                disabled={actionLoading === 'approve'}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer transition-colors"
-              >
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>{actionLoading === 'approve' ? 'Approving...' : 'Approve Plan'}</span>
-              </button>
+            {/* If SUBMITTED & Admin/Planner: Reject or Approve Plan */}
+            {isSubmitted && (canApprove || canReject) && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setIsRejectModalOpen(true)}
+                  className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 shadow-2xs cursor-pointer transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Reject / Request Revisions</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleApprovePlan}
+                  disabled={actionLoading === 'approve'}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer transition-colors"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>{actionLoading === 'approve' ? 'Approving...' : 'Approve Plan'}</span>
+                </button>
+              </>
             )}
 
             {/* If APPROVED: Display locked confirmation pill */}
@@ -925,6 +1020,68 @@ export const RequirementWorkspace: React.FC = () => {
               >
                 Close Report
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reject / Revision Request Modal */}
+      {isRejectModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="p-5 border-b border-gray-200 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-rose-50 text-rose-600 border border-rose-200">
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
+                <h3 className="text-sm font-bold text-gray-900">Request Revisions</h3>
+              </div>
+              <button
+                onClick={() => {
+                  setIsRejectModalOpen(false);
+                  setRejectionReason('');
+                }}
+                className="p-1 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-xs text-gray-600">
+                This will unlock the plan for <strong>{selectedPlant}</strong> and set its status back to <strong>REJECTED</strong> so shopfloor incharge can revise requested quantities.
+              </p>
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  Revision Feedback / Reason (Optional)
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="e.g. Please verify line 2 cutting oil demand based on adjusted production target..."
+                  value={rejectionReason}
+                  onChange={(e) => setRejectionReason(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+                />
+              </div>
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsRejectModalOpen(false);
+                    setRejectionReason('');
+                  }}
+                  className="px-3.5 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={rejecting}
+                  onClick={handleRejectPlan}
+                  className="px-4 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-xs disabled:opacity-50 cursor-pointer"
+                >
+                  {rejecting ? 'Sending...' : 'Confirm Rejection'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

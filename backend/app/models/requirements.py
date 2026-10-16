@@ -189,6 +189,7 @@ class RequirementStatus(str, enum.Enum):
     DRAFT = "DRAFT"
     SUBMITTED = "SUBMITTED"
     APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
 
 
 class MonthlyRequirementPlan(Base):
@@ -236,7 +237,11 @@ class RequirementLineItem(Base):
         Uuid, ForeignKey("consumables.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     part_no: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    requested_qty: Mapped[float] = mapped_column(Float, nullable=False)
+    formula_qty: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
+    requested_qty: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
+    approved_qty: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
+    is_modified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+    modification_reason: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

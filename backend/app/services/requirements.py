@@ -48,6 +48,7 @@ from app.schemas.requirements import (
     RequirementCalculationRunResponse,
     RequirementLineItemCreate,
     RequirementLineItemResponse,
+    FormulaGenerationResponse,
 )
 
 
@@ -621,13 +622,26 @@ def _to_line_item_response(item: RequirementLineItem) -> RequirementLineItemResp
         unit = getattr(item.consumable, "output_unit", None)
         description = getattr(item.consumable, "description", None) or consumable_name
 
+    f_qty = float(getattr(item, "formula_qty", 0.0) or 0.0)
+    r_qty = float(getattr(item, "requested_qty", 0.0) or 0.0)
+    a_qty = float(getattr(item, "approved_qty", 0.0) or 0.0)
+    # is_modified is True if flagged explicitly or if requested differs from formula (when formula > 0)
+    is_mod = bool(
+        getattr(item, "is_modified", False)
+        or (f_qty > 0.0 and abs(r_qty - f_qty) > 0.0001)
+    )
+
     return RequirementLineItemResponse(
         id=item.id,
         plan_id=item.plan_id,
         consumable_id=item.consumable_id,
         serial_no=item.serial_no,
         part_no=item.part_no,
-        requested_qty=item.requested_qty,
+        formula_qty=f_qty,
+        requested_qty=r_qty,
+        approved_qty=a_qty,
+        is_modified=is_mod,
+        modification_reason=getattr(item, "modification_reason", None),
         item_id=item_id,
         item_code=item_code,
         consumable_name=consumable_name,
@@ -740,7 +754,11 @@ def _rollover_catalog_items(db: Session, target_plan: MonthlyRequirementPlan) ->
             consumable_id=item.consumable_id,
             serial_no=item.serial_no,
             part_no=item.part_no,
+            formula_qty=0.0,
             requested_qty=0.0,
+            approved_qty=0.0,
+            is_modified=False,
+            modification_reason=None,
         )
         db.add(new_item)
         copied_count += 1
@@ -829,6 +847,148 @@ def get_monthly_plans(
 
     plans = db.scalars(stmt).all()
     return [_to_plan_response(p) for p in plans]
+
+
+def calculate_formula_requirements_for_plants(
+    db: Session,
+    month: int,
+    year: int,
+    plant_id: Optional[str] = None,
+    user: Optional[CurrentUser] = None,
+) -> FormulaGenerationResponse:
+    """Compute initial plant requirements across all 5 plants using the formula engine:
+    (Production for sale) * (Consumption norms).
+    Sets formula_qty and initializes requested_qty = formula_qty in DRAFT status.
+    """
+    CANONICAL_PLANTS = ["PLANT_I", "PLANT_II", "PLANT_III", "PLANT_IV", "PLANT_V"]
+    target_period = f"{year:04d}-{month:02d}"
+
+    if plant_id:
+        canonical_target = _normalize_plant_key(plant_id) or plant_id
+        target_plants = [canonical_target]
+    else:
+        target_plants = CANONICAL_PLANTS
+
+    # 1. Query PRDOrderItem planned production quantities for target period
+    prd_items = db.execute(
+        select(PRDOrderItem).where(PRDOrderItem.target_period == target_period)
+    ).scalars().all()
+
+    # 2. Query active ConsumptionNorms
+    active_norms = db.execute(
+        select(ConsumptionNorm).where(ConsumptionNorm.is_active == True)  # noqa: E712
+    ).scalars().all()
+
+    # Build norm lookup structures
+    prod_consumable_rates: dict[tuple[UUID, UUID], float] = {}
+    consumable_default_rates: dict[UUID, float] = {}
+
+    for norm in active_norms:
+        params = norm.parameters or {}
+        rate = float(
+            params.get("rate")
+            or params.get("usage_rate")
+            or params.get("consumption_rate")
+            or params.get("norm")
+            or params.get("coverage")
+            or 1.0
+        )
+        if norm.product_id:
+            prod_consumable_rates[(norm.product_id, norm.consumable_id)] = rate
+        else:
+            consumable_default_rates[norm.consumable_id] = rate
+
+    # 3. Pre-calculate demand per canonical plant and consumable
+    plant_demands: dict[str, dict[UUID, float]] = defaultdict(lambda: defaultdict(float))
+
+    for prd in prd_items:
+        p_canon = _normalize_plant_key(prd.plant_code) or prd.plant_code
+        qty = float(prd.planned_quantity or 0.0)
+        if qty <= 0:
+            continue
+
+        # Check product-specific norms
+        for (prod_id, cons_id), rate in prod_consumable_rates.items():
+            if prod_id == prd.product_id:
+                plant_demands[p_canon][cons_id] += qty * rate
+
+    # Check pre-calculated requirements from CalculatedRequirement if present
+    calc_reqs = db.execute(
+        select(
+            CalculatedRequirement.plant_id,
+            CalculatedRequirement.consumable_id,
+            func.sum(CalculatedRequirement.calculated_qty),
+        )
+        .join(PlanningVersion, CalculatedRequirement.planning_version_id == PlanningVersion.id)
+        .where(PlanningVersion.planning_period == target_period)
+        .group_by(CalculatedRequirement.plant_id, CalculatedRequirement.consumable_id)
+    ).all()
+    for row in calc_reqs:
+        plant_obj = db.get(Plant, row[0]) if row[0] else None
+        p_canon = _normalize_plant_key(plant_obj.code if plant_obj else str(row[0])) or "PLANT_I"
+        if row[1]:
+            plant_demands[p_canon][row[1]] = max(
+                plant_demands[p_canon][row[1]], float(row[2] or 0.0)
+            )
+
+    total_items_computed = 0
+    plans_updated: list[str] = []
+
+    for p_id in target_plants:
+        plan = db.execute(
+            select(MonthlyRequirementPlan)
+            .options(
+                selectinload(MonthlyRequirementPlan.line_items).joinedload(RequirementLineItem.consumable)
+            )
+            .where(
+                MonthlyRequirementPlan.plant_id == p_id,
+                MonthlyRequirementPlan.month == month,
+                MonthlyRequirementPlan.year == year,
+            )
+        ).scalar_one_or_none()
+
+        if not plan:
+            plan = MonthlyRequirementPlan(
+                plant_id=p_id,
+                month=month,
+                year=year,
+                status=RequirementStatus.DRAFT,
+            )
+            db.add(plan)
+            db.flush()
+            _rollover_catalog_items(db, plan)
+        else:
+            if not plan.line_items:
+                _rollover_catalog_items(db, plan)
+
+        # Apply computed formula demand to each item in the plan
+        for item in (plan.line_items or []):
+            c_id = item.consumable_id
+            calculated_val = plant_demands[p_id].get(c_id, 0.0)
+            if calculated_val > 0.0:
+                item.formula_qty = round(calculated_val, 2)
+                if not item.is_modified or plan.status == RequirementStatus.DRAFT:
+                    item.requested_qty = item.formula_qty
+                    item.is_modified = False
+            else:
+                if item.formula_qty == 0.0 and item.requested_qty > 0.0:
+                    item.formula_qty = item.requested_qty
+            total_items_computed += 1
+
+        if plan.status == RequirementStatus.APPROVED:
+            plan.status = RequirementStatus.DRAFT
+
+        plans_updated.append(p_id)
+
+    db.commit()
+
+    return FormulaGenerationResponse(
+        month=month,
+        year=year,
+        plans_updated=plans_updated,
+        total_items_computed=total_items_computed,
+        message=f"Computed formula requirements for {len(plans_updated)} plants across {total_items_computed} line items.",
+    )
 
 
 def create_monthly_plan(
@@ -970,6 +1130,24 @@ def update_single_line_item(
 
     if payload.requested_qty is not None:
         item.requested_qty = payload.requested_qty
+        f_qty = float(getattr(item, "formula_qty", 0.0) or 0.0)
+        item.is_modified = (f_qty > 0.0 and abs(float(item.requested_qty) - f_qty) > 0.0001)
+        if plan.status == RequirementStatus.APPROVED:
+            item.approved_qty = item.requested_qty
+
+    if payload.formula_qty is not None:
+        item.formula_qty = payload.formula_qty
+        item.is_modified = (abs(float(item.requested_qty) - float(item.formula_qty)) > 0.0001)
+
+    if payload.approved_qty is not None:
+        item.approved_qty = payload.approved_qty
+
+    if payload.is_modified is not None:
+        item.is_modified = payload.is_modified
+
+    if payload.modification_reason is not None:
+        item.modification_reason = payload.modification_reason
+
     if payload.serial_no is not None:
         item.serial_no = payload.serial_no
     if payload.part_no is not None:

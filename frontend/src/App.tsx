@@ -91,6 +91,12 @@ function Application() {
           <Route path="/plant-workflow/*" element={
             <ProtectedRoute isAllowed={canPlantWorkflow}><PlantWorkflow currentUserId={user.id} /></ProtectedRoute>
           } />
+          <Route path="/plant-review/*" element={
+            <ProtectedRoute isAllowed={canPlantWorkflow}><PlantWorkflow currentUserId={user.id} /></ProtectedRoute>
+          } />
+          <Route path="/plant-review" element={
+            <ProtectedRoute isAllowed={canPlantWorkflow}><PlantWorkflow currentUserId={user.id} /></ProtectedRoute>
+          } />
           
           <Route path="/inventory" element={
             <ProtectedRoute isAllowed={canInventory}><Inventory /></ProtectedRoute>

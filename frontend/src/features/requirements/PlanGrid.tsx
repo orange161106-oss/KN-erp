@@ -78,6 +78,7 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
   const [editQty, setEditQty] = useState<number | string>('');
   const [editPartNo, setEditPartNo] = useState<string>('');
   const [editDesc, setEditDesc] = useState<string>('');
+  const [editReason, setEditReason] = useState<string>('');
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
 
@@ -86,6 +87,7 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
     setEditQty(item.requested_qty);
     setEditPartNo(item.part_no || '');
     setEditDesc(item.consumable_name || item.description || '');
+    setEditReason(item.modification_reason || '');
   };
 
   const cancelEdit = () => {
@@ -93,6 +95,7 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
     setEditQty('');
     setEditPartNo('');
     setEditDesc('');
+    setEditReason('');
   };
 
   const saveEdit = async (itemId: string) => {
@@ -105,6 +108,7 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
         requested_qty: num,
         part_no: editPartNo,
         item_description: editDesc,
+        modification_reason: editReason.trim() || undefined,
       });
       setEditingItemId(null);
     } finally {
@@ -178,11 +182,23 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
             <FileSpreadsheet className="w-5 h-5 text-orange-600" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-base font-semibold text-gray-900 tracking-tight">Requirement Line Items</h2>
               <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">
                 {items.length} {items.length === 1 ? 'item' : 'items'}
               </span>
+              {(() => {
+                const modCount = items.filter(
+                  (it) => it.is_modified || (Number(it.formula_qty || 0) > 0 && Math.abs((Number(it.requested_qty) || 0) - Number(it.formula_qty)) > 0.0001)
+                ).length;
+                if (modCount === 0) return null;
+                return (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 shadow-2xs">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                    {modCount} {modCount === 1 ? 'item modified' : 'items modified'} by plant
+                  </span>
+                );
+              })()}
             </div>
             <p className="text-xs text-gray-500">
               Total Requested QTY:{' '}
@@ -402,29 +418,35 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-gray-50/80 border-b border-gray-200 text-gray-600 font-semibold uppercase tracking-wider text-[11px]">
-                <th className="py-3 px-4 w-16 text-center">
-                  <span title="S.No.">S.No.</span>
-                  <span className="sr-only">S.No</span>
+                <th className="py-3 px-3 w-14 text-center">
+                  <span className="sr-only">S.No.</span>
+                  <span title="S.No">S.No</span>
                 </th>
-                <th className="py-3 px-4 w-36">
-                  <span title="Item Id.">Item Id.</span>
-                  <span className="sr-only">Item Code</span>
+                <th className="py-3 px-3 w-32">
+                  <span className="sr-only">Item Id.</span>
+                  <span title="Item Code">Item Code</span>
                 </th>
-                <th className="py-3 px-4">Item Description</th>
-                <th className="py-3 px-4 w-36">Part No.</th>
-                <th className="py-3 px-4 w-24 text-center">Unit</th>
-                <th className="py-3 px-4 w-32 text-right">
-                  <span title="QTY">QTY</span>
-                  <span className="sr-only">Requested QTY</span>
+                <th className="py-3 px-3">Item Description</th>
+                <th className="py-3 px-3 w-28">Part No.</th>
+                <th className="py-3 px-3 w-20 text-center">Unit</th>
+                <th className="py-3 px-3 w-28 text-right font-medium text-gray-500">
+                  <span title="Formula QTY">Formula QTY</span>
                 </th>
-                {canEdit && <th className="py-3 px-4 w-24 text-center">Actions</th>}
+                <th className="py-3 px-3 w-36 text-right">
+                  <span className="sr-only">QTY</span>
+                  <span title="Plant Requested QTY">Requested QTY</span>
+                </th>
+                <th className="py-3 px-3 w-40 text-center">
+                  <span>Variance / Status</span>
+                </th>
+                {canEdit && <th className="py-3 px-3 w-24 text-center">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 text-gray-700">
               {filteredItems.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={canEdit ? 7 : 6}
+                    colSpan={canEdit ? 9 : 8}
                     className="py-16 px-4 text-center text-gray-400 font-medium"
                   >
                     <div className="flex flex-col items-center justify-center space-y-2">
@@ -441,21 +463,31 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
                 filteredItems.map((item, idx) => {
                 const isEditing = editingItemId === item.id;
                 const isDeleting = deletingItemId === item.id;
+                const formula = Number(item.formula_qty) || 0;
+                const requested = Number(item.requested_qty) || 0;
+                const delta = requested - formula;
+                const isModified = Boolean(
+                  item.is_modified || (formula > 0 && Math.abs(delta) > 0.0001)
+                );
 
                 return (
                   <tr
                     key={item.id || idx}
-                    className="hover:bg-orange-50/40 transition-colors group"
+                    className={`transition-colors group ${
+                      isModified
+                        ? 'bg-amber-50/50 hover:bg-amber-100/60 border-l-4 border-amber-400'
+                        : 'hover:bg-orange-50/40 border-l-4 border-transparent'
+                    }`}
                   >
-                    <td className="py-3 px-4 text-center font-mono text-gray-400 group-hover:text-gray-600">
+                    <td className="py-3 px-3 text-center font-mono text-gray-400 group-hover:text-gray-600">
                       {item.serial_no || idx + 1}
                     </td>
-                    <td className="py-3 px-4 font-mono font-medium text-gray-900">
+                    <td className="py-3 px-3 font-mono font-medium text-gray-900">
                       <span className="bg-gray-100 group-hover:bg-white px-2 py-0.5 rounded border border-gray-200">
                         {item.item_id || item.item_code || item.consumable_id}
                       </span>
                     </td>
-                    <td className="py-3 px-4 font-medium text-gray-800">
+                    <td className="py-3 px-3 font-medium text-gray-800">
                       {isEditing ? (
                         <input
                           type="text"
@@ -472,7 +504,7 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
                         </div>
                       )}
                     </td>
-                    <td className="py-3 px-4 text-gray-600 font-mono">
+                    <td className="py-3 px-3 text-gray-600 font-mono">
                       {isEditing ? (
                         <input
                           type="text"
@@ -484,30 +516,83 @@ export const PlanGrid: React.FC<PlanGridProps> = ({
                         item.part_no || '-'
                       )}
                     </td>
-                    <td className="py-3 px-4 text-center">
+                    <td className="py-3 px-3 text-center">
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-600 border border-gray-200">
                         {item.unit || 'Nos'}
                       </span>
                     </td>
-                    <td className="py-3 px-4 text-right font-mono font-semibold text-gray-900 text-sm">
+                    {/* Formula QTY */}
+                    <td className="py-3 px-3 text-right font-mono text-gray-500 font-medium">
+                      {formula.toLocaleString(undefined, {
+                        minimumFractionDigits: 0,
+                        maximumFractionDigits: 2,
+                      })}
+                    </td>
+                    {/* Plant Requested QTY */}
+                    <td className="py-3 px-3 text-right">
                       {isEditing ? (
-                        <input
-                          type="number"
-                          step="any"
-                          min="0"
-                          value={editQty}
-                          onChange={(e) => setEditQty(e.target.value)}
-                          className="w-24 px-2 py-1 text-right text-xs border border-orange-300 rounded bg-white focus:outline-none focus:ring-1 focus:ring-orange-500"
-                        />
+                        <div className="flex flex-col gap-1 items-end">
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            value={editQty}
+                            onChange={(e) => setEditQty(e.target.value)}
+                            className="w-24 px-2 py-1 text-right text-xs border border-orange-300 rounded bg-white focus:outline-none focus:ring-1 focus:ring-orange-500 font-mono font-semibold"
+                          />
+                          <input
+                            type="text"
+                            placeholder="Reason for modification..."
+                            value={editReason}
+                            onChange={(e) => setEditReason(e.target.value)}
+                            className="w-40 px-2 py-0.5 text-[10px] border border-gray-300 rounded bg-white focus:outline-none focus:ring-1 focus:ring-orange-500 placeholder-gray-400"
+                          />
+                        </div>
                       ) : (
-                        Number(item.requested_qty).toLocaleString(undefined, {
-                          minimumFractionDigits: 0,
-                          maximumFractionDigits: 2,
-                        })
+                        <span className="font-mono font-semibold text-gray-900 text-sm">
+                          {requested.toLocaleString(undefined, {
+                            minimumFractionDigits: 0,
+                            maximumFractionDigits: 2,
+                          })}
+                        </span>
+                      )}
+                    </td>
+                    {/* Variance / Modification Status */}
+                    <td className="py-3 px-3 text-center">
+                      {isModified ? (
+                        <div
+                          className="flex flex-col items-center gap-0.5 cursor-help"
+                          title={`Formula: ${formula} | Plant Requested: ${requested} (${delta >= 0 ? '+' : ''}${delta.toFixed(1)})`}
+                        >
+                          <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shadow-2xs">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                            MODIFIED
+                          </div>
+                          <span
+                            className={`text-[10px] font-mono font-semibold ${
+                              delta > 0 ? 'text-amber-700' : 'text-blue-700'
+                            }`}
+                          >
+                            {delta >= 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1)}{' '}
+                            {formula > 0 && `(${((delta / formula) * 100).toFixed(0)}%)`}
+                          </span>
+                          {item.modification_reason && (
+                            <span
+                              className="text-[10px] text-gray-500 italic max-w-[130px] truncate"
+                              title={item.modification_reason}
+                            >
+                              "{item.modification_reason}"
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600 border border-gray-200">
+                          Formula Match
+                        </span>
                       )}
                     </td>
                     {canEdit && (
-                      <td className="py-3 px-4 text-center">
+                      <td className="py-3 px-3 text-center">
                         {isEditing ? (
                           <div className="flex items-center justify-center gap-1.5">
                             <button
