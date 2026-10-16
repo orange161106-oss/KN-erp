@@ -1856,8 +1856,12 @@ def batch_update_stock_parameters(
                 StockParameterBatch.status == "active",
             ).with_for_update().execution_options(populate_existing=True)
         )
-        if not batch:
-            raise ApplicationError("NOT_FOUND", f"No active stock management batch found for {MONTH_NAMES[req.month - 1]} {req.year}.", 404)
+        if batch is None:
+            raise ApplicationError(
+                "NOT_FOUND",
+                f"No active stock management batch found for {MONTH_NAMES[req.month - 1]} {req.year}.",
+                404,
+            )
         if req.batch_id is not None and req.batch_id != batch.id:
             raise ApplicationError("PARAMETERS_CHANGED", "Parameters were replaced. Refresh before saving.", 409)
 

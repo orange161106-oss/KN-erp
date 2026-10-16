@@ -504,6 +504,8 @@ def calculate_single_item_requirement(
     consumable = db.get(Consumable, req.consumable_id)
     if not consumable:
         raise ApplicationError("NOT_FOUND", f"Consumable '{req.consumable_id}' not found", 404)
+    if consumable.unit_id is None:
+        raise ApplicationError("STOCK_UNIT_REQUIRED", "Add the consumable stock unit in Product Master before calculating requirements.", 422)
     consumable_unit = db.get(Unit, consumable.unit_id)
     consumable_unit_code = consumable_unit.code if consumable_unit else "PCS"
 

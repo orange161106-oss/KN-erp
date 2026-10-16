@@ -105,7 +105,7 @@ class UnitResponse(MasterResponse):
 
 class ConsumableResponse(UnitResponse):
     description: str | None
-    unit_id: UUID
+    unit_id: UUID | None
 
 
 class SupplierResponse(UnitResponse):

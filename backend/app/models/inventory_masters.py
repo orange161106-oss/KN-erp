@@ -38,7 +38,7 @@ class Consumable(MasterRecord, Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     output_unit: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4), nullable=True)
-    unit_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("units.id", ondelete="RESTRICT"), index=True, nullable=False)
+    unit_id: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("units.id", ondelete="RESTRICT"), index=True, nullable=True)
     source: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
 
     code = synonym("item_id")

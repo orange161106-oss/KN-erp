@@ -66,3 +66,61 @@ migration or live company-data edit/deletion was required for this correction.
 Focused checks: eight catalog backend cases plus ten retained-history/parser cases,
 twelve Product Master UI cases, actual-file read-only count reconciliation, TypeScript
 and production build. No unrelated full suites, commit or push were run.
+
+## Assembly workbook compatibility repair — 2026-10-16
+
+The catalog now shares the existing assembly import header aliases. The supplied
+long display headers (including Consumable Description, Part No. of saleable item,
+Used Part no (prd order), Process name and Output/Unit) therefore work through the
+same undated preview and explicit save endpoints. No API or schema change is needed.
+Numeric Output/Unit values remain visible for stock-unit correction; a separate
+Stock Unit/Unit/UOM column is authoritative. Missing identifiers and duplicate
+mapping keys retain the existing visible reconciliation report and policy.
+Twenty focused catalog and retained-import tests passed, including a synthetic
+HTTP preview/save using the supplied header shape and an explicit stock unit.
+
+## Owner-approved optional stock units — 2026-10-16
+
+Stock Unit is optional in List of Consumables and Consumable for Assemble. These
+catalogs may be saved with unresolved units, then edited later with masters_update
+permission. Sales-part units retain their current behavior. Numeric source
+Output/Unit values are retained in upload audit/report evidence, not created as
+stock-unit masters. Unknown consumable unit references are nullable; calculations
+and stock/purchase operations still require a reviewed unit. Existing approved
+units are not cleared by a replacement upload that omits units. Changes to units
+with stock or supplier history remain protected.
+
+Migration c002_optional_catalog_stock_units was committed and verified on the
+connected database on 2026-10-16 at 04:29:50 UTC. It only permits nullable
+consumables.unit_id; existing foreign keys, uniqueness and business rows remain.
+Downgrade refuses while unassigned consumables exist. Public read responses allow
+null; legacy/central calculation and purchasing paths retain explicit unit checks.
+Exact named processes are created in the reviewed catalog instead of borrowing an
+arbitrary existing process, preventing distinct assembly rows from collapsing.
+The supplied assembly file saved all 611 mappings in isolated in-memory SQLite,
+with unassigned units and no fabricated Unit rows. No live company import ran.
+
+Focused checks: 33 backend, five Product Master upload/save-later UI checks and the
+TypeScript check passed. The full Product Master UI file also exposed a pre-existing
+admin-only entry-point/employee-create test mismatch (13 passed, one failed). The
+task did not alter that authority behavior or run unrelated full suites.
+
+## Main-table row menu — 2026-10-16
+
+List of Consumables and Consumable for Assemble now use right-click Edit row/Delete
+row menus instead of action icon columns. Edit opens the existing row intake form;
+Update Record and confirmed soft deletion reuse existing endpoints. The clicked
+row alone is targeted. Keyboard context-menu access, dismissal, focus and viewport
+placement are supported. Read-only access and backend permissions are unchanged.
+Fifteen related Product Master UI cases and TypeScript passed, excluding the already
+documented independent employee-create entry-point expectation. No database change.
+
+### In-place edit clarification
+
+The subsequent owner clarification replaces the form-opening behavior: Edit cell
+and Edit row now open inputs in the existing table row, with Save changes/Cancel.
+Double-click, Enter/Ctrl+S save and Escape cancel are supported. Saved rows update
+locally, preserving the table's scroll position; failures retain edits. Protected
+IDs/references remain read-only. Partial PUT updates preserve blank optional units
+and reuse the catalog's unit-history and Decimal validation. Seventeen UI checks,
+seventeen backend checks and TypeScript passed; no new schema or live data change.
