@@ -387,6 +387,8 @@ def submit_adjustment(
         )
 
     # Resolve UOM from consumable's unit
+    if consumable.unit_id is None:
+        raise ApplicationError("STOCK_UNIT_REQUIRED", "Add the consumable stock unit in Product Master before requesting quantities.", 422)
     unit = session.execute(
         select(Unit).where(Unit.id == consumable.unit_id)
     ).scalar_one_or_none()

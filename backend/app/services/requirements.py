@@ -254,6 +254,13 @@ def calculate_planning_version_requirements(
             if not process or not consumable:
                 continue
 
+            if consumable.unit_id is None:
+                err = RequirementCalculationError(planning_version_id=version.id, prd_order_item_id=item.id,
+                    product_id=product.id, plant_id=matched_plant.id, consumable_id=consumable.id,
+                    error_code="STOCK_UNIT_REQUIRED", error_message="Add the consumable stock unit in Product Master before calculating requirements.")
+                db.add(err)
+                persisted_errors.append(err)
+                continue
             consumable_unit = db.get(Unit, consumable.unit_id)
             consumable_unit_code = consumable_unit.code if consumable_unit else "PCS"
 

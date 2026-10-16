@@ -1849,28 +1849,6 @@ def batch_update_stock_parameters(
         raise ApplicationError("INVALID_REQUEST", "Missing batch update request or user.", 400)
 
     try:
-<<<<<<< HEAD
-        now_utc = datetime.now(timezone.utc)
-        batch = session.scalar(select(StockParameterBatch).where(
-            StockParameterBatch.month == req.month, StockParameterBatch.year == req.year,
-            StockParameterBatch.status == "active",
-        ).with_for_update().execution_options(populate_existing=True))
-        if batch is None:
-            raise ApplicationError("NOT_FOUND", "No active parameter batch for this period.", 404)
-        if req.batch_id is not None and req.batch_id != batch.id:
-            raise ApplicationError("PARAMETERS_CHANGED", "Parameters were replaced. Refresh before saving.", 409)
-        parameters_by_id = {param.id: param for param in session.scalars(
-            select(StockParameter).where(
-                StockParameter.batch_id == batch.id,
-                StockParameter.id.in_([update.id for update in req.updates]),
-            ).execution_options(populate_existing=True)
-        )}
-        for update in req.updates:
-            param = parameters_by_id.get(update.id)
-            if param is None or param.batch_id != batch.id:
-                raise ApplicationError("INVALID_PARAMETER_ROW", "A row does not belong to the selected parameters.", 422)
-            changes = update.model_dump(exclude_unset=True, exclude={"id"})
-=======
         batch = session.scalar(
             select(StockParameterBatch).where(
                 StockParameterBatch.month == req.month,
@@ -1878,8 +1856,12 @@ def batch_update_stock_parameters(
                 StockParameterBatch.status == "active",
             ).with_for_update().execution_options(populate_existing=True)
         )
-        if not batch:
-            raise ApplicationError("NOT_FOUND", f"No active stock management batch found for {MONTH_NAMES[req.month - 1]} {req.year}.", 404)
+        if batch is None:
+            raise ApplicationError(
+                "NOT_FOUND",
+                f"No active stock management batch found for {MONTH_NAMES[req.month - 1]} {req.year}.",
+                404,
+            )
         if req.batch_id is not None and req.batch_id != batch.id:
             raise ApplicationError("PARAMETERS_CHANGED", "Parameters were replaced. Refresh before saving.", 409)
 
@@ -1895,14 +1877,15 @@ def batch_update_stock_parameters(
                 .execution_options(populate_existing=True)
             )
         }
-        for update_item in req.updates:
-            param_id = update_item.id if isinstance(update_item.id, uuid.UUID) else uuid.UUID(str(update_item.id))
-            param = parameters_by_id.get(param_id)
-            if not param or param.batch_id != batch.id:
-                raise ApplicationError("INVALID_ROW", "A row does not belong to the selected parameter batch.", 422)
-
-            changes = update_item.model_dump(exclude_unset=True, exclude={"id"})
->>>>>>> 4db8c799178e829115b6134bcebcd0d56a4c2f45
+        for update in req.updates:
+            param = parameters_by_id.get(update.id)
+            if param is None or param.batch_id != batch.id:
+                raise ApplicationError(
+                    "INVALID_PARAMETER_ROW",
+                    "A row does not belong to the selected parameters.",
+                    422,
+                )
+            changes = update.model_dump(exclude_unset=True, exclude={"id"})
             if not changes:
                 continue
 
@@ -1954,13 +1937,7 @@ def list_stock_parameter_history(
     limit: int = 50,
 ) -> list[StockParameterHistoryItem]:
     """List historical upload batches for stock management."""
-<<<<<<< HEAD
     stmt = select(StockParameterBatch)
-=======
-    stmt = select(StockParameterBatch).options(
-        joinedload(StockParameterBatch.uploader).load_only(User.full_name, User.username)
-    )
->>>>>>> 4db8c799178e829115b6134bcebcd0d56a4c2f45
     if month is not None:
         stmt = stmt.where(StockParameterBatch.month == month)
     if year is not None:

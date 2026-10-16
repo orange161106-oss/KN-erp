@@ -35,6 +35,8 @@ def context(session, material_id, version_id):
     version = repository.version(session, version_id)
     if material is None or version is None:
         raise ApplicationError('PROJECTION_REFERENCE_NOT_FOUND', 'Consumable or planning version does not exist.', 404)
+    if material.unit_id is None:
+        raise ApplicationError('STOCK_UNIT_REQUIRED', 'Add the consumable stock unit in Product Master before inventory or purchase planning.', 422)
     totals = get_final_requirements(session, planning_version_id=version_id, consumable_id=material_id)
     # Keep source row identities/rule versions in evidence, rather than just a sum.
     calculations, adjustments, unit = repository.requirement_evidence(session, material_id, version_id, material.unit_id)

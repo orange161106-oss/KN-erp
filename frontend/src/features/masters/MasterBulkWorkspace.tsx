@@ -12,6 +12,7 @@ interface Report {
   data_rows?: number; identified_rows?: number; unique_rows?: number;
   missing_identifier_rows?: number[];
   duplicate_rows?: Array<{ identifier: string; first_row: number; last_row: number }>;
+  deferred_stock_units?: Array<{ identifier: string; source_value: string }>;
 }
 interface Catalog {
   category: Category; review_token: string; row_count: number; records: Row[];
@@ -20,12 +21,12 @@ interface Catalog {
 const FIELDS: Record<Category, Array<[string, string, boolean]>> = {
   consumables: [['supplier_id', 'Supplier ID', false], ['supplier_name', 'Supplier Name', true], ['item_id', 'Item ID', false],
     ['description', 'Description', true], ['category', 'Category', true], ['type_of_material', 'Type of Material', true],
-    ['output_unit', 'Stock Unit', false], ['rate', 'Rate', true]],
+    ['output_unit', 'Stock Unit', true], ['rate', 'Rate', true]],
   sales_parts: [['part_no', 'Part No.', false], ['item_id', 'Item ID', false], ['part_description', 'Part Description', true], ['uom', 'Stock Unit', false]],
   assemble: [['consumable_item', 'Consumable Item', false], ['part_no_saleable_item', 'Saleable Part No.', false],
     ['used_for_name_of_saleable_part', 'Saleable Part Name', true], ['used_part_no_prd_order', 'PRD Part No.', true],
     ['process_name', 'Process', false], ['material_thickness_in_mm_gsm', 'Thickness / GSM', true],
-    ['no_of_process_per_part', 'Process Count', true], ['output_unit', 'Stock Unit', false], ['rate', 'Rate', true]],
+    ['no_of_process_per_part', 'Process Count', true], ['output_unit', 'Stock Unit', true], ['rate', 'Rate', true]],
 };
 const validUnit = (value: string | null) => Boolean(value && value.length <= 16 && /[a-z]/i.test(value) &&
   !/^(?:[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?|nan|[+-]?infinity)$/i.test(value.replace(/,/g, '')));
@@ -57,6 +58,7 @@ export default function MasterBulkWorkspace({ category, label, onClose, onChange
   const endpoint = `/api/v1/masters/product-master/${category}/workspace`;
   const staged = Boolean(file);
   const unitField = category === 'sales_parts' ? 'uom' : 'output_unit';
+  const optionalStockUnit = category !== 'sales_parts';
   const columns = useMemo<ColumnDef<Row>[]>(() => FIELDS[category].map(([key, title, editable]) => ({
     key, label: title, isEditable: editable || (staged && key === unitField),
     width: key.includes('description') || key.includes('name') ? 260 : 160,
@@ -69,7 +71,10 @@ export default function MasterBulkWorkspace({ category, label, onClose, onChange
     return Object.keys(changed).length ? [{ id: row.id, changes: changed }] : [];
   }), [records, original, category, staged, unitField]);
   const dirty = staged || changes.length > 0;
-  const invalidUnits = useMemo(() => staged ? records.filter(row => !validUnit(row[unitField])) : [], [records, staged, unitField]);
+  const unresolvedUnits = useMemo(() => records.filter(row => !validUnit(row[unitField])), [records, unitField]);
+  const invalidUnits = useMemo(() => staged || optionalStockUnit
+    ? unresolvedUnits.filter(row => !optionalStockUnit || Boolean(row[unitField]?.trim())) : [],
+  [unresolvedUnits, staged, optionalStockUnit, unitField]);
   const report = draft?.report ?? catalog?.report;
   const mayEdit = staged ? canUpload : canEdit;
   const accept = useCallback((data: Catalog) => {
@@ -101,8 +106,15 @@ export default function MasterBulkWorkspace({ category, label, onClose, onChange
     finally { pending.current = false; setBusy(false); if (fileInput.current) fileInput.current.value = ''; }
   }
   async function save() {
-    if (pending.current || !dirty || !mayEdit || !catalog) return;
-    if (invalidUnits.length) { setError(`${invalidUnits.length} rows need a valid stock unit. Edit Stock Unit or apply the correct unit below before saving.`); return; }
+    if (pending.current || !mayEdit || !catalog || !records.length) return;
+    if (!dirty) {
+      setError('');
+      setMessage(`All ${records.length} items are already saved. Edit a cell when you want to make changes.`);
+      return;
+    }
+    if (invalidUnits.length) { setError(optionalStockUnit
+      ? `${invalidUnits.length} rows contain invalid stock units. Enter the actual unit or clear the cell to add it later.`
+      : `${invalidUnits.length} rows need a valid stock unit. Edit Stock Unit before saving.`); return; }
     pending.current = true; setBusy(true); setError(''); setMessage('');
     try {
       const review = { review_token: draft?.review_token ?? catalog.review_token, updates: changes };
@@ -152,7 +164,7 @@ export default function MasterBulkWorkspace({ category, label, onClose, onChange
         <button type="button" className={`${button} bg-erp-orange text-white`} disabled={busy || dirty || !canUpload || !catalog || catalog.row_count > 0} onClick={() => fileInput.current?.click()}><Upload size={16}/>Upload data</button>
         <button type="button" className={`${button} text-red-700`} disabled={busy || dirty || !canDelete || !catalog?.row_count}
           onClick={() => { setReason(''); setDeleteOpen(true); }}><Trash2 size={16}/>Delete data</button>
-        <button type="button" className={`${button} bg-emerald-600 text-white`} disabled={busy || !dirty || !mayEdit} onClick={() => void save()}><Save size={16}/>Save changes</button>
+        <button type="button" className={`${button} bg-emerald-600 text-white`} disabled={busy || !mayEdit || !catalog || !records.length} onClick={() => void save()}><Save size={16}/>Save changes</button>
         <button type="button" className={button} disabled={busy || dirty || !catalog?.row_count} onClick={() => void exportExcel()}><Download size={16}/>Export Excel</button>
         {staged && <button type="button" className={button} disabled={busy} onClick={() => { if (catalog) accept(catalog); setError(''); setMessage('Upload discarded.'); }}>Discard upload</button>}
         {!busy && <span role="status" className={`ml-auto text-sm ${dirty ? 'text-amber-700' : 'text-emerald-800'}`}>{dirty ? 'Not saved yet' : `Saved · ${records.length} items`}</span>}
@@ -161,13 +173,17 @@ export default function MasterBulkWorkspace({ category, label, onClose, onChange
         <summary>Workbook checks: {report.identified_rows} rows with IDs · {report.unique_rows} unique items · {report.duplicate_rows?.length ?? 0} duplicates · {report.missing_identifier_rows?.length ?? 0} rows without IDs</summary>
         {Boolean(report.missing_identifier_rows?.length) && <p>Skipped worksheet rows without required IDs: {report.missing_identifier_rows?.join(', ')}.</p>}
         {report.duplicate_rows?.map((row, index) => <p key={index}>{row.identifier}: worksheet rows {row.first_row} and {row.last_row}. The last row is used; review its values.</p>)}
+        {Boolean(report.deferred_stock_units?.length) && <p>{report.deferred_stock_units?.length} numeric Output/Unit values are retained in upload history. Stock Unit is blank until supplied.</p>}
       </details>}
-      {invalidUnits.length > 0 && <div className="rounded border border-amber-400 bg-amber-50 p-2 text-sm">
-        <p>{invalidUnits.length} rows need valid stock unit labels. Review numeric Output/Unit values and blank Unit cells before saving. A separate Unit column can contain PCS, KG, LTR or the actual stock unit.</p>
-        <label>Correct unit for these rows <input aria-label="Reviewed stock unit" value={bulkUnit} maxLength={16} onChange={event => setBulkUnit(event.target.value)} className="border rounded p-1 ml-2 w-28"/></label>
-        <button type="button" className={`${button} ml-2`} disabled={busy || !canUpload} onClick={() => {
+      {optionalStockUnit && <p className="text-sm text-stone-600">Stock Unit is optional. Save now and add it later by editing the Stock Unit column. A reviewed unit is needed before calculations.</p>}
+      {unresolvedUnits.length > 0 && (staged || optionalStockUnit) && <div className="rounded border border-amber-400 bg-amber-50 p-2 text-sm">
+        <p>{optionalStockUnit
+          ? `${unresolvedUnits.length} rows have no reviewed stock unit. Blank units can be saved and filled in later.`
+          : `${unresolvedUnits.length} rows need valid stock unit labels before saving.`} A separate Unit column can contain PCS, KG, LTR or the actual stock unit.</p>
+        <label>{optionalStockUnit ? 'Add a unit now (optional)' : 'Correct unit for these rows'} <input aria-label="Reviewed stock unit" value={bulkUnit} maxLength={16} onChange={event => { setBulkUnit(event.target.value); setError(''); }} className="border rounded p-1 ml-2 w-28"/></label>
+        <button type="button" className={`${button} ml-2`} disabled={busy || !mayEdit || !validUnit(bulkUnit.trim().toUpperCase())} onClick={() => {
           const value = bulkUnit.trim().toUpperCase();
-          if (!validUnit(value)) { setError('Enter the actual stock unit, such as PCS or KG.'); return; }
+          if (!validUnit(value)) return;
           setRecords(previous => previous.map(row => validUnit(row[unitField]) ? row : { ...row, [unitField]: value })); setError('');
         }}>Apply to unresolved units</button>
       </div>}

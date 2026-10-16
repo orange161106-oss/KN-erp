@@ -38,17 +38,9 @@ FIELDS = {
         "part_description": ["part_description", "description", "name", "part name"],
         "uom": ["uom", "unit", "output_unit"],
     },
-    "assemble": {
-        "consumable_item": ["consumable_item", "consumable item", "consumable", "item id", "item_id"],
-        "part_no_saleable_item": ["part_no_saleable_item", "saleable part no", "part no", "finished part no", "part_no"],
-        "used_for_name_of_saleable_part": ["used_for_name_of_saleable_part", "saleable part name", "part name"],
-        "used_part_no_prd_order": ["used_part_no_prd_order", "prd part no"],
-        "process_name": ["process_name", "process"],
-        "material_thickness_in_mm_gsm": ["material_thickness_in_mm_gsm", "thickness"],
-        "no_of_process_per_part": ["no_of_process_per_part", "qty", "process count", "quantity"],
-        "output_unit": ["output_unit", "unit", "uom"],
-        "rate": ["rate", "cost", "unit rate", "price"],
-    },
+    # Keep the catalog review/save path aligned with the existing KNL assembly
+    # workbook vocabulary, including its long display headers and Output/Unit.
+    "assemble": legacy.ASSEMBLE_FIELD_MAPPINGS,
 }
 MODELS = {"consumables": Consumable, "sales_parts": Product, "assemble": ProductProcessConsumable}
 ALIASES = {"sales_parts": {"part_no": "part_number", "part_description": "description"}}
@@ -172,7 +164,7 @@ def audit(session, batch, actor, action, old, new, reason):
         old_values=old, new_values={"category": batch.category, "month": batch.month, "year": batch.year, **new}, reason=reason))
 
 
-def parse(category, content, *, report=None):
+def parse(category, content, *, report=None, optional_stock_units=False):
     if len(content) > 15 * 1024 * 1024:
         raise ApplicationError("SOURCE_TOO_LARGE", "Use an Excel workbook of at most 15 MB.", 422)
     frame = legacy.header_hunter(content, [alias for aliases in FIELDS[category].values() for alias in aliases])
@@ -215,7 +207,8 @@ def parse(category, content, *, report=None):
             # Do not fall back to numeric Output/Unit productivity values.
             row[unit_field] = legacy._extract_field(source, explicit_unit_columns).upper()[:16]
         else:
-            row[unit_field] = (row[unit_field] or "PCS").upper()[:16]
+            fallback = "" if optional_stock_units and category in {"consumables", "assemble"} else "PCS"
+            row[unit_field] = (row[unit_field] or fallback).upper()[:16]
         for field, value in row.items():
             if isinstance(value, str) and len(value) > LENGTHS.get(field, 2000 if "description" in field else 255):
                 raise ApplicationError("INVALID_MASTER_VALUE", f"Row {index + 1}: {field} is too long.", 422)
@@ -233,7 +226,7 @@ def parse(category, content, *, report=None):
     return list(rows.values())
 
 
-def upsert_rows(session, category, parsed, actor, reason):
+def upsert_rows(session, category, parsed, actor, reason, *, optional_stock_units=False):
     units = {unit.code: unit for unit in session.scalars(select(Unit))}
     suppliers = list(session.scalars(select(Supplier))) if category == "consumables" else []
     by_supplier_id = {str(item.id): item for item in suppliers}
@@ -241,6 +234,8 @@ def upsert_rows(session, category, parsed, actor, reason):
     by_supplier_name = {item.name: item for item in suppliers}
     supplier_cache = {}
     def unit_for(code):
+        if not code and optional_stock_units:
+            return None
         if code not in units:
             units[code] = legacy.ensure_unit(session, code)
         return units[code]
@@ -275,8 +270,14 @@ def upsert_rows(session, category, parsed, actor, reason):
         if category == "consumables":
             key = data["item_id"]
             unit = unit_for(data["output_unit"])
+            # An omitted replacement value must not erase a previously reviewed
+            # canonical unit. New items can remain honestly unassigned.
+            previous = lookup.get(key)
+            if unit is None and previous and previous.unit_id:
+                unit = next((item for item in units.values() if item.id == previous.unit_id), None)
+                data["output_unit"] = unit.code if unit else None
             supplier = supplier_for(data["supplier_id"], data["supplier_name"])
-            data.update(unit_id=unit.id, supplier_id=supplier.id if supplier else None,
+            data.update(unit_id=unit.id if unit else None, supplier_id=supplier.id if supplier else None,
                 supplier_name=data["supplier_name"] or (supplier.name if supplier else None),
                 name=(data["description"] or key)[:255])
         elif category == "sales_parts":
@@ -289,11 +290,31 @@ def upsert_rows(session, category, parsed, actor, reason):
         else:
             part, material, process = data["part_no_saleable_item"], data["consumable_item"], data["process_name"].upper()
             if part not in products:
-                products[part] = legacy._resolve_or_create_product(session, part, data["used_for_name_of_saleable_part"], data["output_unit"])
+                products[part] = legacy._resolve_or_create_product(session, part, data["used_for_name_of_saleable_part"], data["output_unit"] or "PCS")
             if material not in materials:
-                materials[material] = legacy._resolve_or_create_consumable(session, material, data["output_unit"])
+                if optional_stock_units and not data["output_unit"]:
+                    materials[material] = Consumable(id=uuid4(), item_id=material, name=material,
+                        description=material, output_unit=None, unit_id=None, is_active=True)
+                    session.add(materials[material])
+                    session.flush()
+                else:
+                    materials[material] = legacy._resolve_or_create_consumable(session, material, data["output_unit"])
             if process not in processes:
-                processes[process] = legacy._resolve_or_create_process(session, process)
+                if optional_stock_units:
+                    # A reviewed named process must not borrow an arbitrary
+                    # existing process and collapse distinct workbook mappings.
+                    processes[process] = Process(id=uuid4(), name=process, is_active=True)
+                    session.add(processes[process])
+                    session.flush()
+                else:
+                    processes[process] = legacy._resolve_or_create_process(session, process)
+            if optional_stock_units and data["output_unit"] and materials[material].unit_id is None:
+                before_material = snapshot("consumables", materials[material])
+                assigned = unit_for(data["output_unit"])
+                materials[material].unit_id, materials[material].output_unit = assigned.id, assigned.code
+                session.add(AuditLog(actor_id=actor.id, action="UPDATE", entity_type="consumables",
+                    entity_id=materials[material].id, old_values=before_material,
+                    new_values=snapshot("consumables", materials[material]), reason=reason))
             key = (products[part].id, processes[process].id, materials[material].id)
             data.update(product_id=key[0], process_id=key[1], consumable_id=key[2], process_name=processes[process].name)
         row = lookup.get(key)

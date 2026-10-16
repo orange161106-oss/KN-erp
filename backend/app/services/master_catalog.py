@@ -14,8 +14,13 @@ from sqlalchemy.exc import IntegrityError
 from app.core.errors import ApplicationError
 from app.models.audit import AuditLog
 from app.models.master_uploads import MasterUploadBatch
+from app.models.inventory_masters import Consumable, Unit
+from app.repositories.inventory import has_stock_records
+from app.repositories.inventory_masters import has_supplier_mapping
 from app.schemas.master_uploads import MasterCatalogSave, MasterCatalogView
 from app.services import master_uploads as shared
+
+OPTIONAL_UNIT_CATEGORIES = {"consumables", "assemble"}
 
 
 def catalog_id(category):
@@ -82,12 +87,25 @@ def unit_errors(category, records):
     field = unit_field(category)
     return [{"id": row["id"], "field": field,
              "message": f"{row.get('item_id') or row.get('consumable_item')}: enter a stock unit such as PCS or KG; {row[field] or 'blank'} is not a unit label."}
-            for row in records if not valid_unit(row[field])]
+            for row in records if not valid_unit(row[field])
+            and not (category in OPTIONAL_UNIT_CATEGORIES and not row[field])]
 
 
 def prepared(category, content):
     report = {}
-    parsed = shared.parse(category, content, report=report)
+    parsed = shared.parse(category, content, report=report, optional_stock_units=True)
+    if category in OPTIONAL_UNIT_CATEGORIES:
+        deferred = []
+        for row in parsed:
+            value = row["output_unit"]
+            if not valid_unit(value):
+                if value:
+                    deferred.append({"identifier": row.get("item_id") or row.get("consumable_item"),
+                        "part_no": row.get("part_no_saleable_item"), "process": row.get("process_name"),
+                        "source_value": value})
+                row["output_unit"] = None
+        if deferred:
+            report["deferred_stock_units"] = deferred
     records = [{"id": draft_id(category, row), **{key: str(value) if value is not None else None for key, value in row.items()}}
                for row in parsed]
     return parsed, records, report
@@ -104,7 +122,7 @@ def preview(session, category, filename, content):
 
 def apply_edits(category, row, changes, *, staged=False):
     allowed = {**shared.EDITABLE[category]}
-    if staged:
+    if staged or category in OPTIONAL_UNIT_CATEGORIES:
         allowed[unit_field(category)] = 16
     if set(changes) - allowed.keys():
         raise ApplicationError("INVALID_MASTER_EDIT", "Choose an editable field. Master identifiers and references are protected.", 422)
@@ -115,6 +133,8 @@ def apply_edits(category, row, changes, *, staged=False):
             raise ApplicationError("INVALID_MASTER_VALUE", f"{field}: use at most {limit} characters.", 422)
         if field == unit_field(category) and value:
             value = value.upper()
+            if not valid_unit(value):
+                raise ApplicationError("INVALID_MASTER_UNIT", "Enter a stock unit such as PCS or KG, or leave it blank to add later.", 422)
         if value is None and field in {"part_description", "no_of_process_per_part"}:
             raise ApplicationError("INVALID_MASTER_VALUE", f"{field} is required.", 422)
         row[field] = value
@@ -161,7 +181,7 @@ def save_upload(session, category, filename, content, payload: MasterCatalogSave
         if existing:
             raise ApplicationError("MASTER_CATALOG_EXISTS", "Delete the existing data before saving a replacement workbook.", 409)
         reason = "Reviewed Product Master workbook saved."
-        changed = shared.upsert_rows(session, category, parsed, actor, reason)
+        changed = shared.upsert_rows(session, category, parsed, actor, reason, optional_stock_units=True)
         archive_periods(session, category, actor, reason)
         session.flush()
         record_audit(session, category, actor, "BULK_IMPORT", {"filename": filename[:255], "rows": len(changed),
@@ -190,6 +210,8 @@ def save_changes(session, category, payload: MasterCatalogSave, actor):
             before = shared.snapshot(category, row)
             values = dict(before)
             apply_edits(category, values, update.changes)
+            if category in OPTIONAL_UNIT_CATEGORIES and "output_unit" in update.changes:
+                update_stock_unit(session, category, row, values["output_unit"], actor)
             for field in update.changes:
                 setattr(row, shared.ALIASES.get(category, {}).get(field, field), values[field])
                 if field in {"description", "part_description"} and values[field]:
@@ -206,6 +228,31 @@ def save_changes(session, category, payload: MasterCatalogSave, actor):
     except Exception:
         session.rollback()
         raise
+
+
+def update_stock_unit(session, category, row, code, actor):
+    material = row if category == "consumables" else session.scalar(select(Consumable).where(
+        Consumable.id == row.consumable_id).with_for_update())
+    # Assembly units may be left blank independently of an existing material's
+    # reviewed canonical unit; adding a unit can resolve an unassigned material.
+    if category == "assemble" and not code:
+        return
+    unit = session.scalar(select(Unit).where(Unit.code == code).with_for_update()) if code else None
+    if unit is not None and not unit.is_active:
+        raise ApplicationError("INACTIVE_REFERENCE", "Choose an active stock unit.", 409)
+    if category == "assemble" and material.unit_id and (unit is None or material.unit_id != unit.id):
+        raise ApplicationError("UNIT_CHANGE_CONFLICT", "This material already has a different stock unit. Review it in List of Consumables first.", 409)
+    new_id = unit.id if unit else None
+    if material.unit_id != new_id or code and unit is None:
+        if has_stock_records(session, material.id) or has_supplier_mapping(session, material.id):
+            raise ApplicationError("UNIT_CHANGE_CONFLICT", "Stock unit cannot change after stock history or a supplier mapping exists.", 409)
+    before = shared.snapshot("consumables", material)
+    if code and unit is None:
+        unit = shared.legacy.ensure_unit(session, code)
+    material.unit_id, material.output_unit = (unit.id, unit.code) if unit else (None, None)
+    if category == "assemble" and shared.snapshot("consumables", material) != before:
+        session.add(AuditLog(actor_id=actor.id, action="UPDATE", entity_type="consumables", entity_id=material.id,
+            old_values=before, new_values=shared.snapshot("consumables", material), reason="Reviewed assembly stock unit supplied."))
 
 
 def delete_catalog(session, category, payload, actor):

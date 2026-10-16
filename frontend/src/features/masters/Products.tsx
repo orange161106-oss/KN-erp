@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { apiClient } from '../../api/client';
 import MasterBulkWorkspace from './MasterBulkWorkspace';
+import ProductRowMenu from './ProductRowMenu';
 import { useAuth } from '../auth/context';
 import { TableSkeletonRows } from '../../components/ui/Skeleton';
+import HorizontalTableScroll from '../../components/ui/HorizontalTableScroll';
 
 type ActiveTab = 'consumables' | 'assemble' | 'sales_parts';
 
@@ -47,6 +49,24 @@ interface SalesPartRow {
   is_active: boolean;
 }
 
+type RowMenuTarget = { category: 'consumables'; row: ConsumableRow } | { category: 'assemble'; row: AssembleRow };
+type InlineEditor = RowMenuTarget & { field?: string; draft: Record<string, string> };
+const INLINE_COLUMNS = {
+  consumables: [
+    ['supplier_id', 'Supplier ID', false], ['supplier_name', 'Supplier name', true], ['item_id', 'Item ID', false],
+    ['category', 'Category', true], ['type_of_material', 'Type of material', true], ['description', 'Description', true],
+    ['output_unit', 'Stock Unit', true], ['rate', 'Rate', true],
+  ],
+  assemble: [
+    ['consumable_item', 'Consumable Item', false], ['part_no_saleable_item', 'Saleable Part No.', false],
+    ['used_for_name_of_saleable_part', 'Saleable Part Name', true], ['used_part_no_prd_order', 'PRD Part No.', true],
+    ['process_name', 'Process', false], ['material_thickness_in_mm_gsm', 'Thickness / GSM', true],
+    ['no_of_process_per_part', 'Process Count', true], ['output_unit', 'Stock Unit', true], ['rate', 'Rate', true],
+  ],
+} as const;
+const cellValue = (row: ConsumableRow | AssembleRow, field: string) =>
+  String((row as unknown as Record<string, unknown>)[field] ?? '');
+
 export default function Products() {
   const { user } = useAuth();
   const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
@@ -63,6 +83,13 @@ export default function Products() {
   const canEdit = isAdmin;
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('consumables');
+  const [rowMenu, setRowMenu] = useState<(RowMenuTarget & { x: number; y: number; field?: string }) | null>(null);
+  const [inlineEditor, setInlineEditor] = useState<InlineEditor | null>(null);
+  const [inlineSaving, setInlineSaving] = useState(false);
+  const [inlineError, setInlineError] = useState('');
+  const closeRowMenu = useCallback(() => setRowMenu(null), []);
+  useEffect(closeRowMenu, [activeTab, isAdmin, closeRowMenu]);
+  useEffect(() => { if (!isAdmin) { setInlineEditor(null); setInlineError(''); } }, [isAdmin]);
 
   // Editing state for inline CRUD
   const [editingConsumableId, setEditingConsumableId] = useState<string | null>(null);
@@ -216,21 +243,6 @@ export default function Products() {
     }
   };
 
-  const startEditConsumable = (row: ConsumableRow) => {
-    setEditingConsumableId(row.id);
-    setConsumableForm({
-      supplier_id: row.supplier_id || '',
-      supplier_name: row.supplier_name || '',
-      item_id: row.item_id || '',
-      category: row.category || '',
-      type_of_material: row.type_of_material || '',
-      description: row.description || '',
-      output_unit: row.output_unit || 'PCS',
-      rate: row.rate !== null && row.rate !== undefined ? String(row.rate) : '',
-    });
-    safeScrollTop();
-  };
-
   const cancelEditConsumable = () => {
     setEditingConsumableId(null);
     setConsumableForm({
@@ -294,22 +306,6 @@ export default function Products() {
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const startEditAssemble = (row: AssembleRow) => {
-    setEditingAssembleId(row.id);
-    setAssembleForm({
-      consumable_item: row.consumable_item || '',
-      part_no_saleable_item: row.part_no_saleable_item || '',
-      used_for_name_of_saleable_part: row.used_for_name_of_saleable_part || '',
-      used_part_no_prd_order: row.used_part_no_prd_order || '',
-      process_name: row.process_name || 'ASSEMBLY',
-      material_thickness_in_mm_gsm: row.material_thickness_in_mm_gsm || '',
-      no_of_process_per_part: row.no_of_process_per_part ? String(row.no_of_process_per_part) : '1.0',
-      output_unit: row.output_unit || 'PCS',
-      rate: row.rate !== null && row.rate !== undefined ? String(row.rate) : '',
-    });
-    safeScrollTop();
   };
 
   const cancelEditAssemble = () => {
@@ -455,6 +451,7 @@ export default function Products() {
     setActionLoadingId(id);
     try {
       await apiClient.patch(`/api/v1/masters/product-master/${category}/${id}/deactivate`, {});
+      setInlineEditor(previous => previous?.row.id === id ? null : previous);
       const msg = `Record "${name}" deactivated successfully.`;
       setFeedback({ type: 'success', message: msg });
       setToast({ type: 'success', message: msg });
@@ -465,6 +462,99 @@ export default function Products() {
       setActionLoadingId(null);
     }
   };
+
+  const openRowMenu = (event: React.MouseEvent<HTMLTableRowElement> | React.KeyboardEvent<HTMLTableRowElement>, target: RowMenuTarget) => {
+    if (!isAdmin || submitting || inlineSaving || loading || actionLoadingId) return;
+    event.preventDefault();
+    event.currentTarget.focus({ preventScroll: true });
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const cell = (event.target as HTMLElement).closest('td');
+    const field = cell ? INLINE_COLUMNS[target.category][cell.cellIndex]?.[0] : undefined;
+    setRowMenu({ ...target, field, x: 'clientX' in event ? event.clientX : bounds.left + 24,
+      y: 'clientY' in event ? event.clientY : bounds.top + bounds.height });
+  };
+
+  const editorChanges = (editor: InlineEditor) => Object.fromEntries(INLINE_COLUMNS[editor.category]
+    .filter(([key, , editable]) => editable && editor.draft[key] !== cellValue(editor.row, key))
+    .map(([key]) => [key, editor.draft[key].trim() || null]));
+
+  const leaveInlineEditor = () => {
+    if (inlineSaving) return false;
+    if (inlineEditor && Object.keys(editorChanges(inlineEditor)).length && !window.confirm('Discard the unsaved row edits?')) return false;
+    setInlineEditor(null); setInlineError('');
+    return true;
+  };
+  const changeTab = (tab: ActiveTab) => { if (tab !== activeTab && leaveInlineEditor()) setActiveTab(tab); };
+  const refreshTable = () => { if (leaveInlineEditor()) void loadData(); };
+
+  const beginInlineEdit = (target: RowMenuTarget, field?: string) => {
+    if (!isAdmin || inlineSaving) return;
+    if (field && !INLINE_COLUMNS[target.category].some(([key, , editable]) => key === field && editable)) return;
+    closeRowMenu();
+    if (inlineEditor?.row.id === target.row.id) {
+      setInlineEditor({ ...inlineEditor, field });
+    } else {
+      if (inlineEditor && Object.keys(editorChanges(inlineEditor)).length && !window.confirm('Discard the unsaved row edits?')) return;
+      setInlineEditor({ ...target, field, draft: Object.fromEntries(INLINE_COLUMNS[target.category].map(([key]) => [key, cellValue(target.row, key)])) });
+    }
+    setInlineError('');
+  };
+
+  const saveInlineEdit = async () => {
+    if (!inlineEditor || inlineSaving || !isAdmin) return;
+    const editor = inlineEditor;
+    const changes = editorChanges(editor);
+    if (!Object.keys(changes).length) { setInlineEditor(null); return; }
+    setInlineSaving(true); setInlineError('');
+    try {
+      // Send only edited values; never apply intake-form defaults to blank units.
+      const payload = { ...changes, ...(editor.category === 'consumables' && 'supplier_name' in changes
+        ? { supplier_id: editor.row.supplier_id } : {}) };
+      await apiClient.put(`/api/v1/masters/product-master/${editor.category}/${editor.row.id}`, payload);
+      const displayChanges = { ...changes,
+        ...('rate' in changes ? { rate: changes.rate === null ? null : Number(changes.rate) } : {}),
+        ...('no_of_process_per_part' in changes ? { no_of_process_per_part: Number(changes.no_of_process_per_part) } : {}),
+        ...('output_unit' in changes ? { output_unit: changes.output_unit?.toUpperCase() || '' } : {}),
+      };
+      if (editor.category === 'consumables') setConsumables(previous => previous.map(row => row.id === editor.row.id ? { ...row, ...displayChanges } as ConsumableRow : row));
+      else setAssembleRows(previous => previous.map(row => row.id === editor.row.id ? { ...row, ...displayChanges } as AssembleRow : row));
+      setInlineEditor(null);
+      setToast({ type: 'success', message: 'Row changes saved successfully.' });
+    } catch (failure) { setInlineError(failure instanceof Error ? failure.message : 'Unable to save row changes.'); }
+    finally { setInlineSaving(false); }
+  };
+
+  const doubleClickCell = (event: React.MouseEvent<HTMLTableRowElement>, target: RowMenuTarget) => {
+    if (event.target instanceof HTMLInputElement) return;
+    const cell = (event.target as HTMLElement).closest('td');
+    const field = cell ? INLINE_COLUMNS[target.category][cell.cellIndex]?.[0] : undefined;
+    if (field) beginInlineEdit(target, field);
+  };
+
+  const renderInlineCells = (editor: InlineEditor) => INLINE_COLUMNS[editor.category].map(([key, label, editable]) => {
+    const editing = editable && (!editor.field || editor.field === key);
+    const firstEditable = INLINE_COLUMNS[editor.category].find(([, , mayEdit]) => mayEdit)?.[0];
+    return <td key={key} className="p-2 align-top">
+      {editing ? <input aria-label={`Edit ${label}`} value={editor.draft[key]} disabled={inlineSaving}
+        autoFocus={editor.field === key || (!editor.field && key === firstEditable)}
+        className="w-full min-w-24 rounded border border-blue-500 bg-white px-2 py-1.5 text-xs font-mono focus:outline-2 focus:outline-blue-400"
+        onChange={event => { const value = event.target.value; setInlineEditor(previous => previous ? { ...previous, draft: { ...previous.draft, [key]: value } } : previous); }}
+        onKeyDown={event => {
+          if (event.key === 'Enter' || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's')) { event.preventDefault(); event.stopPropagation(); void saveInlineEdit(); }
+          if (event.key === 'Escape' && !inlineSaving) { event.preventDefault(); event.stopPropagation(); setInlineEditor(null); setInlineError(''); }
+        }}/>
+        : <span className="block px-1 py-1.5">{editor.draft[key] || '—'}</span>}
+    </td>;
+  });
+
+  const renderInlineActions = (editor: InlineEditor) => <tr><td colSpan={INLINE_COLUMNS[editor.category].length} className="border-b bg-blue-50 px-3 py-2">
+    <div className="flex flex-wrap items-center gap-2 text-xs font-sans">
+      <button type="button" disabled={inlineSaving} onClick={() => void saveInlineEdit()} className="rounded bg-emerald-600 px-3 py-1.5 font-semibold text-white disabled:opacity-50">{inlineSaving ? 'Saving…' : 'Save changes'}</button>
+      <button type="button" disabled={inlineSaving} onClick={() => { setInlineEditor(null); setInlineError(''); }} className="rounded border bg-white px-3 py-1.5">Cancel</button>
+      <span className="text-slate-600">Enter to save · Esc to cancel · Stock Unit is optional</span>
+      {inlineError && <span role="alert" className="text-red-700">{inlineError}</span>}
+    </div>
+  </td></tr>;
 
   // ---------------------------------------------------------------------------
   // Localized Inline Column Search Filters
@@ -620,7 +710,7 @@ export default function Products() {
       {/* Top Tabs Bar */}
       <div className="flex border-b border-erp-dark-vanilla/30 space-x-1">
         <button
-          onClick={() => setActiveTab('consumables')}
+          onClick={() => changeTab('consumables')}
           className={`px-5 py-2.5 text-sm font-semibold rounded-t-lg transition-all ${
             activeTab === 'consumables'
               ? 'bg-erp-orange text-white shadow-xs'
@@ -630,7 +720,7 @@ export default function Products() {
           List of Consumables
         </button>
         <button
-          onClick={() => setActiveTab('assemble')}
+          onClick={() => changeTab('assemble')}
           className={`px-5 py-2.5 text-sm font-semibold rounded-t-lg transition-all ${
             activeTab === 'assemble'
               ? 'bg-erp-orange text-white shadow-xs'
@@ -640,7 +730,7 @@ export default function Products() {
           Consumable for Assemble
         </button>
         <button
-          onClick={() => setActiveTab('sales_parts')}
+          onClick={() => changeTab('sales_parts')}
           className={`px-5 py-2.5 text-sm font-semibold rounded-t-lg transition-all ${
             activeTab === 'sales_parts'
               ? 'bg-erp-orange text-white shadow-xs'
@@ -880,7 +970,7 @@ export default function Products() {
               <div>
                 <h3 className="text-sm font-bold text-erp-chocolate">List of Consumables Table</h3>
                 <p className="text-xs text-erp-chocolate/70 mt-0.5">
-                  Showing {filteredConsumables.length} of {consumables.length} consumables. Use header filters below to narrow results.
+                  Showing {filteredConsumables.length} of {consumables.length} consumables. Use header filters below to narrow results. {isAdmin && 'Double-click a cell to edit, or right-click for cell and row actions.'}
                 </p>
               </div>
               <div className="flex items-center gap-3">
@@ -903,7 +993,7 @@ export default function Products() {
                   Clear Filters
                 </button>
                 <button
-                  onClick={loadData}
+                  onClick={refreshTable}
                   disabled={loading}
                   className="text-xs text-erp-orange hover:text-erp-tenne hover:underline font-semibold"
                 >
@@ -912,7 +1002,7 @@ export default function Products() {
               </div>
             </div>
 
-            <div className="overflow-x-auto rounded-lg border border-gray-100 bg-white shadow-xs">
+            <HorizontalTableScroll label="List of Consumables">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-erp-vanilla/35 text-erp-chocolate font-semibold border-b border-gray-200">
                   <tr>
@@ -1012,29 +1102,27 @@ export default function Products() {
                       />
                     </th>
 
-                    {/* 9. Actions Header */}
-                    {isAdmin && (
-                      <th className="p-3 w-24 text-center">
-                        <div>Actions</div>
-                        <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
-                      </th>
-                    )}
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-gray-100 font-mono">
                   {loading ? (
-                    <TableSkeletonRows rows={7} columns={isAdmin ? 9 : 8} />
+                    <TableSkeletonRows rows={7} columns={8} />
                   ) : filteredConsumables.length > 0 ? (
-                    filteredConsumables.map((row) => (
+                    filteredConsumables.map((row) => <React.Fragment key={row.id}>
                       <tr
                         key={row.id}
+                        tabIndex={isAdmin ? 0 : undefined} aria-haspopup={isAdmin ? 'menu' : undefined}
+                        onContextMenu={event => openRowMenu(event, { category: 'consumables', row })}
+                        onDoubleClick={event => doubleClickCell(event, { category: 'consumables', row })}
+                        onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openRowMenu(event, { category: 'consumables', row }); }}
                         className={`transition-colors ${
-                          editingConsumableId === row.id
+                          inlineEditor?.row.id === row.id || rowMenu?.row.id === row.id
                             ? 'bg-erp-orange/10 font-semibold'
                             : 'hover:bg-erp-vanilla/25'
                         }`}
                       >
+                        {inlineEditor?.row.id === row.id ? renderInlineCells(inlineEditor) : <>
                         <td className="p-3 font-mono text-erp-chocolate/75 whitespace-nowrap">
                           {row.supplier_id || '—'}
                         </td>
@@ -1078,41 +1166,20 @@ export default function Products() {
                         <td className="p-3 text-right font-semibold text-erp-tenne">
                           {row.rate !== null && row.rate !== undefined ? row.rate : '—'}
                         </td>
-                        {isAdmin && (
-                          <td className="p-3 text-center whitespace-nowrap">
-                            <div className="flex items-center justify-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => startEditConsumable(row)}
-                                title="Edit consumable"
-                                className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors text-xs"
-                              >
-                                ✏️
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeactivate('consumables', row.id, row.item_id)}
-                                disabled={actionLoadingId === row.id}
-                                title="Delete consumable"
-                                className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
-                              >
-                                {actionLoadingId === row.id ? '…' : '🗑️'}
-                              </button>
-                            </div>
-                          </td>
-                        )}
+                        </>}
                       </tr>
-                    ))
+                      {inlineEditor?.row.id === row.id && renderInlineActions(inlineEditor)}
+                    </React.Fragment>)
                   ) : (
                     <tr>
-                      <td colSpan={isAdmin ? 9 : 8} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
+                      <td colSpan={8} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
                         No consumables match your search filters or the master table is empty.
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
-            </div>
+            </HorizontalTableScroll>
           </div>
         </div>
       )}
@@ -1343,7 +1410,7 @@ export default function Products() {
               <div>
                 <h3 className="text-sm font-bold text-erp-chocolate">Consumable for Assemble Table</h3>
                 <p className="text-xs text-erp-chocolate/70 mt-0.5">
-                  Showing {filteredAssembleRows.length} of {assembleRows.length} mappings.
+                  Showing {filteredAssembleRows.length} of {assembleRows.length} mappings. {isAdmin && 'Double-click a cell to edit, or right-click for cell and row actions.'}
                 </p>
               </div>
               <div className="flex items-center gap-3">
@@ -1367,7 +1434,7 @@ export default function Products() {
                   Clear Filters
                 </button>
                 <button
-                  onClick={loadData}
+                  onClick={refreshTable}
                   disabled={loading}
                   className="text-xs text-erp-orange hover:text-erp-tenne hover:underline font-semibold"
                 >
@@ -1376,7 +1443,7 @@ export default function Products() {
               </div>
             </div>
 
-            <div className="overflow-x-auto rounded-lg border border-gray-100 bg-white shadow-xs">
+            <HorizontalTableScroll label="Consumable for Assemble">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-erp-vanilla/35 text-erp-chocolate font-semibold border-b border-gray-200">
                   <tr>
@@ -1479,29 +1546,27 @@ export default function Products() {
                       />
                     </th>
 
-                    {/* 10. Actions Header */}
-                    {isAdmin && (
-                      <th className="p-3 w-24 text-center">
-                        <div>Actions</div>
-                        <div className="mt-1.5 text-[10px] text-erp-chocolate/50 font-normal">Edit / Del</div>
-                      </th>
-                    )}
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-gray-100 font-mono">
                   {loading ? (
-                    <TableSkeletonRows rows={7} columns={isAdmin ? 10 : 9} />
+                    <TableSkeletonRows rows={7} columns={9} />
                   ) : filteredAssembleRows.length > 0 ? (
-                    filteredAssembleRows.map((row) => (
+                    filteredAssembleRows.map((row) => <React.Fragment key={row.id}>
                       <tr
                         key={row.id}
+                        tabIndex={isAdmin ? 0 : undefined} aria-haspopup={isAdmin ? 'menu' : undefined}
+                        onContextMenu={event => openRowMenu(event, { category: 'assemble', row })}
+                        onDoubleClick={event => doubleClickCell(event, { category: 'assemble', row })}
+                        onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openRowMenu(event, { category: 'assemble', row }); }}
                         className={`transition-colors ${
-                          editingAssembleId === row.id
+                          inlineEditor?.row.id === row.id || rowMenu?.row.id === row.id
                             ? 'bg-erp-orange/10 font-semibold'
                             : 'hover:bg-erp-vanilla/25'
                         }`}
                       >
+                        {inlineEditor?.row.id === row.id ? renderInlineCells(inlineEditor) : <>
                         <td className="p-3 font-bold text-erp-chocolate whitespace-nowrap">
                           <div className="flex items-center gap-1.5">
                             <span>{row.consumable_item}</span>
@@ -1538,41 +1603,20 @@ export default function Products() {
                         <td className="p-3 text-right font-semibold text-erp-tenne">
                           {row.rate !== null ? `₹${row.rate.toFixed(2)}` : '—'}
                         </td>
-                        {isAdmin && (
-                          <td className="p-3 text-center whitespace-nowrap">
-                            <div className="flex items-center justify-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => startEditAssemble(row)}
-                                title="Edit assembly mapping"
-                                className="p-1 rounded text-erp-chocolate/70 hover:text-erp-orange hover:bg-erp-orange/10 transition-colors text-xs"
-                              >
-                                ✏️
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeactivate('assemble', row.id, `${row.consumable_item} -> ${row.part_no_saleable_item}`)}
-                                disabled={actionLoadingId === row.id}
-                                title="Delete assembly mapping"
-                                className="p-1 rounded text-erp-chocolate/70 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 text-xs"
-                              >
-                                {actionLoadingId === row.id ? '…' : '🗑️'}
-                              </button>
-                            </div>
-                          </td>
-                        )}
+                        </>}
                       </tr>
-                    ))
+                      {inlineEditor?.row.id === row.id && renderInlineActions(inlineEditor)}
+                    </React.Fragment>)
                   ) : (
                     <tr>
-                      <td colSpan={isAdmin ? 10 : 9} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
+                      <td colSpan={9} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
                         No assembly mappings match your search filters or the table is empty.
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
-            </div>
+            </HorizontalTableScroll>
           </div>
         </div>
       )}
@@ -1742,7 +1786,7 @@ export default function Products() {
                   Clear Filters
                 </button>
                 <button
-                  onClick={loadData}
+                  onClick={refreshTable}
                   disabled={loading}
                   className="text-xs text-erp-orange hover:text-erp-tenne hover:underline font-semibold"
                 >
@@ -1751,7 +1795,7 @@ export default function Products() {
               </div>
             </div>
 
-            <div className="overflow-x-auto rounded-lg border border-gray-100 bg-white shadow-xs">
+            <HorizontalTableScroll label="List of Sales Parts">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-erp-vanilla/35 text-erp-chocolate font-semibold border-b border-gray-200">
                   <tr>
@@ -1889,13 +1933,25 @@ export default function Products() {
                   )}
                 </tbody>
               </table>
-            </div>
+            </HorizontalTableScroll>
           </div>
         </div>
       )}
       {/* ========================================================================= */}
       {/* BULK UPLOAD MODAL OVERLAY                                                 */}
       {/* ========================================================================= */}
+      {rowMenu && isAdmin && !isUploadModalOpen && <ProductRowMenu key={`${rowMenu.category}:${rowMenu.row.id}`} x={rowMenu.x} y={rowMenu.y}
+        label={rowMenu.category === 'consumables' ? rowMenu.row.item_id : `${rowMenu.row.consumable_item} → ${rowMenu.row.part_no_saleable_item}`}
+        onClose={closeRowMenu} onEdit={() => beginInlineEdit(rowMenu)}
+        onEditCell={rowMenu.field && INLINE_COLUMNS[rowMenu.category].some(([key, , editable]) => key === rowMenu.field && editable)
+          ? () => beginInlineEdit(rowMenu, rowMenu.field) : undefined}
+        onDelete={() => {
+          const target = rowMenu;
+          closeRowMenu();
+          void handleDeactivate(target.category, target.row.id, target.category === 'consumables'
+            ? target.row.item_id : `${target.row.consumable_item} -> ${target.row.part_no_saleable_item}`);
+        }}/>
+      }
       {isUploadModalOpen && (
         <MasterBulkWorkspace
           category={activeTab}
