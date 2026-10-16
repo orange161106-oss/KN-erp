@@ -112,9 +112,14 @@ export default function MasterBulkWorkspace({ category, label, onClose, onChange
       setMessage(`All ${records.length} items are already saved. Edit a cell when you want to make changes.`);
       return;
     }
-    if (invalidUnits.length) { setError(optionalStockUnit
-      ? `${invalidUnits.length} rows contain invalid stock units. Enter the actual unit or clear the cell to add it later.`
-      : `${invalidUnits.length} rows need a valid stock unit. Edit Stock Unit before saving.`); return; }
+    if (invalidUnits.length) {
+      setError(
+        optionalStockUnit
+          ? `${invalidUnits.length} rows need a valid stock unit. Enter the actual unit or clear the cell to add it later.`
+          : `${invalidUnits.length} rows need a valid stock unit. Edit Stock Unit before saving.`
+      );
+      return;
+    }
     pending.current = true; setBusy(true); setError(''); setMessage('');
     try {
       const review = { review_token: draft?.review_token ?? catalog.review_token, updates: changes };

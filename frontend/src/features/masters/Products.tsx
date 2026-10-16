@@ -79,8 +79,16 @@ export default function Products() {
     user?.permissions?.includes('masters.read') ||
     user?.permissions?.some((p: string) => p.startsWith('masters.'))
   );
-  const canCreate = isAdmin;
-  const canEdit = isAdmin;
+  const canCreate = Boolean(
+    isAdmin ||
+    user?.masters_create ||
+    user?.permissions?.includes('masters.create')
+  );
+  const canEdit = Boolean(
+    isAdmin ||
+    user?.masters_update ||
+    user?.permissions?.includes('masters.update')
+  );
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('consumables');
   const [rowMenu, setRowMenu] = useState<(RowMenuTarget & { x: number; y: number; field?: string }) | null>(null);
@@ -623,7 +631,7 @@ export default function Products() {
             Authoritative master catalog for raw consumables, sales parts, and assembly BOM mappings.
           </p>
         </div>
-        {isAdmin && (
+        {(isAdmin || canCreate) && (
           <button
             type="button"
             onClick={() => setIsUploadModalOpen(true)}
