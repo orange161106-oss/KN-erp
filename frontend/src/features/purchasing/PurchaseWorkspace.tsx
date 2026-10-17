@@ -103,6 +103,7 @@ export default function PurchaseWorkspace({ canCreate, onOpenRequirements }: {
   const [selectedYear, setSelectedYear] = useState(2026);
   const [records, setRecords] = useState<PurchaseWorkspaceRecord[]>([]);
   const [purchaseView, setPurchaseView] = useState<'normal' | 'md'>('normal');
+  const [showNormalSheetColumns, setShowNormalSheetColumns] = useState(false);
   const recordsRef = useRef<PurchaseWorkspaceRecord[]>([]);
   const originalsRef = useRef(new Map<string, PurchaseWorkspaceRecord>());
   const dirtyRef = useRef(false);
@@ -258,7 +259,7 @@ export default function PurchaseWorkspace({ canCreate, onOpenRequirements }: {
       const downloadUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = downloadUrl;
-      link.download = `purchase_${purchaseView}_view_${selectedYear}_${String(selectedMonth).padStart(2, '0')}.xlsx`;
+      link.download = `${purchaseView === 'md' ? 'purchase_md_view' : 'purchase_recommendations'}_${selectedYear}_${String(selectedMonth).padStart(2, '0')}.xlsx`;
       document.body.appendChild(link);
       try { link.click(); }
       finally { link.remove(); URL.revokeObjectURL(downloadUrl); }
@@ -356,13 +357,16 @@ export default function PurchaseWorkspace({ canCreate, onOpenRequirements }: {
   const normalFields = normalViewColumns(selectedMonth, selectedYear);
   const normalData = records.map((row, index) => Object.assign({}, row,
     Object.fromEntries(normalFields.map((definition, fieldIndex) => [`normal_${fieldIndex}`, definition.value(row, undefined, index)]))));
+  const normalOriginals = new Map(normalData.map((row, index) => [row.id, Object.assign({}, originalRecords.get(row.id) ?? row,
+    Object.fromEntries(normalFields.map((definition, fieldIndex) => [`normal_${fieldIndex}`, definition.value(originalRecords.get(row.id) ?? row, undefined, index)])))]));
   const normalColumns: ColumnDef<PurchaseWorkspaceRecord>[] = [
-    ...normalFields.map((definition, index) => ({ key: `normal_${index}` as keyof PurchaseWorkspaceRecord & string,
-      label: definition.label, width: index === 3 ? 250 : 145, minWidth: 100, isEditable: false })),
-    ...columns.filter(col => ['master_unit', 'requested_purchase_qty', 'purchase_notes', 'status', 'approval_status'].includes(col.key)),
+    ...columns,
+    ...(showNormalSheetColumns ? normalFields.map((definition, index) => ({ key: `normal_${index}` as keyof PurchaseWorkspaceRecord & string,
+      label: definition.label, width: index === 3 ? 250 : 145, minWidth: 100, isEditable: false }))
+      : []),
   ];
-  const mdFields = mdViewColumns(selectedMonth, selectedYear);
-  const mdRows = records.flatMap(row => (row.md_sources?.length ? row.md_sources : [undefined]).map(source => ({ row, source })));
+  const mdFields = mdViewColumns(selectedMonth, selectedYear, planMetadata?.revision_label ?? 'R1');
+  const mdRows = records.flatMap(row => (row.md_sources?.length ? row.md_sources : [undefined]).map((source, sourceIndex) => ({ row, source, sourceIndex })));
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden">
@@ -410,6 +414,10 @@ export default function PurchaseWorkspace({ canCreate, onOpenRequirements }: {
               {view === 'normal' ? 'Normal view' : 'MD view'}
             </button>)}
           </div>
+          {purchaseView === 'normal' && <button type="button" onClick={() => setShowNormalSheetColumns(value => !value)}
+            className="rounded border border-gray-300 bg-white px-2 py-1 text-xs font-semibold text-gray-700">
+            {showNormalSheetColumns ? 'Hide' : 'Show'} Normal sheet columns
+          </button>}
 
           <div className="hidden sm:flex items-center gap-1.5 text-[11px] ml-2 border-l border-gray-200 pl-2">
             <span className="px-1.5 py-0.5 bg-gray-50 border rounded text-gray-600">Rev: <strong>{planMetadata?.revision_label ?? 'R0'}</strong></span>
@@ -484,7 +492,7 @@ export default function PurchaseWorkspace({ canCreate, onOpenRequirements }: {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded border border-gray-300 bg-white shadow-xs">
         <p className="shrink-0 border-b bg-blue-50 px-3 py-1 text-xs text-blue-900">
           {purchaseView === 'md' ? 'MD view follows the 76-column management layout; product/process lines come from saved requirements. Switch to Normal view to edit purchase proposals.'
-            : 'Normal view follows the 23-column monthly purchase layout. Blank cells mean no verified source data; purchase proposals and remarks are editable at the right.'}
+            : 'Normal view keeps the editable plan. Show Normal sheet columns to inspect the 23-column monthly layout; Excel export follows that layout.'}
         </p>
         {canCreate && <p className="shrink-0 border-b bg-white px-3 py-1.5 text-xs text-gray-600">Edit requested purchase quantities and remarks here. Name and stock-unit edits update Product Master; existing stock-history unit restrictions apply. Calculation and approval quantities stay protected.</p>}
         {unsavedCount > 0 && <div className="shrink-0 border-b px-3 py-1 text-xs text-amber-900">
@@ -532,7 +540,7 @@ export default function PurchaseWorkspace({ canCreate, onOpenRequirements }: {
             virtualize
             columns={normalColumns}
             data={normalData}
-            originalData={originalRecords}
+            originalData={normalOriginals}
             onCellChange={handleCellChange}
             onSave={saveQuietly}
             onSaveRow={async (id, changes) => { Object.entries(changes).forEach(([key,value]) => handleCellChange(id, key as keyof PurchaseWorkspaceRecord & string, String(value ?? ''))); await saveEdits(); }}
@@ -544,7 +552,7 @@ export default function PurchaseWorkspace({ canCreate, onOpenRequirements }: {
             canCreate={false}
             canUpdate={canCreate && !isSaving && !isSubmitting}
             canDelete={false}
-            storageKey="knl_purchase_workspace_normal_view"
+            storageKey="knl_purchase_workspace_grid"
             onExport={exportRows}
             emptyMessage={notice ? (searchQuery || statusFilter ? 'No consumables match the current filters. Clear the search or status filter to see this plan.' : notice) : `No purchase recommendations found for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Recalculate or import requirements first.`}
             getRowClassName={row => {
@@ -557,8 +565,11 @@ export default function PurchaseWorkspace({ canCreate, onOpenRequirements }: {
               <thead className="sticky top-0 z-10 bg-[#f4ecda] text-left text-[#3b211c]">
                 <tr>{mdFields.map((column, index) => <th key={index} className="min-w-32 max-w-64 whitespace-normal border border-gray-300 px-2 py-2">{column.label}</th>)}</tr>
               </thead>
-              <tbody>{mdRows.map(({ row, source }, rowIndex) => <tr key={`${row.id}:${rowIndex}`} className="even:bg-gray-50">
-                {mdFields.map((column, colIndex) => <td key={colIndex} className="max-w-64 truncate border border-gray-200 px-2 py-1.5" title={column.value(row, source, rowIndex)}>{column.value(row, source, rowIndex)}</td>)}
+              <tbody>{mdRows.map(({ row, source, sourceIndex }, rowIndex) => <tr key={`${row.id}:${rowIndex}`} className="even:bg-gray-50">
+                {mdFields.map((column, colIndex) => {
+                  const value = sourceIndex > 0 && colIndex >= 29 ? '—' : column.value(row, source, rowIndex);
+                  return <td key={colIndex} className="max-w-64 truncate border border-gray-200 px-2 py-1.5" title={value}>{value}</td>;
+                })}
               </tr>)}</tbody>
             </table>
             {!mdRows.length && <p className="p-6 text-center text-gray-600">No purchase plan records for this period.</p>}

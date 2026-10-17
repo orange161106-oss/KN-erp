@@ -97,3 +97,16 @@ test('repeated clicks during an export start only one authenticated download', a
   await screen.findByText('Excel download started.');
   expect(result.downloads).toHaveLength(1);
 });
+
+test('MD view loads product detail scope and exports the 76-column management layout', async ()=>{
+  const result=setup(Promise.resolve(new Response('sample workbook')));
+  await screen.findByRole('cell',{name:'TEST-001'});
+  fireEvent.click(screen.getByRole('button',{name:'MD view'}));
+  await waitFor(()=>expect(apiClient.get).toHaveBeenLastCalledWith(expect.stringContaining('view=md')));
+  expect(screen.getByLabelText('MD purchase view').querySelectorAll('th')).toHaveLength(76);
+  fireEvent.click(screen.getByRole('button',{name:'Export Excel'}));
+  await screen.findByText('Excel download started.');
+  const url=new URL(String(result.fetchMock.mock.calls[0][0]),'http://localhost');
+  expect(url.searchParams.get('view')).toBe('md');
+  expect(result.downloads[0].filename).toBe('purchase_md_view_2026_10.xlsx');
+});

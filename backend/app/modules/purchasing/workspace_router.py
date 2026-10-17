@@ -88,5 +88,5 @@ def export_purchase_workspace(
     return Response(
         content=excel_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="purchase_{view}_view_{year:04d}_{month:02d}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="{("purchase_md_view" if view == "md" else "purchase_recommendations")}_{year:04d}_{month:02d}.xlsx"'},
     )
