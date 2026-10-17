@@ -890,4 +890,15 @@ Verification:
 - Protected files `backend/app/services/stock_management_service.py` and `frontend/src/components/DataTable.tsx` remain untouched.
 - PR #36 created and merged into `develop` (`642b0ed`). Local branch updated and synced with `origin/develop`.
 
+## Production Release v1.2.0 & Main Branch Promotion (PR #37) — 2026-10-17
+
+- **Database Migration Upgrade**: Database schema upgraded via `python -m alembic upgrade 190996207995`. Active revision verified
+  at unified head `190996207995 (head) (mergepoint)`. Live PostgreSQL verification confirmed `output_per_unit`, `rule_type`,
+  and `purchasing_unit` columns active in `consumables` and `consumption_norms`.
+- **Frontend Test Suite**: 198 / 198 tests passed across all 29 test suites in Vitest. Production bundle built cleanly in 1.53s.
+- **Release Tagging**: Tagged `v1.2.0-oct2026-reconciled` and pushed to `origin`.
+- **Promotion to Main**: Created Release Pull Request #37 (`develop` -> `main`) and merged via API (`466f841`). Production branch
+  `main` is fully updated with all verified milestone features, reconciliation workbooks, and test coverage.
+
+
 
