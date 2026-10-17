@@ -3,6 +3,7 @@ import csv
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import io
+import re
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
@@ -1383,6 +1384,78 @@ def _normalize_header_key(col_name: Any) -> str:
     return str(col_name).strip().lower().replace(" ", "_").replace("-", "_").replace(".", "_")
 
 
+def _normalize_header_slug(val: Any) -> str:
+    if val is None:
+        return ""
+    return re.sub(r"[^a-z0-9]", "", str(val).lower())
+
+
+ITEM_CODE_SLUGS = {
+    "itemid", "itemcode", "partno", "partnumber", "consumableid",
+    "consumablecode", "materialcode", "itemno", "item", "consumable", "material"
+}
+
+QTY_SLUGS = {
+    "grnqty", "receivedqty", "acceptedqty", "billedqty", "qty",
+    "receiptqty", "grnquantity", "receivedquantity", "quantity", "received", "accepted"
+}
+
+RATE_SLUGS = {
+    "rate", "unitprice", "basicrate", "landedcostrate", "unitrate",
+    "grnrate", "price", "cost", "unitcost", "itemrate"
+}
+
+GRN_NO_SLUGS = {
+    "grnno", "grnnumber", "grnid", "docno", "documentno",
+    "receiptno", "receiptnumber", "invoiceno", "invoicenum", "invoicenumber",
+    "billno", "dcno", "challanno", "doc"
+}
+
+DATE_SLUGS = {
+    "grndate", "date", "receiptdate", "docdate", "postingdate",
+    "billdate", "invoicedate", "entrydate"
+}
+
+VENDOR_SLUGS = {
+    "suppliername", "vendorname", "supplier", "vendor",
+    "partyname", "party", "supplierid", "vendorid"
+}
+
+PLANT_SLUGS = {
+    "plant", "plantid", "plantname", "location", "facility",
+    "unitlocation", "works", "plantunit", "worklocation"
+}
+
+UOM_SLUGS = {
+    "unit", "uom", "unitofmeasure", "outputunit"
+}
+
+CANCELLED_SLUGS = {
+    "cancelled", "canceled", "iscancelled", "iscanceled"
+}
+
+DESC_SLUGS = {
+    "description", "itemdescription", "itemname", "name", "materialname",
+    "materialdescription", "partname", "partdescription", "itemdesc", "desc", "productdescription"
+}
+
+
+def _score_qty_slug(slug: str) -> int:
+    if slug in ("grnqty", "receivedqty", "grnquantity", "receivedquantity", "receiptqty"):
+        return 3
+    if slug in ("acceptedqty", "accepted"):
+        return 2
+    return 1
+
+
+def _score_rate_slug(slug: str) -> int:
+    if slug in ("rate", "unitrate", "unitprice", "basicrate", "grnrate", "price"):
+        return 3
+    if slug in ("landedcostrate", "cost", "unitcost", "itemrate"):
+        return 2
+    return 1
+
+
 def _normalize_plant_identifier(val: Optional[str]) -> str:
     if not val:
         return ""
@@ -1434,8 +1507,8 @@ def ingest_mrp_grn(
     planning_period = f"{planning_year:04d}-{planning_month:02d}"
     now = datetime.now(timezone.utc)
 
-    # 1. Parse raw rows from CSV or Excel
-    raw_rows: list[dict[str, Any]] = []
+    # 1. Parse raw rows from CSV or Excel into list of lists
+    raw_rows: list[list[Any]] = []
     is_csv = filename.lower().endswith(".csv")
 
     if is_csv:
@@ -1450,111 +1523,141 @@ def ingest_mrp_grn(
             text_content = file_bytes.decode("utf-8", errors="replace")
 
         reader = csv.reader(io.StringIO(text_content))
-        header_row = None
         for row in reader:
-            if not any(str(c).strip() for c in row):
-                continue
-            if header_row is None:
-                header_row = [_normalize_header_key(c) for c in row]
-                continue
-            row_dict = {}
-            for idx, val in enumerate(row):
-                if idx < len(header_row) and header_row[idx]:
-                    row_dict[header_row[idx]] = val
-            raw_rows.append(row_dict)
+            if any(str(c).strip() for c in row if c is not None):
+                raw_rows.append(list(row))
     else:
         try:
             wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
             ws = wb.active
-            header_row = None
+            if ws is None:
+                ws = wb.worksheets[0]
             for row in ws.iter_rows(values_only=True):
-                if not any(row):
-                    continue
-                if header_row is None:
-                    header_row = [_normalize_header_key(c) for c in row]
-                    continue
-                row_dict = {}
-                for idx, val in enumerate(row):
-                    if idx < len(header_row) and header_row[idx]:
-                        row_dict[header_row[idx]] = val
-                raw_rows.append(row_dict)
+                if any(row is not None and str(c).strip() for c in row if c is not None):
+                    raw_rows.append(list(row))
         except Exception as exc:
             raise ApplicationError("INVALID_EXCEL_FORMAT", f"Unable to parse Excel file: {str(exc)}", 400)
 
     if not raw_rows:
         raise ApplicationError("EMPTY_DATA", "No data rows found in uploaded GRN file.", 400)
 
-    # 2. Extract and validate consumable items, plants, and quantities
-    item_keys = (
-        "item_id", "consumable_id", "item_code", "consumable_code", "material_code",
-        "code", "item_no", "part_no", "part_number", "item", "consumable"
-    )
-    qty_keys = (
-        "grn_qty", "received_qty", "receipt_qty", "grn_quantity", "received_quantity",
-        "quantity", "qty", "received"
-    )
-    invoice_keys = ("invoice_no", "invoice_num", "invoice_number", "bill_no", "grn_no", "grn_number", "challan_no")
-    date_keys = ("grn_date", "receipt_date", "date", "invoice_date")
-    rate_keys = ("rate", "unit_rate", "grn_rate", "price")
-    plant_keys = (
-        "plant", "plant_id", "facility", "plant_name", "location", "unit_location", "works", "unit"
-    )
+    # 2. Dynamic header detection in first 10 rows
+    header_row_idx = -1
+    col_map: dict[str, int] = {}
 
-    # Aggregate incoming quantities per consumable and plant within this file
+    for r_idx, row in enumerate(raw_rows[:10]):
+        slugs = [_normalize_header_slug(c) for c in row]
+        has_item = any(s in ITEM_CODE_SLUGS for s in slugs if s)
+        has_qty = any(s in QTY_SLUGS for s in slugs if s)
+        if has_item and has_qty:
+            header_row_idx = r_idx
+            for c_idx, s in enumerate(slugs):
+                if not s:
+                    continue
+                if s in ITEM_CODE_SLUGS and "item_code" not in col_map:
+                    col_map["item_code"] = c_idx
+                elif s in QTY_SLUGS:
+                    if "qty" not in col_map or _score_qty_slug(s) > _score_qty_slug(slugs[col_map["qty"]]):
+                        col_map["qty"] = c_idx
+                elif s in RATE_SLUGS:
+                    if "rate" not in col_map or _score_rate_slug(s) > _score_rate_slug(slugs[col_map["rate"]]):
+                        col_map["rate"] = c_idx
+                elif s in GRN_NO_SLUGS and "grn_no" not in col_map:
+                    col_map["grn_no"] = c_idx
+                elif s in DATE_SLUGS and "date" not in col_map:
+                    col_map["date"] = c_idx
+                elif s in VENDOR_SLUGS and "vendor" not in col_map:
+                    col_map["vendor"] = c_idx
+                elif s in PLANT_SLUGS and "plant" not in col_map:
+                    col_map["plant"] = c_idx
+                elif s in UOM_SLUGS and "uom" not in col_map:
+                    col_map["uom"] = c_idx
+                elif s in CANCELLED_SLUGS and "cancelled" not in col_map:
+                    col_map["cancelled"] = c_idx
+                elif s in DESC_SLUGS and "desc" not in col_map:
+                    col_map["desc"] = c_idx
+            break
+
+    if header_row_idx == -1 or "item_code" not in col_map or "qty" not in col_map:
+        raise ApplicationError(
+            "NO_VALID_GRN_ITEMS",
+            "Could not detect valid items or received quantities in uploaded GRN file. Ensure headers include 'item_id' / 'item_code' and 'grn_qty' / 'received_qty'.",
+            400,
+        )
+
+    # 3. Aggregate incoming quantities per consumable and plant within this file
     aggregated_incoming: dict[tuple[str, Optional[str]], dict[str, Any]] = {}
 
-    for row_idx, r in enumerate(raw_rows, start=1):
-        item_val = None
-        for k in item_keys:
-            if k in r and str(r[k]).strip():
-                item_val = str(r[k]).strip()
-                break
-
-        qty_val = None
-        for k in qty_keys:
-            if k in r and r[k] is not None and str(r[k]).strip() != "":
-                qty_val = r[k]
-                break
-
-        if not item_val or qty_val is None:
+    for row_idx, r in enumerate(raw_rows[header_row_idx + 1:], start=header_row_idx + 2):
+        # Skip summary rows where grn_no starts with total
+        grn_no_val = ""
+        if "grn_no" in col_map and col_map["grn_no"] < len(r) and r[col_map["grn_no"]] is not None:
+            grn_no_val = str(r[col_map["grn_no"]]).strip()
+        if grn_no_val.lower().startswith("total"):
             continue
 
+        # Skip rows where item_code is empty or starts with total
+        item_raw = r[col_map["item_code"]] if "item_code" in col_map and col_map["item_code"] < len(r) else None
+        item_val = str(item_raw).strip() if item_raw is not None else ""
+        if not item_val or item_val.lower() == "total" or item_val.lower().startswith("total"):
+            continue
+
+        # Skip cancelled rows
+        if "cancelled" in col_map and col_map["cancelled"] < len(r):
+            canc_raw = r[col_map["cancelled"]]
+            canc_val = str(canc_raw).strip().lower() if canc_raw is not None else ""
+            if canc_val in ("yes", "y", "true", "1"):
+                continue
+
+        # Quantity
+        qty_raw = r[col_map["qty"]] if "qty" in col_map and col_map["qty"] < len(r) else None
+        if qty_raw is None or str(qty_raw).strip() == "":
+            continue
         try:
-            qty_clean = Decimal(str(qty_val).replace(",", "").strip())
+            qty_clean = Decimal(str(qty_raw).replace(",", "").strip())
         except (InvalidOperation, ValueError):
             continue
 
-        inv_val = None
-        for k in invoice_keys:
-            if k in r and r[k] is not None and str(r[k]).strip():
-                inv_val = str(r[k]).strip()
-                break
-
-        date_val = None
-        for k in date_keys:
-            if k in r and r[k] is not None and str(r[k]).strip():
-                date_val = _parse_safe_date(r[k])
-                break
-
+        # Rate
         rate_val = None
-        for k in rate_keys:
-            if k in r and r[k] is not None and str(r[k]).strip():
+        if "rate" in col_map and col_map["rate"] < len(r) and r[col_map["rate"]] is not None:
+            rate_str = str(r[col_map["rate"]]).replace(",", "").strip()
+            if rate_str:
                 try:
-                    rate_val = Decimal(str(r[k]).replace(",", "").strip())
+                    rate_val = Decimal(rate_str)
                 except (InvalidOperation, ValueError):
                     pass
-                break
 
+        # Date
+        date_val = None
+        if "date" in col_map and col_map["date"] < len(r) and r[col_map["date"]] is not None:
+            date_val = _parse_safe_date(r[col_map["date"]])
+
+        # Plant
         plant_val = None
-        for k in plant_keys:
-            if k in r and r[k] is not None and str(r[k]).strip():
-                plant_val = str(r[k]).strip()
-                break
-
+        if "plant" in col_map and col_map["plant"] < len(r) and r[col_map["plant"]] is not None:
+            pv = str(r[col_map["plant"]]).strip()
+            if pv:
+                plant_val = pv
         if not plant_val and plant_id and str(plant_id).strip():
             plant_val = str(plant_id).strip()
 
         row_plant_key = _normalize_plant_identifier(plant_val) if plant_val else None
+
+        # UOM & Description
+        uom_val = None
+        if "uom" in col_map and col_map["uom"] < len(r) and r[col_map["uom"]] is not None:
+            uv = str(r[col_map["uom"]]).strip()
+            if uv:
+                uom_val = uv
+
+        desc_val = None
+        if "desc" in col_map and col_map["desc"] < len(r) and r[col_map["desc"]] is not None:
+            dv = str(r[col_map["desc"]]).strip()
+            if dv:
+                desc_val = dv
+
+        inv_val = grn_no_val or None
 
         item_key = item_val.strip().upper()
         agg_key = (item_key, row_plant_key)
@@ -1567,6 +1670,8 @@ def ingest_mrp_grn(
                 "rate": rate_val,
                 "row_plant_key": row_plant_key,
                 "raw_plant": plant_val,
+                "uom": uom_val,
+                "description": desc_val,
             }
         else:
             aggregated_incoming[agg_key]["qty"] += qty_clean
@@ -1576,15 +1681,12 @@ def ingest_mrp_grn(
                 aggregated_incoming[agg_key]["grn_date"] = date_val
             if rate_val is not None:
                 aggregated_incoming[agg_key]["rate"] = rate_val
+            if uom_val and not aggregated_incoming[agg_key].get("uom"):
+                aggregated_incoming[agg_key]["uom"] = uom_val
+            if desc_val and not aggregated_incoming[agg_key].get("description"):
+                aggregated_incoming[agg_key]["description"] = desc_val
 
-    if not aggregated_incoming:
-        raise ApplicationError(
-            "NO_VALID_GRN_ITEMS",
-            "Could not detect valid items or received quantities in uploaded GRN file. Ensure headers include 'item_id' / 'item_code' and 'grn_qty' / 'received_qty'.",
-            400,
-        )
-
-    # 3. Existing record index across month and year
+    # 4. Existing record index across month and year
     existing_records = session.scalars(
         select(MonthlyRequirementRecord).where(
             MonthlyRequirementRecord.planning_month == planning_month,
@@ -1611,10 +1713,11 @@ def ingest_mrp_grn(
         .limit(1)
     )
 
+    consumables_updated_count = 0
     updated_count = 0
     inserted_count = 0
 
-    # 4. Perform month-end overwrite upsert
+    # 5. Perform month-end overwrite upsert
     for entry in aggregated_incoming.values():
         raw_item = entry["raw_item"]
         incoming_qty = entry["qty"]
@@ -1623,6 +1726,8 @@ def ingest_mrp_grn(
         rate = entry["rate"]
         row_plant_key = entry["row_plant_key"]
         raw_plant = entry["raw_plant"]
+        row_uom = entry.get("uom")
+        row_desc = entry.get("description")
 
         # Resolve consumable master
         consumable = None
@@ -1633,19 +1738,29 @@ def ingest_mrp_grn(
             pass
         if not consumable:
             consumable = session.scalar(
-                select(Consumable).where(func.upper(Consumable.code) == raw_item.upper()).limit(1)
+                select(Consumable).where(func.upper(func.btrim(Consumable.item_id)) == raw_item.upper()).limit(1)
             )
 
         if consumable:
             consumable_code = consumable.code
-            consumable_name = consumable.name
-            consumable_uom = getattr(consumable, "output_unit", None) or getattr(consumable, "unit_of_measure", None) or "NOS"
+            consumable_name = getattr(consumable, "name", None) or row_desc or consumable.code
+            consumable_uom = getattr(consumable, "output_unit", None) or getattr(consumable, "unit_of_measure", None) or row_uom or "NOS"
             if rate is not None and hasattr(consumable, "latest_grn_rate"):
                 consumable.latest_grn_rate = rate
+                consumables_updated_count += 1
         else:
             consumable_code = raw_item
-            consumable_name = raw_item
-            consumable_uom = "NOS"
+            consumable_name = row_desc or raw_item
+            consumable_uom = row_uom or "NOS"
+            # Auto-create consumable in master so latest_grn_rate is recorded
+            new_consumable = Consumable(
+                item_id=raw_item.strip().upper(),
+                name=consumable_name,
+                output_unit=consumable_uom,
+                latest_grn_rate=rate if (rate is not None and rate > Decimal("0")) else Decimal("0.0"),
+            )
+            session.add(new_consumable)
+            consumables_updated_count += 1
 
         code_upper = consumable_code.strip().upper()
         raw_upper = raw_item.strip().upper()
@@ -1703,8 +1818,8 @@ def ingest_mrp_grn(
                 planning_month=planning_month,
                 planning_year=planning_year,
                 planning_version_id=version.id if version else None,
-                part_name="General",
-                part_number="GENERAL",
+                part_name=row_desc or "General",
+                part_number=raw_item.strip().upper(),
                 consumable_code=consumable_code,
                 consumable_name=consumable_name,
                 process_name="Store Receipt",
@@ -1760,6 +1875,7 @@ def ingest_mrp_grn(
                 "filename": filename,
                 "updated_count": updated_count,
                 "inserted_count": inserted_count,
+                "consumables_updated_count": consumables_updated_count,
             },
             reason=f"Ingested GRN month-end overwrite file {filename} for {plant_id or 'all plants'} ({planning_period})",
         )
@@ -1772,6 +1888,7 @@ def ingest_mrp_grn(
         "updated_count": updated_count,
         "inserted_count": inserted_count,
         "period": planning_period,
+        "consumables_updated_count": consumables_updated_count,
     }
 
 

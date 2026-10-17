@@ -406,3 +406,90 @@ def test_mrp_grn_upload_with_plant_column_updates_only_matching_plant(client, db
     c1 = db_session.get(Consumable, test_setup["consumable_1"].id)
     assert c1.latest_grn_rate == Decimal("520.00")
 
+
+def test_mrp_grn_ingest_store_export_with_title_and_summary_rows(client, db_session, test_setup):
+    headers = test_setup["auth_headers"]
+
+    # 1. Synthetic test simulating Knitvel store export structure
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["KNITVEL NEEDLES PVT LTD [ Financial Year : 2026-2027 ]"])
+    ws.append(["GRN Query Location-wise -KNITVEL NEEDLES"])
+    ws.append(["From 01-Oct-26 To 31-Oct-26"])
+    ws.append([
+        "GRN. No.", "GRN. Date", "Vendor", "Item Id.", "Item Description",
+        "Unit", "Order Qty.", "GRN. Qty.", "Billed Qty.", "Rate", "LandedCost Rate", "Cancelled ?"
+    ])
+    ws.append(["GRN-101", "01/10/2026", "VEND1", "ITEM-A", "Cutting Disc 4 inch", "NOS", 100, 80, 80, 50.0, 55.0, "no"])
+    ws.append(["GRN-102", "02/10/2026", "VEND1", "ITEM-B", "Hydraulic Oil 68", "LTRS", 200, 150, 150, 25.0, 28.0, "no"])
+    ws.append(["Total", "", "", "", "", "", 300, 230, 230, 0, 0, ""])
+    ws.append(["GRN-103", "03/10/2026", "VEND2", "ITEM-C", "Cancelled Drill Bit", "NOS", 50, 50, 50, 100.0, 110.0, "yes"])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    res = client.post(
+        "/api/v1/mrp/upload-grn",
+        headers=headers,
+        data={"planning_month": 10, "planning_year": 2026},
+        files={"file": ("store_export_sample.xlsx", buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["status"] == "success"
+    assert data["period"] == "2026-10"
+    assert data["inserted_count"] == 2
+    assert data["updated_count"] == 0
+    assert data["consumables_updated_count"] == 2
+
+    # Check ITEM-A
+    rec_a = db_session.scalar(
+        select(MonthlyRequirementRecord).where(
+            MonthlyRequirementRecord.consumable_code == "ITEM-A",
+            MonthlyRequirementRecord.planning_month == 10,
+            MonthlyRequirementRecord.planning_year == 2026,
+        )
+    )
+    assert rec_a is not None
+    assert rec_a.grn_received_qty == Decimal("80.0000")  # Picked GRN. Qty., not Order Qty. (100)
+    assert rec_a.unit == "NOS"
+    assert rec_a.part_name == "Cutting Disc 4 inch"
+
+    # Check ITEM-C was skipped because it was cancelled
+    rec_c = db_session.scalar(
+        select(MonthlyRequirementRecord).where(
+            MonthlyRequirementRecord.consumable_code == "ITEM-C",
+            MonthlyRequirementRecord.planning_month == 10,
+            MonthlyRequirementRecord.planning_year == 2026,
+        )
+    )
+    assert rec_c is None
+
+    # Check consumables created and rates set
+    con_a = db_session.scalar(select(Consumable).where(Consumable.item_id == "ITEM-A"))
+    assert con_a is not None
+    assert con_a.latest_grn_rate == Decimal("50.00")  # Picked Rate, not LandedCost Rate (55.0)
+
+    # 2. If real D:\kn\GRN-Oct.xlsx exists, test direct intake of all 108 valid rows / 86 unique items
+    import os
+    real_path = r"D:\kn\GRN-Oct.xlsx"
+    if os.path.exists(real_path):
+        with open(real_path, "rb") as f:
+            real_bytes = f.read()
+
+        res_real = client.post(
+            "/api/v1/mrp/upload-grn",
+            headers=headers,
+            data={"planning_month": 10, "planning_year": 2026},
+            files={"file": ("GRN-Oct.xlsx", io.BytesIO(real_bytes), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert res_real.status_code == 200, res_real.text
+        real_data = res_real.json()
+        assert real_data["status"] == "success"
+        assert real_data["period"] == "2026-10"
+        assert real_data["consumables_updated_count"] == 86
+        assert real_data["inserted_count"] == 86
+
+

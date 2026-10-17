@@ -416,11 +416,16 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
         updated_count: number;
         inserted_count: number;
         period: string;
+        consumables_updated_count?: number;
       }>('/api/v1/mrp/upload-grn', formData);
+
+      const ratesNote = res.consumables_updated_count
+        ? `, ${res.consumables_updated_count} unique consumable rates updated`
+        : '';
 
       setStatusMessage({
         type: 'success',
-        text: `GRN uploaded successfully for ${res.period}: ${res.updated_count} record(s) updated, ${res.inserted_count} inserted.`,
+        text: `GRN uploaded successfully for ${res.period}: ${res.updated_count} record(s) updated, ${res.inserted_count} inserted${ratesNote}.`,
       });
 
       setIsGrnModalOpen(false);

@@ -83,6 +83,7 @@ class MRPGRNUploadResponse(BaseModel):
     updated_count: int
     inserted_count: int
     period: str
+    consumables_updated_count: int = 0
 
 
 class RequirementRowError(BaseModel):

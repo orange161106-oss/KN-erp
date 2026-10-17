@@ -71,40 +71,76 @@ def _parse_date(val: Any) -> Optional[datetime]:
     return None
 
 
-ITEM_CODE_ALIASES = [
-    "item id", "item code", "item_id", "item_code", "itemid", "itemcode",
-    "part no", "part_no", "partno", "part number", "material", "item", "material code",
-]
+def _normalize_header_slug(val: Any) -> str:
+    if val is None:
+        return ""
+    return re.sub(r"[^a-z0-9]", "", str(val).lower())
 
-QTY_ALIASES = [
-    "receipt qty", "receipt_qty", "received qty", "received_qty", "accepted qty",
-    "accepted_qty", "qty", "quantity", "receipt quantity", "received quantity",
-    "qty received", "grn qty", "rcvd qty",
-]
 
-RATE_ALIASES = [
-    "unit rate", "unit_rate", "rate", "unit price", "unit_price", "basic rate",
-    "po rate", "price", "item rate", "cost", "unit cost", "rate (inr)", "rate (₹)",
-]
+ITEM_CODE_SLUGS = {
+    "itemid", "itemcode", "partno", "partnumber", "consumableid",
+    "consumablecode", "materialcode", "itemno", "item", "consumable", "material"
+}
 
-GRN_NO_ALIASES = [
-    "grn no", "grn_no", "grn number", "doc no", "document no", "receipt no",
-    "receipt number", "grn#", "doc#", "invoice no", "dc no",
-]
+QTY_SLUGS = {
+    "grnqty", "receivedqty", "acceptedqty", "billedqty", "qty",
+    "receiptqty", "grnquantity", "receivedquantity", "quantity", "received", "accepted"
+}
 
-DATE_ALIASES = [
-    "grn date", "date", "receipt date", "doc date", "posting date", "bill date",
-    "invoice date", "entry date",
-]
+RATE_SLUGS = {
+    "rate", "unitprice", "basicrate", "landedcostrate", "unitrate",
+    "grnrate", "price", "cost", "unitcost", "itemrate"
+}
 
-VENDOR_ALIASES = [
-    "vendor name", "vendor", "supplier name", "supplier", "party name", "party",
-    "vendor_name", "supplier_name",
-]
+GRN_NO_SLUGS = {
+    "grnno", "grnnumber", "grnid", "docno", "documentno",
+    "receiptno", "receiptnumber", "invoiceno", "invoicenum", "invoicenumber",
+    "billno", "dcno", "challanno", "doc"
+}
 
-PLANT_ALIASES = [
-    "plant", "plant_id", "facility", "plant_name", "location", "unit_location", "works", "unit_name", "unit",
-]
+DATE_SLUGS = {
+    "grndate", "date", "receiptdate", "docdate", "postingdate",
+    "billdate", "invoicedate", "entrydate"
+}
+
+VENDOR_SLUGS = {
+    "suppliername", "vendorname", "supplier", "vendor",
+    "partyname", "party", "supplierid", "vendorid"
+}
+
+PLANT_SLUGS = {
+    "plant", "plantid", "plantname", "location", "facility",
+    "unitlocation", "works", "plantunit", "worklocation"
+}
+
+UOM_SLUGS = {
+    "unit", "uom", "unitofmeasure", "outputunit"
+}
+
+CANCELLED_SLUGS = {
+    "cancelled", "canceled", "iscancelled", "iscanceled"
+}
+
+DESC_SLUGS = {
+    "description", "itemdescription", "itemname", "name", "materialname",
+    "materialdescription", "partname", "partdescription", "itemdesc", "desc", "productdescription"
+}
+
+
+def _score_qty_slug(slug: str) -> int:
+    if slug in ("grnqty", "receivedqty", "grnquantity", "receivedquantity", "receiptqty"):
+        return 3
+    if slug in ("acceptedqty", "accepted"):
+        return 2
+    return 1
+
+
+def _score_rate_slug(slug: str) -> int:
+    if slug in ("rate", "unitrate", "unitprice", "basicrate", "grnrate", "price"):
+        return 3
+    if slug in ("landedcostrate", "cost", "unitcost", "itemrate"):
+        return 2
+    return 1
 
 
 def _norm_plant(val: Optional[str]) -> str:
@@ -126,11 +162,6 @@ def _norm_plant(val: Optional[str]) -> str:
     return roman_map.get(cleaned, cleaned)
 
 
-def _match_col(name: str, aliases: list[str]) -> bool:
-    norm = re.sub(r"[_\-\.\(\)\s]+", " ", name.lower()).strip()
-    return norm in aliases or any(alias in norm for alias in aliases)
-
-
 def parse_grn_tabular_rows(rows: list[list[Any]], filename: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Parse a list of raw rows (from excel or csv) into metadata and line items."""
     metadata: dict[str, Any] = {
@@ -139,86 +170,42 @@ def parse_grn_tabular_rows(rows: list[list[Any]], filename: str) -> tuple[dict[s
         "vendor_name": None,
     }
 
-    # Pass 1: Find the header row and map columns
+    # Pass 1: Dynamic header row detection in first 10 rows
     header_row_idx = -1
     col_map: dict[str, int] = {}
 
-    for row_idx, row in enumerate(rows[:15]):
-        str_cells = [_clean_str(c) for c in row]
-
-        detected_item_col = -1
-        detected_qty_col = -1
-        detected_rate_col = -1
-
-        for c_idx, cell in enumerate(str_cells):
-            if not cell:
-                continue
-            if _match_col(cell, ITEM_CODE_ALIASES) and detected_item_col == -1:
-                detected_item_col = c_idx
-            elif _match_col(cell, QTY_ALIASES) and detected_qty_col == -1:
-                detected_qty_col = c_idx
-            elif _match_col(cell, RATE_ALIASES) and detected_rate_col == -1:
-                detected_rate_col = c_idx
-
-        # If this row is the table header:
-        if detected_item_col != -1 and (detected_qty_col != -1 or detected_rate_col != -1):
+    for row_idx, row in enumerate(rows[:10]):
+        slugs = [_normalize_header_slug(c) for c in row]
+        has_item = any(s in ITEM_CODE_SLUGS for s in slugs if s)
+        has_qty = any(s in QTY_SLUGS for s in slugs if s)
+        if has_item and has_qty:
             header_row_idx = row_idx
-            col_map["item_code"] = detected_item_col
-            if detected_qty_col != -1:
-                col_map["qty"] = detected_qty_col
-            if detected_rate_col != -1:
-                col_map["rate"] = detected_rate_col
-
-            # Detect additional columns in this header row
-            for c_idx, cell in enumerate(str_cells):
-                if c_idx in (detected_item_col, detected_qty_col, detected_rate_col):
+            for c_idx, s in enumerate(slugs):
+                if not s:
                     continue
-                if _match_col(cell, GRN_NO_ALIASES) and "grn_no" not in col_map:
+                if s in ITEM_CODE_SLUGS and "item_code" not in col_map:
+                    col_map["item_code"] = c_idx
+                elif s in QTY_SLUGS:
+                    if "qty" not in col_map or _score_qty_slug(s) > _score_qty_slug(slugs[col_map["qty"]]):
+                        col_map["qty"] = c_idx
+                elif s in RATE_SLUGS:
+                    if "rate" not in col_map or _score_rate_slug(s) > _score_rate_slug(slugs[col_map["rate"]]):
+                        col_map["rate"] = c_idx
+                elif s in GRN_NO_SLUGS and "grn_no" not in col_map:
                     col_map["grn_no"] = c_idx
-                elif _match_col(cell, DATE_ALIASES) and "grn_date" not in col_map:
+                elif s in DATE_SLUGS and "grn_date" not in col_map:
                     col_map["grn_date"] = c_idx
-                elif _match_col(cell, VENDOR_ALIASES) and "vendor_name" not in col_map:
+                elif s in VENDOR_SLUGS and "vendor_name" not in col_map:
                     col_map["vendor_name"] = c_idx
-                elif _match_col(cell, PLANT_ALIASES) and "plant" not in col_map:
+                elif s in PLANT_SLUGS and "plant" not in col_map:
                     col_map["plant"] = c_idx
+                elif s in UOM_SLUGS and "uom" not in col_map:
+                    col_map["uom"] = c_idx
+                elif s in CANCELLED_SLUGS and "cancelled" not in col_map:
+                    col_map["cancelled"] = c_idx
+                elif s in DESC_SLUGS and "desc" not in col_map:
+                    col_map["desc"] = c_idx
             break
-
-    # If header row was found after row 0, scan rows 0 to header_row_idx - 1 for title metadata
-    if header_row_idx > 0:
-        for row in rows[:header_row_idx]:
-            for c_idx, cell in enumerate(row):
-                s = _clean_str(cell)
-                # Check for "GRN No: 123"
-                m_grn = re.search(r"(?:GRN\s*(?:No|Number|#)?|Doc\s*No)[\s:]+([A-Za-z0-9\-\/]+)", s, re.IGNORECASE)
-                if m_grn and not metadata["grn_no"]:
-                    metadata["grn_no"] = m_grn.group(1).strip()
-                if _match_col(s, GRN_NO_ALIASES) and c_idx + 1 < len(row) and not metadata["grn_no"]:
-                    val = _clean_str(row[c_idx + 1])
-                    if val and len(val) > 1:
-                        metadata["grn_no"] = val
-
-                m_ven = re.search(r"(?:Vendor|Supplier|Party)[\s:]+([A-Za-z0-9\s\.\,&]+)", s, re.IGNORECASE)
-                if m_ven and not metadata["vendor_name"]:
-                    metadata["vendor_name"] = m_ven.group(1).strip()
-                if _match_col(s, VENDOR_ALIASES) and c_idx + 1 < len(row) and not metadata["vendor_name"]:
-                    val = _clean_str(row[c_idx + 1])
-                    if val:
-                        metadata["vendor_name"] = val
-
-                m_dt = re.search(r"(?:Date|GRN\s*Date)[\s:]+([0-9\-\/\.]{8,10})", s, re.IGNORECASE)
-                if m_dt and not metadata["grn_date"]:
-                    metadata["grn_date"] = _parse_date(m_dt.group(1))
-                if _match_col(s, DATE_ALIASES) and c_idx + 1 < len(row) and not metadata["grn_date"]:
-                    val = _parse_date(row[c_idx + 1])
-                    if val:
-                        metadata["grn_date"] = val
-
-    # Fallback column positions if no header was found
-    if header_row_idx == -1:
-        header_row_idx = 0
-        col_map["item_code"] = 2 if len(rows[0]) > 2 else 0
-        col_map["qty"] = 14 if len(rows[0]) > 14 else (1 if len(rows[0]) > 1 else 0)
-        col_map["rate"] = 20 if len(rows[0]) > 20 else (2 if len(rows[0]) > 2 else 0)
 
     # Pass 2: Extract data rows
     line_items: list[dict[str, Any]] = []
@@ -228,13 +215,25 @@ def parse_grn_tabular_rows(rows: list[list[Any]], filename: str) -> tuple[dict[s
         if not row:
             continue
 
+        # Skip summary rows
+        if "grn_no" in col_map and col_map["grn_no"] < len(row):
+            grn_val = _clean_str(row[col_map["grn_no"]])
+            if grn_val.lower().startswith("total"):
+                continue
+
         item_col_idx = col_map.get("item_code", 0)
         if item_col_idx >= len(row):
             continue
 
         raw_item_code = _clean_str(row[item_col_idx]).upper()
-        if not raw_item_code or raw_item_code in ("TOTAL", "GRAND TOTAL", "SUB TOTAL", "SUBTOTAL"):
+        if not raw_item_code or raw_item_code in ("TOTAL", "GRAND TOTAL", "SUB TOTAL", "SUBTOTAL") or raw_item_code.startswith("TOTAL"):
             continue
+
+        # Skip cancelled rows
+        if "cancelled" in col_map and col_map["cancelled"] < len(row):
+            canc_val = _clean_str(row[col_map["cancelled"]]).lower()
+            if canc_val in ("yes", "y", "true", "1"):
+                continue
 
         qty_idx = col_map.get("qty")
         rate_idx = col_map.get("rate")
@@ -245,7 +244,7 @@ def parse_grn_tabular_rows(rows: list[list[Any]], filename: str) -> tuple[dict[s
         # Row-level metadata
         if "grn_no" in col_map and col_map["grn_no"] < len(row):
             row_grn = _clean_str(row[col_map["grn_no"]])
-            if row_grn and not metadata["grn_no"]:
+            if row_grn and (not metadata["grn_no"] or metadata["grn_no"] == "Query"):
                 metadata["grn_no"] = row_grn
 
         if "grn_date" in col_map and col_map["grn_date"] < len(row):
@@ -264,16 +263,30 @@ def parse_grn_tabular_rows(rows: list[list[Any]], filename: str) -> tuple[dict[s
             if val_p:
                 row_plant = val_p
 
+        desc_val = None
+        if "desc" in col_map and col_map["desc"] < len(row):
+            val_d = _clean_str(row[col_map["desc"]])
+            if val_d:
+                desc_val = val_d
+
+        uom_val = None
+        if "uom" in col_map and col_map["uom"] < len(row):
+            val_u = _clean_str(row[col_map["uom"]])
+            if val_u:
+                uom_val = val_u
+
         line_items.append({
             "item_code": raw_item_code,
             "received_qty": qty,
             "unit_rate": rate,
             "total_amount": round(qty * rate, 2),
             "plant": row_plant,
+            "description": desc_val,
+            "uom": uom_val,
         })
 
     # Fallback metadata
-    if not metadata["grn_no"]:
+    if not metadata["grn_no"] or metadata["grn_no"] == "Query":
         stem = re.sub(r"[^A-Za-z0-9\-]", "", filename.split(".")[0])
         metadata["grn_no"] = f"GRN-{stem.upper() or 'IMPORT'}-{int(datetime.now().timestamp())}"
 
@@ -357,6 +370,8 @@ def process_grn_ingestion(
         q = float(it["received_qty"] or 0.0)
         r = float(it["unit_rate"] or 0.0)
         p = it.get("plant")
+        d = it.get("description")
+        u = it.get("uom")
         if code not in aggregated_items:
             aggregated_items[code] = {
                 "item_code": code,
@@ -364,6 +379,8 @@ def process_grn_ingestion(
                 "unit_rate": r,
                 "total_amount": q * r,
                 "plant": p,
+                "description": d,
+                "uom": u,
             }
         else:
             prev = aggregated_items[code]
@@ -373,6 +390,10 @@ def process_grn_ingestion(
             prev["total_amount"] = new_amount
             if p and not prev.get("plant"):
                 prev["plant"] = p
+            if d and not prev.get("description"):
+                prev["description"] = d
+            if u and not prev.get("uom"):
+                prev["uom"] = u
             # Use latest positive rate or weighted average
             if r > 0.0:
                 prev["unit_rate"] = r
@@ -389,20 +410,30 @@ def process_grn_ingestion(
         qty = float(it_data["received_qty"])
         amount = round(float(it_data["total_amount"]), 2)
 
+        if not consumable:
+            consumable = Consumable(
+                item_id=code,
+                name=it_data.get("description") or code,
+                output_unit=it_data.get("uom") or "NOS",
+                latest_grn_rate=Decimal(str(round(rate, 4))) if rate > 0.0 else Decimal("0.0"),
+            )
+            db.add(consumable)
+            matched_consumables[code] = consumable
+            consumables_updated_count += 1
+        else:
+            if rate > 0.0:
+                consumable.latest_grn_rate = Decimal(str(round(rate, 4)))
+                consumables_updated_count += 1
+
         grn_item = GRNLineItem(
             grn_id=grn_record.id,
-            consumable_id=consumable.id if consumable else None,
+            consumable_id=consumable.id,
             item_code=code,
             received_qty=qty,
             unit_rate=rate,
             total_amount=amount,
         )
         db.add(grn_item)
-
-        if consumable:
-            if rate > 0.0:
-                consumable.latest_grn_rate = Decimal(str(round(rate, 4)))
-                consumables_updated_count += 1
 
         parsed_response_items.append(
             GRNParsedItemResponse(
