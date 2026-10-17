@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
-import { apiClient, fetchWithAuth } from '../../api/client';
+import { apiClient } from '../../api/client';
 import { useAuth } from '../auth/context';
 import { canPerform } from '../../core/rbac';
 import DataTable, { type ColumnDef, type HeaderGroupDef } from '../../components/DataTable';
@@ -10,7 +10,6 @@ const RequirementPlanAction = lazy(()=>import('./RequirementPlanAction'));
 import {
   FileSpreadsheet,
   UploadCloud,
-  Download,
   Save,
   RefreshCw,
   CheckCircle2,
@@ -149,7 +148,6 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
   const [isExporting, setIsExporting] = useState(false);
   const pendingExport = useRef(false);
   const pendingIssuesExport = useRef(false);
-  const [isDownloadingIssues, setIsDownloadingIssues] = useState(false);
 
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
@@ -522,38 +520,6 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
       pendingExport.current = false;
       setIsExporting(false);
     }
-  };
-
-  // Download issues list CSV with authentication
-  const handleDownloadIssues = async () => {
-    setIsDownloadingIssues(true);
-    try {
-      const period = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`;
-      const response = await fetchWithAuth(
-        `/api/v1/requirements/workspace/issues/export?period=${period}`
-      );
-      if (!response.ok) {
-        throw new Error(`Failed to export issues: ${response.statusText}`);
-      }
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `requirement_issues_${selectedYear}_${String(selectedMonth).padStart(2, '0')}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error("Export issues error:", error);
-      setStatusMessage({
-        type: 'error',
-        text: 'Failed to download issues list',
-      });
-    } finally {
-      setIsDownloadingIssues(false);
-    }
-
   };
 
   // Filter options
