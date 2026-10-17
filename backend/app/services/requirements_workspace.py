@@ -101,31 +101,55 @@ def get_monthly_plan_metadata(
     issues_cnt = 0
     reconciled_count = 0
     last_synced = None
+
+    grn_cnt_sq = select(func.count(MonthlyRequirementRecord.id)).where(
+        MonthlyRequirementRecord.planning_period == planning_period,
+        MonthlyRequirementRecord.is_deleted == False,
+        or_(
+            MonthlyRequirementRecord.grn_received_qty > 0,
+            MonthlyRequirementRecord.last_synced_at.is_not(None),
+            MonthlyRequirementRecord.grn_source_file.is_not(None),
+        ),
+    ).scalar_subquery()
+
+    grn_max_sq = select(func.max(MonthlyRequirementRecord.last_synced_at)).where(
+        MonthlyRequirementRecord.planning_period == planning_period,
+        MonthlyRequirementRecord.is_deleted == False,
+        or_(
+            MonthlyRequirementRecord.grn_received_qty > 0,
+            MonthlyRequirementRecord.last_synced_at.is_not(None),
+            MonthlyRequirementRecord.grn_source_file.is_not(None),
+        ),
+    ).scalar_subquery()
+
     if central:
         counts = [select(func.count(model.id)).where(model.planning_version_id == version.id).scalar_subquery()
             for model in (CalculatedRequirement, RequirementCalculationError)]
-        calc_cnt, issues_cnt = session.execute(select(counts[0], counts[1])).one()
-        rec_count = (calc_cnt or 0) + (issues_cnt or 0)
-    else:
-        rec_count = session.scalar(select(func.count(MonthlyRequirementRecord.id)).where(
-            MonthlyRequirementRecord.planning_version_id == version.id,
-            MonthlyRequirementRecord.is_deleted == False)) or 0  # noqa: E712
-        grn_stats = session.execute(
-            select(
-                func.count(MonthlyRequirementRecord.id),
-                func.max(MonthlyRequirementRecord.last_synced_at),
-            ).where(
-                MonthlyRequirementRecord.planning_period == planning_period,
-                MonthlyRequirementRecord.is_deleted == False,  # noqa: E712
-                or_(
-                    MonthlyRequirementRecord.grn_received_qty > 0,
-                    MonthlyRequirementRecord.last_synced_at.is_not(None),
-                    MonthlyRequirementRecord.grn_source_file.is_not(None),
-                ),
-            )
+        extra_grn_sq = select(func.count(MonthlyRequirementRecord.id)).where(
+            MonthlyRequirementRecord.planning_period == planning_period,
+            MonthlyRequirementRecord.is_deleted == False,
+            or_(
+                MonthlyRequirementRecord.grn_source_file.is_not(None),
+                MonthlyRequirementRecord.process_name == "Store Receipt",
+            ),
+        ).scalar_subquery()
+
+        calc_cnt, issues_cnt, extra_grn_cnt, reconciled_count, last_synced = session.execute(
+            select(counts[0], counts[1], extra_grn_sq, grn_cnt_sq, grn_max_sq)
         ).one()
-        reconciled_count = grn_stats[0] or 0
-        last_synced = grn_stats[1]
+        rec_count = (calc_cnt or 0) + (issues_cnt or 0) + (extra_grn_cnt or 0)
+    else:
+        mrr_cnt_sq = select(func.count(MonthlyRequirementRecord.id)).where(
+            MonthlyRequirementRecord.planning_version_id == version.id,
+            MonthlyRequirementRecord.is_deleted == False,
+        ).scalar_subquery()
+
+        rec_count, reconciled_count, last_synced = session.execute(
+            select(mrr_cnt_sq, grn_cnt_sq, grn_max_sq)
+        ).one()
+        rec_count = rec_count or 0
+
+    reconciled_count = reconciled_count or 0
 
     return MonthlyPlanMetadata(
         has_plan=True,
@@ -177,11 +201,19 @@ def calculate_workspace_requirements(
     from app.services import basic_planning
     batch_metadata = select(ImportBatch.validation_summary).where(
         ImportBatch.planning_version_id == PlanningVersion.id).limit(1).scalar_subquery()
-    period_row = session.execute(select(PlanningVersion, batch_metadata)
+    mrr_count_subquery = select(func.count(MonthlyRequirementRecord.id)).where(
+        MonthlyRequirementRecord.planning_period == target_period,
+        MonthlyRequirementRecord.is_deleted == False,
+    ).limit(1).scalar_subquery() if target_period else None
+
+    period_row = session.execute(
+        select(PlanningVersion, batch_metadata, mrr_count_subquery)
         .where(PlanningVersion.planning_period == target_period)
-        .order_by(PlanningVersion.version_number.desc()).limit(1)).first() if target_period else None
+        .order_by(PlanningVersion.version_number.desc()).limit(1)
+    ).first() if target_period else None
     period_version = period_row[0] if period_row else None
     central = bool(period_row and (period_row[1] or {}).get('workflow') == basic_planning.WORKFLOW)
+    has_mrr = bool(period_row and (period_row[2] or 0) > 0)
     monthly_rows = [] if central else session.scalars(query.order_by(MonthlyRequirementRecord.row_index, MonthlyRequirementRecord.created_at)).all()
 
     results: list[RequirementWorkspaceRecord] = []
@@ -245,6 +277,17 @@ def calculate_workspace_requirements(
         for version in versions:
             latest.setdefault(version.planning_period, version)
 
+        # Build index of MonthlyRequirementRecord for this period
+        mrr_records = session.scalars(
+            select(MonthlyRequirementRecord).where(
+                MonthlyRequirementRecord.planning_period == target_period,
+                MonthlyRequirementRecord.is_deleted == False,
+            )
+        ).all() if (target_period and has_mrr) else []
+        mrr_by_code: dict[str, list[MonthlyRequirementRecord]] = {}
+        for m in mrr_records:
+            mrr_by_code.setdefault(m.consumable_code.strip().upper(), []).append(m)
+
         for version in latest.values():
             requirements = session.scalars(
                 select(CalculatedRequirement).options(joinedload(CalculatedRequirement.consumable),
@@ -270,6 +313,24 @@ def calculate_workspace_requirements(
                     reference = references.get(row.rule_id) or {}
                     p_thick = str(reference.get("thickness") or row.parameters.get("thickness", "0.0000"))
                     p_count = int(Decimal(str(reference.get("process_count") or row.parameters.get("process_count", row.parameters.get("processes", 1)))))
+
+                mat_code = material.code.strip().upper() if material and material.code else ""
+                matching_mrrs = mrr_by_code.get(mat_code, [])
+                grn_rec_qty = Decimal("0.0")
+                cls_stk = Decimal("0.0")
+                mrr_file = None
+                mrr_inv = None
+                mrr_dt = None
+                mrr_sync = None
+                if matching_mrrs:
+                    plant_k = _normalize_plant_identifier(plant.name if plant else None)
+                    matched_mrr = next((m for m in matching_mrrs if _normalize_plant_identifier(m.plant_id or m.plant) == plant_k), matching_mrrs[0])
+                    grn_rec_qty = matched_mrr.grn_received_qty or Decimal("0.0")
+                    cls_stk = matched_mrr.closing_stock if matched_mrr.closing_stock is not None else grn_rec_qty
+                    mrr_file = matched_mrr.grn_source_file
+                    mrr_inv = matched_mrr.invoice_no
+                    mrr_dt = matched_mrr.grn_date
+                    mrr_sync = matched_mrr.last_synced_at
 
                 results.append(
                     RequirementWorkspaceRecord(
@@ -297,6 +358,12 @@ def calculate_workspace_requirements(
                         msl="Unavailable",
                         status="Calculated",
                         remarks=row.rounding_policy,
+                        grn_received_qty=format(grn_rec_qty, ".4f"),
+                        closing_stock=format(cls_stk if cls_stk > Decimal("0") else grn_rec_qty, ".4f"),
+                        last_synced_at=mrr_sync,
+                        grn_source_file=mrr_file,
+                        invoice_no=mrr_inv,
+                        grn_date=mrr_dt,
                         created_at=row.created_at,
                         updated_at=row.updated_at,
                     )
@@ -304,6 +371,24 @@ def calculate_workspace_requirements(
 
             for error in errors:
                 plant, product, material = error.plant, error.product, error.consumable
+                mat_code = material.code.strip().upper() if material and material.code else ""
+                matching_mrrs = mrr_by_code.get(mat_code, [])
+                grn_rec_qty = Decimal("0.0")
+                cls_stk = Decimal("0.0")
+                mrr_file = None
+                mrr_inv = None
+                mrr_dt = None
+                mrr_sync = None
+                if matching_mrrs:
+                    plant_k = _normalize_plant_identifier(plant.name if plant else None)
+                    matched_mrr = next((m for m in matching_mrrs if _normalize_plant_identifier(m.plant_id or m.plant) == plant_k), matching_mrrs[0])
+                    grn_rec_qty = matched_mrr.grn_received_qty or Decimal("0.0")
+                    cls_stk = matched_mrr.closing_stock if matched_mrr.closing_stock is not None else grn_rec_qty
+                    mrr_file = matched_mrr.grn_source_file
+                    mrr_inv = matched_mrr.invoice_no
+                    mrr_dt = matched_mrr.grn_date
+                    mrr_sync = matched_mrr.last_synced_at
+
                 results.append(
                     RequirementWorkspaceRecord(
                         id=str(error.id),
@@ -330,9 +415,68 @@ def calculate_workspace_requirements(
                         msl="Unavailable",
                         status="Configuration required",
                         remarks=error.error_code,
+                        grn_received_qty=format(grn_rec_qty, ".4f"),
+                        closing_stock=format(cls_stk if cls_stk > Decimal("0") else grn_rec_qty, ".4f"),
+                        last_synced_at=mrr_sync,
+                        grn_source_file=mrr_file,
+                        invoice_no=mrr_inv,
+                        grn_date=mrr_dt,
                         created_at=error.created_at,
                     )
                 )
+
+            # Include store receipts and standalone GRN intake items from MonthlyRequirementRecord
+            added_codes = {r.consumable_code.strip().upper() for r in results if r.consumable_code}
+            for m in mrr_records:
+                is_store_receipt = (
+                    m.process_name == "Store Receipt"
+                    or bool(m.grn_source_file)
+                    or (m.grn_received_qty and m.grn_received_qty > Decimal("0"))
+                )
+                if is_store_receipt and m.consumable_code.strip().upper() not in added_codes:
+                    results.append(
+                        RequirementWorkspaceRecord(
+                            id=str(m.id),
+                            plan_id=str(m.planning_version_id) if m.planning_version_id else str(version.id),
+                            planning_period=m.planning_period,
+                            planning_month=m.planning_month,
+                            planning_year=m.planning_year,
+                            revision=m.planning_version.revision_label if m.planning_version else version.revision_label,
+                            part_name=m.part_name,
+                            part_number=m.part_number,
+                            consumable_code=m.consumable_code,
+                            consumable_name=m.consumable_name,
+                            process_name=m.process_name,
+                            part_thickness=format(m.part_thickness, ".4f"),
+                            process_count=m.process_count,
+                            production_order_qty=format(m.production_order_qty, ".4f"),
+                            scheduled_consumable_qty=format(m.scheduled_consumable_qty, ".4f"),
+                            plant=m.plant,
+                            process=m.process_name,
+                            description=m.consumable_name,
+                            unit=m.unit,
+                            required_qty=format(m.scheduled_consumable_qty, ".4f"),
+                            stock_qty=format(m.stock_qty, ".4f"),
+                            shortage_qty=format(m.shortage_qty, ".4f"),
+                            po_pending_qty=format(m.po_pending_qty, ".4f"),
+                            msl=format(m.msl, ".4f"),
+                            status=m.status,
+                            remarks=m.remarks,
+                            opening_stock=format(getattr(m, "opening_stock", Decimal("0.0")), ".4f"),
+                            grn_received_qty=format(getattr(m, "grn_received_qty", Decimal("0.0")), ".4f"),
+                            consumed_qty=format(getattr(m, "consumed_qty", Decimal("0.0")), ".4f"),
+                            closing_stock=format(getattr(m, "closing_stock", Decimal("0.0")), ".4f"),
+                            gross_requirement=format(getattr(m, "gross_requirement", Decimal("0.0")), ".4f"),
+                            net_order_requirement=format(getattr(m, "net_order_requirement", Decimal("0.0")), ".4f"),
+                            last_synced_at=m.last_synced_at,
+                            grn_source_file=m.grn_source_file,
+                            invoice_no=m.invoice_no,
+                            grn_date=m.grn_date,
+                            created_at=m.created_at,
+                            updated_at=m.updated_at,
+                        )
+                    )
+                    added_codes.add(m.consumable_code.strip().upper())
 
     # Filter predicate
     def matches(record: RequirementWorkspaceRecord) -> bool:

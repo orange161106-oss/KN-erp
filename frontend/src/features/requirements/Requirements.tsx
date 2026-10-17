@@ -681,7 +681,17 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
         width: 120,
         minWidth: 80,
         align: 'right',
-        render: val => <span className="font-mono text-gray-700">{val}</span>,
+        render: (val, row) => {
+          const displayVal =
+            val && val !== 'Unavailable'
+              ? val
+              : (row.closing_stock != null && row.closing_stock !== '' && Number(row.closing_stock) > 0)
+              ? String(row.closing_stock)
+              : (row.grn_received_qty != null && row.grn_received_qty !== '' && Number(row.grn_received_qty) > 0)
+              ? String(row.grn_received_qty)
+              : val || '—';
+          return <span className="font-mono text-gray-700">{displayVal}</span>;
+        },
       },
       {
         key: 'grn_received_qty',
@@ -1146,40 +1156,42 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
         {/* Section 7 & 7A: Spreadsheet Table Grid with ALWAYS VISIBLE HEADERS */}
         <div className="flex-1 min-h-0">
-          <DataTable
-            virtualize
-            columns={columns}
-            headerGroups={headerGroups}
-            data={filteredRecords}
-            originalData={originalMap}
-            selectedIds={selectedRowIds}
-            onSelectionChange={setSelectedRowIds}
-            onCellChange={handleCellChange}
-            onSave={handleSaveChanges}
-            onDeleteRows={handleDeleteRows}
-            onDiscardChanges={handleDiscardChanges}
-            isLoading={isLoading}
-            emptyMessage={`No consumable requirements found for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Click 'Upload Excel' to import a plan.`}
-            canCreate={false}
-            canUpdate={canEditPlan}
-            canDelete={canEditPlan}
-            selectedCell={selectedCell}
-            onSelectCell={setSelectedCell}
-            storageKey="knl_requirements_grid"
-            saveStatus={isSaving ? 'saving' : modifiedRecords.size > 0 ? 'idle' : 'saved'}
-            lastModifiedText={
-              planMetadata?.updated_at
-                ? `Modified ${formatDisplayDate(planMetadata.updated_at)}${planMetadata.updated_by_name ? ` by ${planMetadata.updated_by_name}` : ''}`
-                : undefined
-            }
-            onExport={handleExport}
-            getRowClassName={row => {
-              if (row.status === 'Critical shortage') return 'bg-red-50/70 hover:bg-red-100/70 font-medium';
-              if (row.status === 'Low') return 'bg-amber-50/60 hover:bg-amber-100/60';
-              if (row.status === 'Configuration required') return 'bg-purple-50/60 hover:bg-purple-100/60';
-              return '';
-            }}
-          />
+          <div className="overflow-x-auto overflow-y-auto max-h-[calc(100vh-320px)] border border-slate-200 rounded-lg">
+            <DataTable
+              virtualize
+              columns={columns}
+              headerGroups={headerGroups}
+              data={filteredRecords}
+              originalData={originalMap}
+              selectedIds={selectedRowIds}
+              onSelectionChange={setSelectedRowIds}
+              onCellChange={handleCellChange}
+              onSave={handleSaveChanges}
+              onDeleteRows={handleDeleteRows}
+              onDiscardChanges={handleDiscardChanges}
+              isLoading={isLoading}
+              emptyMessage={`No consumable requirements found for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Click 'Upload Excel' to import a plan.`}
+              canCreate={false}
+              canUpdate={canEditPlan}
+              canDelete={canEditPlan}
+              selectedCell={selectedCell}
+              onSelectCell={setSelectedCell}
+              storageKey="knl_requirements_grid"
+              saveStatus={isSaving ? 'saving' : modifiedRecords.size > 0 ? 'idle' : 'saved'}
+              lastModifiedText={
+                planMetadata?.updated_at
+                  ? `Modified ${formatDisplayDate(planMetadata.updated_at)}${planMetadata.updated_by_name ? ` by ${planMetadata.updated_by_name}` : ''}`
+                  : undefined
+              }
+              onExport={handleExport}
+              getRowClassName={row => {
+                if (row.status === 'Critical shortage') return 'bg-red-50/70 hover:bg-red-100/70 font-medium';
+                if (row.status === 'Low') return 'bg-amber-50/60 hover:bg-amber-100/60';
+                if (row.status === 'Configuration required') return 'bg-purple-50/60 hover:bg-purple-100/60';
+                return '';
+              }}
+            />
+          </div>
         </div>
       </div>
 
@@ -1404,7 +1416,13 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
                 <div className="p-3 bg-gray-50 border border-gray-200 rounded">
                   <div className="text-2xs font-semibold text-gray-500 uppercase">3. Current Stock</div>
                   <div className="text-base font-bold text-gray-900 mt-1">
-                    {selectedAuditRow.stock_qty}{' '}
+                    {selectedAuditRow.stock_qty && selectedAuditRow.stock_qty !== 'Unavailable'
+                      ? selectedAuditRow.stock_qty
+                      : (selectedAuditRow.closing_stock != null && Number(selectedAuditRow.closing_stock) > 0)
+                      ? String(selectedAuditRow.closing_stock)
+                      : (selectedAuditRow.grn_received_qty != null && Number(selectedAuditRow.grn_received_qty) > 0)
+                      ? String(selectedAuditRow.grn_received_qty)
+                      : selectedAuditRow.stock_qty || '—'}{' '}
                     <span className="text-2xs font-normal text-gray-500">{selectedAuditRow.unit}</span>
                   </div>
                   <div className="text-3xs text-gray-400 mt-0.5">Physical closing stock</div>
