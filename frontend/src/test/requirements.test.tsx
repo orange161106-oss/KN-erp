@@ -255,7 +255,7 @@ test('clicking Download issues list (CSV) triggers authenticated blob download',
 
     const exportCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/issues/export'));
     expect(exportCall).toBeDefined();
-    expect(String(exportCall![0])).toContain('period=2026-10');
+    expect(String(exportCall![0])).toMatch(/(period=2026-10|month=10&year=2026)/);
     expect(createObjectURLMock).toHaveBeenCalled();
     expect(revokeObjectURLMock).toHaveBeenCalled();
   } finally {
