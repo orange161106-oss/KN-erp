@@ -41,11 +41,16 @@ const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-16T12:00:00'));
   fetchMock.mockReset();
   vi.stubGlobal('fetch', fetchMock);
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 function renderPRDWorkspace() {
   return render(
@@ -136,4 +141,29 @@ test('user can select a row and delete with confirmation dialog', async () => {
   await waitFor(() => {
     expect(screen.queryByText('Confirm Row Deletion')).not.toBeInTheDocument();
   });
+});
+
+test('month and year scope record loading, new rows and the upload window', async () => {
+  fetchMock.mockImplementation(async url => {
+    if (String(url).includes('/masters/customers')) return jsonResponse([]);
+    return jsonResponse(mockPRDRecords);
+  });
+  renderPRDWorkspace();
+  await screen.findByText('PRD-T01');
+  expect(String(fetchMock.mock.calls[0][0])).toContain('target_period=2026-10');
+
+  await userEvent.selectOptions(screen.getByLabelText('Production month'), '11');
+  await userEvent.selectOptions(screen.getByLabelText('Production year'), '2027');
+  await waitFor(() => expect(String(fetchMock.mock.lastCall?.[0])).toContain('target_period=2027-11'));
+  expect(screen.queryByText('PRD-T01')).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Upload Excel' }));
+  expect(screen.getByText('Upload period: November 2027')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Close upload' }));
+
+  await userEvent.click(screen.getByRole('button', { name: /Add Row/ }));
+  expect(screen.getByText('2027-11')).toBeInTheDocument();
+  expect(screen.getByLabelText('Production month')).toBeDisabled();
+  expect(screen.getByLabelText('Production year')).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Upload Excel' })).toBeDisabled();
 });

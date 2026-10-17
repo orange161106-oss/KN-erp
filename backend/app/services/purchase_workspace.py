@@ -15,7 +15,10 @@ from app.core.errors import ApplicationError
 from app.models.inventory_masters import Consumable, Supplier, SupplierConsumable, Unit
 from app.models.prd import PlanningVersion
 from app.models.purchase_approval import PurchaseApproval
-from app.models.requirements import MonthlyRequirementRecord
+from app.models.purchase_order import PurchaseDemandEvidence
+from app.models.purchase_plan import PurchasePlanDraft
+from app.models.audit import AuditLog
+from app.models.requirements import CalculatedRequirement, MonthlyRequirementRecord
 from app.models.stock_statements import (
     StockParameter,
     StockParameterBatch,
@@ -32,6 +35,98 @@ from app.schemas.purchase_workspace import (
 from app.services.purchase_approval import submit_purchase_approval
 from app.services.requirements_workspace import get_monthly_plan_metadata
 from app.services.stock_management_service import resolve_stock_parameter_for_item
+
+
+def _filter_records(records, search, status_filter):
+    if search:
+        query = search.casefold()
+        records = [row for row in records if any(query in (value or '').casefold() for value in
+            (row.consumable_code, row.consumable_name, row.supplier_code, row.supplier_name))]
+    if status_filter:
+        records = [row for row in records if row.status == status_filter]
+    return sorted(records, key=lambda row: (row.status != 'READY_FOR_APPROVAL', row.consumable_code))
+
+
+def _with_plan_edits(session, workspace):
+    if not workspace.records:
+        return workspace
+    material_ids = {row.consumable_id for row in workspace.records if row.consumable_id}
+    masters = {identity:(name, code) for identity, name, code in session.execute(select(Consumable.id, Consumable.name, Unit.code)
+        .outerjoin(Unit, Unit.id == Consumable.unit_id).where(Consumable.id.in_(material_ids)))}
+    drafts = {row.consumable_id: (row, code) for row, code in session.execute(select(PurchasePlanDraft, Unit.code)
+        .join(Unit, Unit.id == PurchasePlanDraft.unit_id)
+        .where(PurchasePlanDraft.planning_version_id == UUID(workspace.plan_metadata.plan_id)))}
+    for row in workspace.records:
+        if row.consumable_id in masters:
+            row.consumable_name, row.master_unit = masters[row.consumable_id]
+        value = drafts.get(row.consumable_id)
+        if value:
+            draft, code = value
+            row.requested_purchase_qty = draft.requested_qty
+            row.requested_purchase_unit = code
+            row.purchase_notes = draft.notes
+            row.draft_version = draft.version
+    return workspace
+
+
+def _central_workspace(session, version, meta, *, month, year, search, status_filter, current_user):
+    """Show saved central demand without inventing stock or bypassing traced assessment."""
+    if current_user and not current_user.is_super_admin and current_user.plant_ids:
+        raise ApplicationError('CENTRAL_REVIEW_REQUIRED', 'Central plans are reviewed by Super Admin.', 403)
+    totals = session.execute(select(
+        Consumable.id, Consumable.code, Consumable.name, CalculatedRequirement.unit_id,
+        CalculatedRequirement.uom, func.sum(CalculatedRequirement.calculated_qty),
+        func.count(CalculatedRequirement.id), func.min(CalculatedRequirement.created_at),
+        func.max(CalculatedRequirement.updated_at),
+    ).join(CalculatedRequirement, CalculatedRequirement.consumable_id == Consumable.id)
+        .where(CalculatedRequirement.planning_version_id == version.id)
+        .group_by(Consumable.id, Consumable.code, Consumable.name,
+            CalculatedRequirement.unit_id, CalculatedRequirement.uom)).all()
+    approved = version.status == 'APPROVED' and version.approved_at is not None
+    submitted = {}
+    if approved:
+        # Only the existing traced assessment can supply central purchase quantities.
+        for approval, report, supplier in session.execute(select(PurchaseApproval, PurchaseDemandEvidence.report, Supplier)
+            .join(PurchaseDemandEvidence, PurchaseDemandEvidence.approval_id == PurchaseApproval.id)
+            .join(Supplier, Supplier.id == PurchaseApproval.supplier_id)
+            .where(PurchaseApproval.planning_version_id == version.id)
+            .order_by(PurchaseApproval.created_at.desc(), PurchaseApproval.id.desc())):
+            submitted.setdefault((approval.consumable_id, approval.uom), (approval, report, supplier))
+    error_count = max(0, meta.record_count - sum(row[6] for row in totals))
+    if not totals:
+        notice = 'Production is uploaded, but no saved consumable requirements are available for this revision. Open the central requirement plan, calculate and save, then review the results.'
+    elif not approved:
+        notice = f'{len(totals)} consumables have saved central requirements. '
+        if error_count:
+            notice += f'{error_count} requirement configuration issues need review. '
+        notice += 'Review the requirements and approve the central plan before completing the inventory and supplier assessment. Purchase quantities remain unavailable until that assessment.'
+    else:
+        notice = 'Central requirements are approved. Complete the central inventory and supplier assessment to calculate purchase quantities. Submitted assessments appear here with their saved stock and purchase evidence.'
+    records = []
+    for material_id, code, name, unit_id, uom, required, count, created_at, updated_at in totals:
+        previous = submitted.get((material_id, uom))
+        approval, report, supplier = previous if previous else (None, {}, None)
+        status = 'REQUIREMENT_REVIEW_REQUIRED' if not approved else 'ASSESSMENT_REQUIRED'
+        remarks = 'Review and approve the central requirement plan.' if not approved else 'Use Central purchase assessment to select verified inventory and supplier policies.'
+        if approval:
+            status = 'SUBMITTED'
+            remarks = f'Latest traced purchase assessment is {approval.status}. Stock and incoming quantities are the saved assessment evidence.'
+        records.append(PurchaseWorkspaceRecord(
+            id=f'{version.id}:{material_id}:{unit_id}', planning_period=version.planning_period,
+            planning_month=month, planning_year=year, plan_id=str(version.id), revision=version.revision_label,
+            consumable_id=material_id, consumable_code=code, consumable_name=name, unit=uom,
+            required_qty=_q4(required), source_row_count=count, created_at=created_at, updated_at=updated_at,
+            supplier_id=supplier.id if supplier else None, supplier_code=supplier.code if supplier else None,
+            supplier_name=supplier.name if supplier else None,
+            stock_qty=_q4(report['current_stock']) if report.get('current_stock') is not None else None,
+            po_pending_qty=_q4(report['confirmed_incoming_before_receipt']) if report.get('confirmed_incoming_before_receipt') is not None else None,
+            shortage_qty=approval.raw_calculated_qty if approval else None,
+            system_recommended_qty=approval.system_recommended_qty if approval else None,
+            approval_id=approval.id if approval else None, approval_status=approval.status if approval else None,
+            status=status, remarks=remarks,
+        ))
+    return PurchaseWorkspaceResponse(plan_metadata=meta,
+        records=_filter_records(records, search, status_filter), notice=notice)
 
 
 def _q4(value: Decimal | int | str | None) -> Decimal:
@@ -101,6 +196,7 @@ def list_purchase_workspace(
     search: Optional[str] = None,
     status_filter: Optional[str] = None,
     category: Optional[str] = None,
+    current_user: CurrentUser | None = None,
 ) -> PurchaseWorkspaceResponse:
     planning_period = f"{year:04d}-{month:02d}"
     meta = get_monthly_plan_metadata(session, month, year)
@@ -108,6 +204,10 @@ def list_purchase_workspace(
 
     if not version:
         return PurchaseWorkspaceResponse(plan_metadata=meta, records=[])
+
+    if meta.source_workflow == 'BASIC_CENTRAL_V1':
+        return _with_plan_edits(session, _central_workspace(session, version, meta, month=month, year=year,
+            search=search, status_filter=status_filter, current_user=current_user))
 
     rows = session.scalars(
         select(MonthlyRequirementRecord).where(
@@ -289,20 +389,84 @@ def list_purchase_workspace(
         )
         records.append(record)
 
-    if search:
-        q = search.lower()
-        records = [
-            r for r in records
-            if q in r.consumable_code.lower()
-            or q in r.consumable_name.lower()
-            or (r.supplier_code and q in r.supplier_code.lower())
-            or (r.supplier_name and q in r.supplier_name.lower())
-        ]
-    if status_filter:
-        records = [r for r in records if r.status == status_filter]
+    records = _filter_records(records, search, status_filter)
+    return _with_plan_edits(session, PurchaseWorkspaceResponse(plan_metadata=meta, records=records))
 
-    records.sort(key=lambda r: (r.status != "READY_FOR_APPROVAL", r.consumable_code))
-    return PurchaseWorkspaceResponse(plan_metadata=meta, records=records)
+
+def save_purchase_plan(session, *, month, year, request, current_user):
+    from app.schemas.inventory_masters import ConsumableUpdate
+    from app.services import inventory_masters
+    elevated = current_user.is_super_admin or 'ADMIN' in current_user.roles
+    if not (elevated or current_user.purchase_update or current_user.purchase_orders_update):
+        raise ApplicationError('PERMISSION_DENIED', 'Purchase update permission is required to edit this plan.', 403)
+    try:
+        workspace = list_purchase_workspace(session, month=month, year=year, current_user=current_user)
+        if not workspace.plan_metadata.plan_id:
+            raise ApplicationError('PLAN_NOT_FOUND', 'Load an existing purchase plan before saving.', 404)
+        version = session.scalar(select(PlanningVersion).where(PlanningVersion.id == UUID(workspace.plan_metadata.plan_id)).with_for_update())
+        if version.id != _latest_version(session, version.planning_period).id:
+            raise ApplicationError('LATEST_REVISION_REQUIRED', 'Reload the latest purchase planning revision.', 409)
+        available = {row.id:row for row in workspace.records}
+        seen = set()
+        for edit in sorted(request.edits, key=lambda item: item.record_id):
+            row = available.get(edit.record_id)
+            if not row or not row.consumable_id or row.consumable_id in seen:
+                raise ApplicationError('INVALID_PLAN_ROW', 'Select one valid row per consumable in the selected period.', 409)
+            seen.add(row.consumable_id)
+            draft = session.scalar(select(PurchasePlanDraft).where(PurchasePlanDraft.planning_version_id == version.id,
+                PurchasePlanDraft.consumable_id == row.consumable_id).with_for_update())
+            if (draft.version if draft else 0) != edit.expected_draft_version:
+                raise ApplicationError('STALE_PURCHASE_EDIT', 'This row changed since it was loaded. Reload before editing again.', 409)
+            material = session.scalar(select(Consumable).where(Consumable.id == row.consumable_id).with_for_update())
+            unit = session.get(Unit, material.unit_id) if material.unit_id else None
+            if material.name != edit.expected_name or (unit.code if unit else '') != edit.expected_master_unit:
+                raise ApplicationError('STALE_PURCHASE_EDIT', 'The master details changed. Reload before saving.', 409)
+            master_changes = {}
+            if 'consumable_name' in edit.model_fields_set:
+                if not edit.consumable_name or not edit.consumable_name.strip():
+                    raise ApplicationError('INVALID_MASTER_NAME', 'Consumable name cannot be blank.', 422)
+                master_changes['name'] = edit.consumable_name.strip()
+                master_changes['description'] = master_changes['name']
+            if 'master_unit' in edit.model_fields_set:
+                chosen = session.scalar(select(Unit).where(func.upper(Unit.code) == (edit.master_unit or '').strip().upper(), Unit.is_active.is_(True)))
+                if chosen is None:
+                    raise ApplicationError('INVALID_UNIT', 'Choose an existing active stock unit, such as PCS or KG.', 422)
+                master_changes['unit_id'] = chosen.id
+            if master_changes:
+                if not (elevated or current_user.masters_update or 'masters.consumables.write' in current_user.permissions):
+                    raise ApplicationError('PERMISSION_DENIED', 'Master update permission is required to change consumable names or units.', 403)
+                resource = next(item for item in inventory_masters.RESOURCES if item.model is Consumable)
+                inventory_masters.apply_record_update(session, resource, material.id,
+                    ConsumableUpdate(**master_changes, change_reason=request.reason), current_user.id)
+            if {'requested_purchase_qty', 'purchase_notes'} & edit.model_fields_set:
+                if session.scalar(select(PurchaseApproval.id).where(PurchaseApproval.planning_version_id == version.id,
+                        PurchaseApproval.consumable_id == material.id).limit(1)):
+                    raise ApplicationError('PURCHASE_REVIEW_PROTECTED', 'This material is already in the approval queue. Review its quantity there to preserve approval history.', 409)
+                source_unit = session.scalar(select(Unit).where(Unit.code == row.unit))
+                if not source_unit:
+                    raise ApplicationError('INVALID_UNIT', 'Review this requirement stock unit before entering a purchase quantity.', 409)
+                before = {'requested_qty': str(draft.requested_qty) if draft and draft.requested_qty is not None else None,
+                    'notes': draft.notes if draft else None, 'version': draft.version if draft else 0}
+                if not draft:
+                    draft = PurchasePlanDraft(planning_version_id=version.id, consumable_id=material.id,
+                        unit_id=source_unit.id, updated_by=current_user.id, version=0)
+                    session.add(draft)
+                if 'requested_purchase_qty' in edit.model_fields_set:
+                    draft.requested_qty = edit.requested_purchase_qty
+                    draft.unit_id = source_unit.id
+                if 'purchase_notes' in edit.model_fields_set:
+                    draft.notes = edit.purchase_notes.strip() if edit.purchase_notes else None
+                draft.version += 1
+                draft.updated_by = current_user.id
+                session.flush()
+                session.add(AuditLog(actor_id=current_user.id, action='EDIT_PURCHASE_PLAN', entity_type='purchase_plan_draft',
+                    entity_id=draft.id, old_values=before, new_values={'requested_qty':str(draft.requested_qty) if draft.requested_qty is not None else None,
+                    'notes':draft.notes, 'version':draft.version, 'unit_id':str(draft.unit_id)}, reason=request.reason))
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    return list_purchase_workspace(session, month=month, year=year, current_user=current_user)
 
 
 def submit_purchase_workspace_records(
@@ -317,7 +481,10 @@ def submit_purchase_workspace_records(
     if not record_ids:
         raise ApplicationError("EMPTY_SUBMISSION", "Select at least one purchase recommendation.", 400)
 
-    workspace = list_purchase_workspace(session, month=month, year=year)
+    workspace = list_purchase_workspace(session, month=month, year=year, current_user=current_user)
+    if workspace.plan_metadata.source_workflow == 'BASIC_CENTRAL_V1':
+        raise ApplicationError('CENTRAL_PURCHASE_ASSESSMENT_REQUIRED',
+            'Submit central purchase demand through Central purchase assessment after requirement approval and inventory/supplier review.', 409)
     selected = [row for row in workspace.records if row.id in set(record_ids)]
     if not selected:
         raise ApplicationError("NO_MATCHING_RECORDS", "No selected purchase records were found.", 404)
@@ -329,6 +496,7 @@ def submit_purchase_workspace_records(
             row.status != "READY_FOR_APPROVAL"
             or not row.consumable_id
             or not row.supplier_id
+            or row.system_recommended_qty is None
             or row.system_recommended_qty <= Decimal("0")
         ):
             skipped += 1
@@ -367,6 +535,7 @@ def export_purchase_workspace_excel(
     search: Optional[str] = None,
     status_filter: Optional[str] = None,
     record_ids: Optional[list[str]] = None,
+    current_user: CurrentUser | None = None,
 ) -> bytes:
     workspace = list_purchase_workspace(
         session,
@@ -374,6 +543,7 @@ def export_purchase_workspace_excel(
         year=year,
         search=search,
         status_filter=status_filter,
+        current_user=current_user,
     )
     records = workspace.records
     if record_ids:
@@ -403,6 +573,8 @@ def export_purchase_workspace_excel(
         column=1,
         value=f"Planning Period: {period_label} | Revision: {workspace.plan_metadata.revision_label} | Exported: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
     )
+    if workspace.notice:
+        ws.cell(row=3, column=1, value=workspace.notice)
 
     headers = [
         "Consumable Code",
@@ -419,6 +591,10 @@ def export_purchase_workspace_excel(
         "Approval Status",
         "Source Rows",
         "Remarks",
+        "Stock Unit (Master)",
+        "Requested Purchase Qty",
+        "Requested Purchase Unit",
+        "Purchase Remarks",
     ]
     for col, header in enumerate(headers, start=1):
         cell = ws.cell(row=4, column=col, value=header)
@@ -443,12 +619,16 @@ def export_purchase_workspace_excel(
             record.approval_status or "",
             record.source_row_count,
             record.remarks or "",
+            record.master_unit or "",
+            record.requested_purchase_qty,
+            record.requested_purchase_unit or record.unit,
+            record.purchase_notes or "",
         ]
         for col, value in enumerate(values, start=1):
             cell = ws.cell(row=row_idx, column=col, value=value)
             cell.font = data_font
             cell.border = thin_border
-            if col in (6, 7, 8, 9, 10):
+            if col in (6, 7, 8, 9, 10, 16):
                 cell.number_format = "#,##0.0000"
                 cell.alignment = Alignment(horizontal="right")
 

@@ -279,3 +279,87 @@ meaning. Session-pooler port 5432 now uses the documented bounded connection poo
 the shared hostname no longer incorrectly forces transaction-mode NullPool.
 See validation/RECORD_LOADING_2026-10-16.md for configuration, measured samples,
 worker execution, search debouncing, table virtualization and focused validation.
+
+## Purchase Plan compatibility view — 2026-10-16
+
+The owner's October Purchase Plan was empty because its loader only read
+MonthlyRequirementRecord, while the central workflow persists CalculatedRequirement.
+For a central month the Purchase Plan now consolidates the latest revision's saved
+calculations by consumable and stock unit in one query. It does not copy records
+into the manual table, reuse an older revision, turn configuration errors into zero
+demand or choose an arbitrary supplier. Existing manual monthly plans retain their
+previous calculation and queue-submission path.
+
+Central quantities requiring an assessment are nullable rather than fabricated
+zeros: stock, confirmed incoming, stock-adjusted raw need and recommended purchase.
+The plan shows REQUIREMENT_REVIEW_REQUIRED until the version is approved, then
+ASSESSMENT_REQUIRED until traced purchase demand is submitted through the existing
+assessment. Latest submitted assessment/approval evidence is shown with its supplier
+and saved quantities. This is historical assessment evidence, not current stock.
+The table labels distinguish central usable-stock/incoming/raw-need semantics.
+Exports preserve blanks and the planning notice. The compatibility submission API
+cannot bypass the existing central assessment, approval or evidence requirements;
+plant-scoped readers cannot use it to see or export central demand.
+
+The page explains unmet prerequisites and opens the selected revision for central
+review/assessment without a page reload or switching to another month's default.
+Existing formulas, review decisions, inventory source contracts and supplier policy
+evidence remain unchanged. A monthly stock statement alone is still insufficient
+to assert usable stock, dated outstanding receipts and purchase policy.
+
+Read-only connected-data verification returned October R0's 31 consumables from 65
+saved lines, with 159 diagnostics (142 NO_CONSUMPTION_NORM, 17 PROCESS_REQUIRED) and
+no central approval. No source records were rewritten, approved or submitted.
+
+## Purchase Plan scrolling and reviewed edits — 2026-10-16
+
+The owner requested working grid scrolling and cell/row editing, then explicitly
+selected both purchase-field and consumable name/unit editing. The Purchase page
+and nested grid now have bounded flex sizes; the grid owns both scroll directions,
+with its footer and scrollbars inside the viewport. Central assessment and approval
+tables retain their own available vertical scrolling. An actual loaded baseline
+replaces the missing baseline that marked all 434 October cell values unsaved.
+
+Right-click Edit cell/Edit row, double-click and Save/Ctrl+S reuse DataTable.
+Editable columns are Consumable Name, Stock Unit (Master), Requested Purchase Qty
+and Remarks. Names update the canonical Consumable name/description; units update
+its unit reference and Product Master's output-unit display. These master changes
+require independent master-update permission, use existing active unit codes and
+retain stock-history/supplier-mapping restrictions. Previously unassigned units may
+be filled later. Calculated requirement units/quantities and saved approvals remain
+immutable; a changed master unit does not convert or relabel saved quantities.
+
+Requested quantities are explicit review proposals, not replacement calculations
+or automatic approvals. They retain their own unit and notes in purchase_plan_drafts,
+unique by planning revision and material, with NUMERIC(18,4), optimistic version,
+actor/time and AuditLog evidence. Once a material enters the approval queue, its
+proposal quantity/remarks must be reviewed there; name/unit master checks remain
+independent. The queue shows the proposal alongside the system recommendation.
+Modify may prefill a same-unit proposal, but still requires the existing explicit
+review action and reason. Export appends master unit/proposal quantity/unit/notes,
+preserving the original column positions.
+
+Additive API: POST /api/v1/purchasing/workspace/save?month=M&year=Y accepts edits,
+expected draft version/name/master unit and a change reason. It verifies purchase
+update authority, central/plant scope, latest revision and row membership. Batch
+saves are atomic; stale edits, invalid units and restricted unit changes roll back
+all changes. Pending reads cannot overwrite edits. Dirty state blocks period/load/
+submission changes; failed saves retain corrections and offer an explicit Discard
+changes and reload recovery.
+
+Schema revision c003_purchase_plan_drafts follows c002_optional_catalog_stock_units.
+The connected database has an external Alembic checkpoint 8c0f13ab0a53 absent from
+this checkout; it was not stamped or rewritten. As with the existing master-upload
+setup precedent, app.db.setup_purchase_plan applies only the frozen additive c003
+table migration inside a transaction/advisory lock. Default execution is read-only;
+--apply was explicitly used and created the empty table. The original marker was
+preserved. Future deployments with the local ancestry can use the normal migration
+chain; reconcile the external ancestry before any generic upgrade of that database.
+
+Focused verification: 37 backend checks (save API, central/legacy purchase reads,
+proposal audit/precision/concurrency, master permissions/history, catalog edits and
+additive setup), 28 frontend checks, TypeScript and Vite build. A synthetic browser
+fixture using the real shell/Purchase components verified both scroll directions,
+last-row access, enabled right-click actions and row saving. It used sample records,
+not company mutations. Read-only connected-data verification confirmed 31 October
+consumables from 65 saved lines and zero proposal records; no company approval changed.

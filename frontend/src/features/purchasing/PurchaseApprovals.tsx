@@ -53,6 +53,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
   const hasActions = Boolean(isSuperAdmin || canUpdate);
 
   const [activeTab, setActiveTab] = useState<TabKey>(isSuperAdmin ? 'central' : 'workspace');
+  const [centralContext, setCentralContext] = useState<{ versionId?: string; reviewRequired: boolean }>({ reviewRequired: false });
   const [items, setItems] = useState<PurchaseApprovalResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -99,7 +100,9 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
     let reason: string | null = null;
 
     if (action === 'MODIFY') {
-      const inputQty = window.prompt('Enter overridden purchase quantity:');
+      const selected = items.find(item => item.id === id);
+      const proposed = selected?.requested_purchase_unit === selected?.uom ? selected?.requested_purchase_qty : undefined;
+      const inputQty = window.prompt('Enter overridden purchase quantity:', proposed ?? '');
       if (!inputQty || isNaN(Number(inputQty)) || Number(inputQty) <= 0) {
         setError('Valid positive override quantity is required.');
         return;
@@ -160,7 +163,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
   }
 
   return (
-    <div className="flex flex-col h-full space-y-2">
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-hidden">
       {/* Compact Unified Header Bar (Section 9A) */}
       <div className="bg-white px-3 py-2 rounded-lg border border-gray-200 shadow-2xs flex-shrink-0 flex flex-col gap-1.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -174,7 +177,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
 
             {/* Navigation Tabs */}
             <nav className="flex gap-1 ml-2 border-l border-gray-200 pl-3">
-              <button type="button" onClick={()=>setActiveTab('central')} className="px-2.5 py-1 text-xs font-semibold rounded border">Central purchase assessment</button>
+              <button type="button" onClick={()=>{setCentralContext({reviewRequired:false});setActiveTab('central');}} className="px-2.5 py-1 text-xs font-semibold rounded border">Central purchase assessment</button>
               <button
                 type="button"
                 onClick={() => setActiveTab('workspace')}
@@ -250,9 +253,9 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
       {success && <AlertBox message={success} type="success" />}
 
       {/* Content Area */}
-      <div className="flex-1 min-h-0 flex flex-col">
-        {activeTab === 'central' ? <CentralRequirements purchaseOnly/> : activeTab === 'workspace' ? (
-          <PurchaseWorkspace canCreate={canUpdate} />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
+        {activeTab === 'central' ? <CentralRequirements purchaseOnly={!centralContext.reviewRequired} initialVersionId={centralContext.versionId}/> : activeTab === 'workspace' ? (
+          <PurchaseWorkspace canCreate={canUpdate} onOpenCentral={(versionId, reviewRequired)=>{setCentralContext({versionId,reviewRequired});setActiveTab('central');}} />
         ) : loading ? (
           <TableSkeleton columns={8 + (hasActions ? 1 : 0)} rows={5} />
         ) : items.length === 0 ? (
@@ -269,6 +272,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
                   <th className="px-4 py-3 text-left font-semibold">Supplier</th>
                   <th className="px-4 py-3 text-right font-semibold">Raw Need</th>
                   <th className="px-4 py-3 text-right font-semibold">System Recommended Qty</th>
+                  <th className="px-4 py-3 text-right font-semibold">Requested Qty</th>
                   <th className="px-4 py-3 text-right font-semibold text-burnt-orange bg-burnt-orange/10">Approved Qty</th>
                   <th className="px-4 py-3 text-left font-semibold">UOM</th>
                   <th className="px-4 py-3 text-left font-semibold">Status</th>
@@ -291,6 +295,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
                       </td>
                       <td className="px-4 py-3 text-right font-mono text-gray-600">{item.raw_calculated_qty}</td>
                       <td className="px-4 py-3 text-right font-mono font-medium text-gray-800">{item.system_recommended_qty}</td>
+                      <td className="px-4 py-3 text-right font-mono">{item.requested_purchase_qty == null ? '—' : `${item.requested_purchase_qty} ${item.requested_purchase_unit || item.uom}`}</td>
                       <td className="px-4 py-3 text-right font-mono font-bold text-blue-900 bg-blue-50">
                         {item.approved_qty ?? '—'}
                       </td>
@@ -300,6 +305,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
                       </td>
                       <td className="px-4 py-3 max-w-xs text-xs text-gray-700">
                         {item.reason ?? '—'}
+                        {item.purchase_notes && <span className="mt-1 block">Plan remarks: {item.purchase_notes}</span>}
                         {item.reviewed_by_username && (
                           <span className="block text-[11px] text-gray-400 mt-0.5">
                             Rev by {item.reviewed_by_username} at {new Date(item.reviewed_at || '').toLocaleTimeString()}

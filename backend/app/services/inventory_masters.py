@@ -91,7 +91,10 @@ def validate_references(session: Session, record):
 
 
 def snapshot(resource: Resource, record) -> dict:
-    return resource.response_schema.model_validate(record).model_dump(mode="json")
+    values = resource.response_schema.model_validate(record).model_dump(mode="json")
+    if isinstance(record, Consumable):
+        values['output_unit'] = record.output_unit
+    return values
 
 
 def audit(session: Session, resource: Resource, record, actor_id: UUID, action: str,
@@ -113,22 +116,31 @@ def create_record(session: Session, resource: Resource, data: BaseModel, actor_i
 
 def update_record(session: Session, resource: Resource, entity_id: UUID, data: BaseModel, actor_id: UUID):
     with mutation(session):
-        record = get_record(session, resource, entity_id, lock=True)
-        before = snapshot(resource, record)
-        changes = data.model_dump(exclude_unset=True, exclude={"change_reason"})
-        if isinstance(record, Consumable) and "unit_id" in changes and changes["unit_id"] != record.unit_id:
-            if has_stock_records(session, record.id):
-                raise ApplicationError("UNIT_CHANGE_CONFLICT", "Unit cannot change after stock history or a reported balance exists.", 409)
-            if repository.has_supplier_mapping(session, record.id):
-                raise ApplicationError("UNIT_CHANGE_CONFLICT", "Unit cannot change after a supplier mapping exists.", 409)
-            active_reference(session, Unit, changes["unit_id"])
-        for field, value in changes.items():
-            setattr(record, field, value)
-        if isinstance(record, SupplierConsumable):
-            validate_references(session, record)
-        session.flush()
-        if snapshot(resource, record) != before:
-            audit(session, resource, record, actor_id, "UPDATE", data.change_reason, before)
+        record = apply_record_update(session, resource, entity_id, data, actor_id)
+    return record
+
+
+def apply_record_update(session: Session, resource: Resource, entity_id: UUID, data: BaseModel, actor_id: UUID):
+    """Apply existing master checks/audit inside a caller-owned atomic transaction."""
+    record = get_record(session, resource, entity_id, lock=True)
+    before = snapshot(resource, record)
+    changes = data.model_dump(exclude_unset=True, exclude={"change_reason"})
+    if isinstance(record, Consumable) and "unit_id" in changes and changes["unit_id"] != record.unit_id:
+        if record.unit_id is not None and has_stock_records(session, record.id):
+            raise ApplicationError("UNIT_CHANGE_CONFLICT", "Unit cannot change after stock history or a reported balance exists.", 409)
+        if record.unit_id is not None and repository.has_supplier_mapping(session, record.id):
+            raise ApplicationError("UNIT_CHANGE_CONFLICT", "Unit cannot change after a supplier mapping exists.", 409)
+        active_reference(session, Unit, changes["unit_id"])
+    for field, value in changes.items():
+        setattr(record, field, value)
+    if isinstance(record, Consumable) and 'unit_id' in changes:
+        # Product Master's display column mirrors the canonical stock-unit link.
+        record.output_unit = session.get(Unit, changes['unit_id']).code
+    if isinstance(record, SupplierConsumable):
+        validate_references(session, record)
+    session.flush()
+    if snapshot(resource, record) != before:
+        audit(session, resource, record, actor_id, "UPDATE", data.change_reason, before)
     return record
 
 

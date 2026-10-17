@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiClient, ApiError } from '../../api/client';
 
 export interface RevisionInfo {
@@ -82,12 +82,14 @@ export interface CustomerMaster {
 
 interface SalesScheduleImportModalProps {
   isOpen: boolean;
+  targetPeriod: string;
   onClose: () => void;
   onImportSuccess: (importedCount: number, sheetName: string) => void;
 }
 
 export default function SalesScheduleImportModal({
   isOpen,
+  targetPeriod,
   onClose,
   onImportSuccess,
 }: SalesScheduleImportModalProps) {
@@ -98,10 +100,11 @@ export default function SalesScheduleImportModal({
   const [previewData, setPreviewData] = useState<PreviewResponse | null>(null);
   const [showChangesDetails, setShowChangesDetails] = useState(false);
   const [importMode, setImportMode] = useState<'APPEND' | 'REPLACE'>('APPEND');
+  const fileInput = useRef<HTMLInputElement>(null);
+  const periodLabel = new Date(`${targetPeriod}-01T12:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
 
   // Filter selections
   const [selectedSheet, setSelectedSheet] = useState<string>('');
-  const [selectedPeriod, setSelectedPeriod] = useState<string>('');
   const [selectedRevision, setSelectedRevision] = useState<string>('');
 
   // Alias mappings
@@ -115,6 +118,10 @@ export default function SalesScheduleImportModal({
       setErrorMsg(null);
       setPreviewData(null);
       setAliasMappings({});
+      setSelectedSheet('');
+      setSelectedRevision('');
+      setImportMode('APPEND');
+      setShowChangesDetails(false);
       // Fetch customers master for alias mapping
       void (async () => {
         try {
@@ -125,11 +132,11 @@ export default function SalesScheduleImportModal({
         }
       })();
     }
-  }, [isOpen]);
+  }, [isOpen, targetPeriod]);
 
   if (!isOpen) return null;
 
-  const handleUploadFile = async (chosenFile?: File) => {
+  const handleUploadFile = async (chosenFile?: File, selection?: { sheetName?: string; revisionLabel?: string }) => {
     const targetFile = chosenFile || file;
     if (!targetFile) {
       setErrorMsg('Please select an Excel file (.xlsx) to upload.');
@@ -138,20 +145,28 @@ export default function SalesScheduleImportModal({
 
     setIsLoading(true);
     setErrorMsg(null);
+    setPreviewData(null);
+    const sheetName = selection?.sheetName ?? selectedSheet;
+    const revisionLabel = selection?.revisionLabel ?? selectedRevision;
     try {
-      const formData = new FormData();
-      formData.append('file', targetFile);
-      if (selectedSheet) formData.append('sheet_name', selectedSheet);
-      if (selectedPeriod) formData.append('target_period', selectedPeriod);
-      if (selectedRevision) formData.append('revision_label', selectedRevision);
+      const inspect = (revision: string) => {
+        const formData = new FormData();
+        formData.append('file', targetFile);
+        if (sheetName) formData.append('sheet_name', sheetName);
+        formData.append('target_period', targetPeriod);
+        if (revision) formData.append('revision_label', revision);
+        return apiClient.post<PreviewResponse>('/api/v1/prd/workspace/import-preview', formData);
+      };
 
-      const res = await apiClient.post<PreviewResponse>('/api/v1/prd/workspace/import-preview', formData);
+      let res = await inspect(revisionLabel);
+      const periodRevision = res.active_revisions.find(r => r.planning_period === targetPeriod);
+      // The confirmation saves one revision. Preview that same revision's rows and totals.
+      if (periodRevision && res.active_revisions.length > 1) {
+        res = await inspect(periodRevision.revision_label);
+      }
       setPreviewData(res);
       setSelectedSheet(res.sheet_name);
-      if (res.available_revisions.length > 0) {
-        setSelectedPeriod(res.available_revisions[0].planning_period);
-        setSelectedRevision(res.available_revisions[0].revision_label);
-      }
+      setSelectedRevision(res.active_revisions.find(r => r.planning_period === targetPeriod)?.revision_label ?? '');
       setStep('preview');
     } catch (err) {
       setErrorMsg(err instanceof ApiError ? err.message : 'Failed to inspect sales schedule file.');
@@ -197,14 +212,14 @@ export default function SalesScheduleImportModal({
   };
 
   const handleConfirmImport = async () => {
-    if (!previewData) return;
+    if (!previewData?.can_confirm || !selectedRevision || isLoading) return;
     setIsLoading(true);
     setErrorMsg(null);
     try {
       const payload = {
         file_token: previewData.file_token,
         sheet_name: selectedSheet || previewData.sheet_name,
-        target_period: selectedPeriod || undefined,
+        target_period: targetPeriod,
         revision_label: selectedRevision || undefined,
         alias_mappings: Object.keys(aliasMappings).length > 0 ? aliasMappings : undefined,
         mode: importMode,
@@ -246,7 +261,7 @@ export default function SalesScheduleImportModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[10000] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+    <div role="dialog" aria-modal="true" aria-label="Sales schedule upload" className="fixed inset-0 z-[10000] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="bg-white rounded-xl shadow-2xl max-w-5xl w-full max-h-[92vh] flex flex-col overflow-hidden border border-gray-200">
         {/* Header */}
         <div className="px-5 py-3.5 bg-brand-navy text-white flex items-center justify-between flex-shrink-0">
@@ -261,6 +276,8 @@ export default function SalesScheduleImportModal({
           <button
             type="button"
             onClick={onClose}
+            disabled={isLoading}
+            aria-label="Close upload"
             className="text-white/80 hover:text-white text-xl font-bold p-1 rounded hover:bg-white/10"
           >
             ✕
@@ -296,40 +313,51 @@ export default function SalesScheduleImportModal({
 
         {/* Content Body */}
         <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4">
+          <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm">
+            <strong>Upload period: {periodLabel}</strong>
+            <p className="mt-0.5 text-xs text-gray-600">The workbook month and year must match this period. Close this window to choose another period.</p>
+          </div>
+          {isLoading && step !== 'upload' && <p role="status" className="text-sm text-gray-600">Inspecting {periodLabel} sales schedule…</p>}
           {step === 'upload' && (
             <div className="space-y-4">
+              <input
+                ref={fileInput}
+                type="file"
+                accept=".xlsx"
+                aria-label="Sales schedule Excel file"
+                className="sr-only"
+                disabled={isLoading}
+                onChange={e => {
+                  const chosenFile = e.target.files?.[0];
+                  e.target.value = '';
+                  if (chosenFile) {
+                    setFile(chosenFile);
+                    void handleUploadFile(chosenFile, { sheetName: '', revisionLabel: '' });
+                  }
+                }}
+              />
               {/* Dropzone */}
-              <div
+              <button
+                type="button"
+                disabled={isLoading}
                 onDragOver={e => e.preventDefault()}
                 onDrop={e => {
                   e.preventDefault();
-                  if (e.dataTransfer.files?.[0]) {
+                  if (!isLoading && e.dataTransfer.files?.[0]) {
                     const f = e.dataTransfer.files[0];
                     setFile(f);
-                    void handleUploadFile(f);
+                    void handleUploadFile(f, { sheetName: '', revisionLabel: '' });
                   }
                 }}
-                className="border-2 border-dashed border-gray-300 hover:border-brand-steel rounded-xl p-8 text-center cursor-pointer bg-gray-50/50 hover:bg-blue-50/30 transition-all flex flex-col items-center justify-center space-y-3"
-                onClick={() => {
-                  const input = document.createElement('input');
-                  input.type = 'file';
-                  input.accept = '.xlsx';
-                  input.onchange = e => {
-                    const f = (e.target as HTMLInputElement).files?.[0];
-                    if (f) {
-                      setFile(f);
-                      void handleUploadFile(f);
-                    }
-                  };
-                  input.click();
-                }}
+                className="w-full border-2 border-dashed border-gray-300 hover:border-brand-steel rounded-xl p-8 text-center cursor-pointer bg-gray-50/50 hover:bg-blue-50/30 transition-all flex flex-col items-center justify-center space-y-3 disabled:opacity-50"
+                onClick={() => fileInput.current?.click()}
               >
                 <div className="w-14 h-14 rounded-full bg-blue-100 text-brand-navy flex items-center justify-center text-2xl font-bold">
                   📊
                 </div>
                 <div>
                   <p className="text-sm font-semibold text-gray-800">
-                    {file ? file.name : 'Click to select or drag & drop Sales Schedule (.xlsx)'}
+                    {isLoading ? `Inspecting ${periodLabel} sales schedule…` : file ? file.name : 'Click to select or drag & drop Sales Schedule (.xlsx)'}
                   </p>
                   <p className="text-xs text-gray-500 mt-1">
                     Supports KNL hierarchical Sales Schedule ("Pro.Order.pdf" layout) with Ashok Leyland, TAFE, TVS, Job Work, and R0/R1 revisions.
@@ -340,7 +368,7 @@ export default function SalesScheduleImportModal({
                     {(file.size / 1024).toFixed(1)} KB
                   </span>
                 )}
-              </div>
+              </button>
 
               {/* Rules & Layout Info */}
               <div className="bg-amber-50/70 border border-amber-200 rounded-lg p-3.5 text-xs text-amber-900 space-y-1.5">
@@ -407,11 +435,10 @@ export default function SalesScheduleImportModal({
                     <label className="font-semibold text-gray-700 flex items-center gap-1.5">
                       Sheet:
                       <select
+                        aria-label="Workbook sheet"
                         value={selectedSheet}
-                        onChange={e => {
-                          setSelectedSheet(e.target.value);
-                          void handleUploadFile();
-                        }}
+                        disabled={isLoading}
+                        onChange={e => void handleUploadFile(undefined, { sheetName: e.target.value, revisionLabel: '' })}
                         className="px-2 py-1 border rounded bg-white text-xs font-medium"
                       >
                         {previewData.sheet_names.map(s => <option key={s} value={s}>{s}</option>)}
@@ -422,27 +449,16 @@ export default function SalesScheduleImportModal({
                   {previewData.available_revisions.length > 0 && (
                     <>
                       <label className="font-semibold text-gray-700 flex items-center gap-1.5">
-                        Month:
-                        <select
-                          value={selectedPeriod}
-                          onChange={e => setSelectedPeriod(e.target.value)}
-                          className="px-2 py-1 border rounded bg-white text-xs font-medium"
-                        >
-                          {Array.from(new Set(previewData.available_revisions.map(r => r.planning_period))).map(p => (
-                            <option key={p} value={p}>{p}</option>
-                          ))}
-                        </select>
-                      </label>
-
-                      <label className="font-semibold text-gray-700 flex items-center gap-1.5">
                         Revision:
                         <select
+                          aria-label="Workbook revision"
                           value={selectedRevision}
-                          onChange={e => setSelectedRevision(e.target.value)}
+                          disabled={isLoading}
+                          onChange={e => void handleUploadFile(undefined, { revisionLabel: e.target.value })}
                           className="px-2 py-1 border rounded bg-white text-xs font-medium"
                         >
                           {previewData.available_revisions
-                            .filter(r => !selectedPeriod || r.planning_period === selectedPeriod)
+                            .filter(r => r.planning_period === targetPeriod)
                             .map(r => (
                               <option key={r.revision_label} value={r.revision_label}>
                                 {r.revision_label} ({r.month_label})
@@ -789,6 +805,7 @@ export default function SalesScheduleImportModal({
               <button
                 type="button"
                 onClick={() => setStep('upload')}
+                disabled={isLoading}
                 className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-semibold"
               >
                 ← Back to Upload
@@ -800,6 +817,7 @@ export default function SalesScheduleImportModal({
             <button
               type="button"
               onClick={onClose}
+              disabled={isLoading}
               className="px-3.5 py-1.5 bg-white hover:bg-gray-100 border border-gray-300 text-gray-700 rounded-lg text-xs font-semibold"
             >
               Cancel
@@ -808,7 +826,7 @@ export default function SalesScheduleImportModal({
             {step === 'preview' && previewData && (
               <button
                 type="button"
-                disabled={!previewData.can_confirm || isLoading}
+                disabled={!previewData.can_confirm || !selectedRevision || isLoading}
                 onClick={handleConfirmImport}
                 className="px-5 py-1.5 bg-brand-navy hover:bg-opacity-95 disabled:opacity-40 text-white rounded-lg text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5"
               >

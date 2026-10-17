@@ -60,6 +60,9 @@ class PurchaseApprovalResponse(BaseModel):
     raw_calculated_qty: Decimal
     system_recommended_qty: Decimal
     approved_qty: Optional[Decimal] = None
+    requested_purchase_qty: Optional[Decimal] = None
+    requested_purchase_unit: Optional[str] = None
+    purchase_notes: Optional[str] = None
     uom: str
     status: ApprovalStatus
     reason: Optional[str] = None

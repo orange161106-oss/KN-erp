@@ -431,7 +431,9 @@ def detect_header_layout(rows: list[tuple[Any, ...]]) -> tuple[int, dict[str, in
         final_month_label = col_month_label or sheet_wide_month_label or (header_text if "r" not in header_text.lower() else "Sales Schedule")
         if not final_period:
             try:
-                final_period = parse_period_string(header_text)
+                # A quantity header can carry both its month and revision, e.g. Nov'26 (R0).
+                period_header = re.sub(r"\s*\(?\bR(?:0|[1-9][0-9]*)\b\)?\s*$", "", header_text, flags=re.IGNORECASE).strip()
+                final_period = parse_period_string(period_header)
             except ApplicationError:
                 final_period = datetime.now().strftime("%Y-%m")
 

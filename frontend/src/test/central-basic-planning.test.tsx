@@ -66,6 +66,16 @@ test('historical revisions and read-only operators cannot calculate or approve',
   expect(screen.getByRole('button',{name:'Assess purchase'})).toBeDisabled();
 });
 
+test('opening a purchase period loads that exact central revision and retains it when retrying',async()=>{
+  const get=vi.spyOn(apiClient,'get').mockRejectedValueOnce(new Error('The request timed out.')).mockResolvedValue(centralView());
+  authorized(<CentralRequirements initialVersionId="version-1"/>);
+  await screen.findByRole('alert');
+  fireEvent.click(screen.getByRole('button',{name:'Reload results'}));
+  await screen.findByRole('cell',{name:'PROD-A'});
+  expect(get).toHaveBeenNthCalledWith(1,endpoint+'/workspace?planning_version_id=version-1',60000);
+  expect(get).toHaveBeenNthCalledWith(2,endpoint+'/workspace?planning_version_id=version-1',60000);
+});
+
 test('a result-read timeout after saving can be recovered without recalculating or showing stale zero rows',async()=>{
   let saved=false;let readFailed=false;
   vi.spyOn(apiClient,'get').mockImplementation(async ()=>{

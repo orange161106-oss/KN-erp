@@ -489,3 +489,92 @@ business records were mutated during this performance work. Focused checks:
 Details, exact measurement boundaries and cross-team impact are recorded in
 validation/RECORD_LOADING_2026-10-16.md.
 
+## Production for sale month/year uploads — 2026-10-16
+
+Owner requested month/year-wise production uploads. PRDPlanning now starts at the
+client's current local month/year and has explicit Month and Year selectors next
+to Upload Excel. The selected YYYY-MM scopes record loading, the visible grid,
+new draft rows and current-view export. Switching periods clears old selection
+and the revision filter; unsaved rows must be saved before switching/uploading.
+Other periods and existing immutable revision history are retained.
+
+SalesScheduleImportModal receives the selected period from the page and displays
+it throughout preview/confirmation. Workbook metadata cannot silently replace it.
+Changing workbook sheet/revision reinspects that exact selection; an initial
+multi-revision preview is narrowed to one revision before confirmation. Upload
+confirmation enforces parser errors and rejects a mixed month/revision payload.
+Quantity headers such as Nov'26 (R0) now parse their explicit month/year without
+falling back to the current month when the banner is absent. No schema, formulas,
+planning approval authority or company business records changed.
+
+Focused verification: 10 backend parser/import checks, 13 frontend production,
+upload and search-loading checks, TypeScript and the Vite production build passed.
+Disposable tests verified wrong-month rejection, October/November/next-year data
+retention and separate R0/R1 revisions. No active ERP browser tab was available
+for authenticated visual verification; no production workbook was uploaded.
+
+## October Purchase Plan missing central demand — 2026-10-16
+
+The Purchase Plan read only MonthlyRequirementRecord, so October's 65 central
+CalculatedRequirement lines appeared as zero purchase rows. Central periods now
+read the latest revision's saved demand, consolidated by consumable/unit, while
+manual monthly plans retain their previous path. The connected database's repaired
+read returned 31 consumables from 65 lines. October R0 remains unapproved with 159
+diagnostics: 142 missing norms and 17 missing process assignments.
+
+Central rows explicitly show requirement-review or assessment prerequisites.
+Unavailable stock, incoming, raw purchase need and recommended quantities remain
+null, never assumed zero. Existing traced assessment/approval evidence supplies
+submitted purchase quantities. No arbitrary supplier, new stock formula or automatic
+approval is introduced; the legacy queue endpoint rejects central submissions.
+Read/export retain the central plant-scope boundary. The UI opens the selected
+revision for review or assessment within the Purchase module; reload recovery keeps
+that selection. Exports include the notice and blank unknown quantities.
+
+No company data was mutated during diagnosis or verification. See the Purchase Plan
+compatibility section of 24_CENTRAL_BASIC_PLANNING_CONTRACT.md for the boundaries.
+Focused verification passed: 10 backend purchase service/API checks, 19 frontend
+purchase/central/search checks, TypeScript and Vite production build. The live
+database was checked through a read-only transaction; no authenticated browser
+verification or company-plan approval was performed.
+
+## Purchase grid scrolling and cell/row editing — 2026-10-16
+
+Owner requested scrolling and Edit cell/Edit row in Purchase Plan, and answered
+"Both" for purchase fields and master name/unit fields. PurchaseApprovals and
+PurchaseWorkspace now bound nested flex dimensions, keeping the table's horizontal
+and vertical scrollbars/footer accessible. The loaded originalData baseline fixes
+the false 434-unsaved indicator. Browser verification with 31 synthetic rows reached
+the last row, scrolled horizontally and saved name, proposed quantity and remarks
+through the existing row editor. This was an isolated sample fixture using the
+real components, with no company writes.
+
+PurchaseWorkspace edits Consumable Name, Stock Unit (Master), Requested Purchase Qty
+and Remarks; double-click/context menu/Save/Ctrl+S reuse DataTable. Masters require
+master-update permission in addition to purchase-update permission. Name edits
+sync canonical name/description, unit edits sync the unit link/output-unit display.
+Existing stock-history/supplier mapping checks remain; a previously unassigned unit
+can be filled later. Historical calculation/proposal units are never relabeled.
+Calculated/system/approved quantities remain protected. Requested quantities and
+remarks are separately versioned/audited proposals shown in the approval queue;
+the existing explicit review/approval action is still required. Submitted proposals
+cannot be rewritten in Purchase Plan. Failed saves keep edits, with an explicit
+discard/reload action for stale-record recovery. Pending reads cannot overwrite edits.
+
+New POST /api/v1/purchasing/workspace/save validates scope, latest revision,
+permissions, selected rows, expected master details and draft version. Batch changes
+are atomic. New purchase_plan_drafts and Alembic c003_purchase_plan_drafts follow
+c002_optional_catalog_stock_units. Live schema had external marker 8c0f13ab0a53,
+unavailable in this checkout. app.db.setup_purchase_plan --apply used the frozen
+additive migration to create only this empty table while preserving that marker;
+no history stamp or generic migration-chain rewrite was attempted. Default setup
+is read-only. See the central planning contract for deployment boundaries.
+
+Verification: 37 focused backend checks, 28 frontend checks, TypeScript and Vite
+build. Read-only live verification confirmed ready storage, unchanged external
+marker, zero proposals and the same 31 October consumables/65 requirement lines.
+Company master records, quantities and approvals were not edited for verification.
+The final local service check found both servers stopped; they were restarted in
+hidden windows. Frontend returned HTTP 200 and the running backend OpenAPI exposes
+the new save route. The temporary sample browser tab was closed after verification.
+

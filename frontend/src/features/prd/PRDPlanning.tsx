@@ -8,6 +8,13 @@ import Toolbar from '../../components/Toolbar';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import SalesScheduleImportModal from './SalesScheduleImportModal';
 
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+function currentPlanningPeriod() {
+  const today = new Date();
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+}
+
 export interface PRDRecord {
   id: string;
   row_index: number | null;
@@ -59,7 +66,12 @@ export default function PRDPlanning() {
   const loadGeneration = useRef(0);
   const [plantFilter, setPlantFilter] = useState('');
   const [customerFilter, setCustomerFilter] = useState('');
-  const [periodFilter, setPeriodFilter] = useState('');
+  const [periodFilter, setPeriodFilter] = useState(currentPlanningPeriod);
+  const [periodYear, periodMonth] = periodFilter.split('-');
+  const periodLabel = `${MONTH_NAMES[Number(periodMonth) - 1]} ${periodYear}`;
+  const currentYear = new Date().getFullYear();
+  const firstYear = Math.min(currentYear, Number(periodYear)) - 5;
+  const yearOptions = Array.from({ length: Math.max(currentYear, Number(periodYear)) + 5 - firstYear + 1 }, (_, i) => firstYear + i);
   const [versionFilter, setVersionFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
 
@@ -116,12 +128,6 @@ export default function PRDPlanning() {
   const uniqueCustomers = useMemo(() => {
     const set = new Set<string>();
     records.forEach(r => { if (r.customer) set.add(r.customer); });
-    return Array.from(set).sort();
-  }, [records]);
-
-  const uniquePeriods = useMemo(() => {
-    const set = new Set<string>();
-    records.forEach(r => { if (r.target_period) set.add(r.target_period); });
     return Array.from(set).sort();
   }, [records]);
 
@@ -188,6 +194,18 @@ export default function PRDPlanning() {
     return count;
   }, [records, originalMap, deletedIds]);
 
+  const changePeriod = (period: string) => {
+    if (unsavedCount > 0 || isSaving) return;
+    ++loadGeneration.current;
+    setPeriodFilter(period);
+    setVersionFilter('');
+    setRecords([]);
+    setOriginalMap(new Map());
+    setSelectedRowIds(new Set());
+    setSelectedCell(null);
+    setStatusMessage(null);
+  };
+
   // Cell editing
   const handleCellChange = (rowId: string, colKey: keyof PRDRecord & string, value: string) => {
     if (originalMap.get(rowId)?.status === 'VALIDATED') {
@@ -204,6 +222,7 @@ export default function PRDPlanning() {
 
   // Add row
   const handleAddRow = () => {
+    if (isLoading || isSaving) return;
     const newId = `new-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const nextIndex = records.length + 1;
     const newRecord: PRDRecord = {
@@ -217,7 +236,7 @@ export default function PRDPlanning() {
       description: 'New Planned Product',
       planned_quantity: '100.0000',
       uom: 'Nos',
-      target_period: periodFilter || new Date().toISOString().slice(0, 7),
+      target_period: periodFilter,
       planning_version: versionFilter || 'R0',
       revision: versionFilter || 'R0',
       section_type: 'STANDARD',
@@ -544,9 +563,49 @@ export default function PRDPlanning() {
 
       {/* Workspace Panel */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-gray-300 bg-white shadow-xs">
+        <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-gray-200 bg-white px-3 py-2 text-xs">
+          <label className="flex items-center gap-1.5 font-semibold text-gray-700">
+            Month:
+            <select
+              aria-label="Production month"
+              value={periodMonth}
+              disabled={unsavedCount > 0 || isSaving || showDeleteConfirm}
+              onChange={e => changePeriod(`${periodYear}-${e.target.value}`)}
+              className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 font-medium"
+            >
+              {MONTH_NAMES.map((month, index) => (
+                <option key={month} value={String(index + 1).padStart(2, '0')}>{month}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1.5 font-semibold text-gray-700">
+            Year:
+            <select
+              aria-label="Production year"
+              value={periodYear}
+              disabled={unsavedCount > 0 || isSaving || showDeleteConfirm}
+              onChange={e => changePeriod(`${e.target.value}-${periodMonth}`)}
+              className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 font-medium"
+            >
+              {yearOptions.map(year => <option key={year} value={year}>{year}</option>)}
+            </select>
+          </label>
+          {canImport && (
+            <button
+              type="button"
+              onClick={() => setShowUploadModal(true)}
+              disabled={isLoading || isSaving || unsavedCount > 0 || showDeleteConfirm}
+              className="rounded-lg bg-erp-orange px-3 py-1.5 font-semibold text-white shadow-xs hover:bg-erp-orange/90 disabled:opacity-40"
+            >
+              Upload Excel
+            </button>
+          )}
+          <span className="text-gray-500">
+            {unsavedCount > 0 ? 'Save changes before changing the period or uploading.' : `Viewing ${periodLabel}. Upload the sales schedule for this period.`}
+          </span>
+        </div>
         {/* Toolbar */}
         <Toolbar
-          onUpload={() => setShowUploadModal(true)}
           onAddRow={handleAddRow}
           onSave={handleSave}
           onDeleteSelected={() => setShowDeleteConfirm(true)}
@@ -581,16 +640,6 @@ export default function PRDPlanning() {
               options: [
                 { value: '', label: 'All Plants' },
                 ...uniquePlants.map(p => ({ value: p, label: p })),
-              ],
-            },
-            {
-              key: 'period',
-              label: 'Month',
-              value: periodFilter,
-              onChange: setPeriodFilter,
-              options: [
-                { value: '', label: 'All Months' },
-                ...uniquePeriods.map(p => ({ value: p, label: p })),
               ],
             },
             {
@@ -629,7 +678,7 @@ export default function PRDPlanning() {
             onSelectionChange={setSelectedRowIds}
             onCellChange={handleCellChange}
             isLoading={isLoading}
-            emptyMessage="No production records found. Click 'Upload Excel' to import a Sales Schedule or 'Add Row' to start."
+            emptyMessage={`No production records found for ${periodLabel}. Click 'Upload Excel' to import a Sales Schedule or 'Add Row' to start.`}
             onAddRow={handleAddRow}
             canCreate={canCreate}
             selectedCell={selectedCell}
@@ -644,11 +693,12 @@ export default function PRDPlanning() {
       {/* Multi-Step Sales Schedule Import Modal */}
       <SalesScheduleImportModal
         isOpen={showUploadModal}
+        targetPeriod={periodFilter}
         onClose={() => setShowUploadModal(false)}
         onImportSuccess={(count, sheetName) => {
           setStatusMessage({
             type: 'success',
-            text: `Successfully imported ${count} sales schedule parts from "${sheetName}".`,
+            text: `Successfully imported ${count} sales schedule parts for ${periodLabel} from "${sheetName}".`,
           });
           void loadRecords();
         }}

@@ -12,7 +12,7 @@ from app.db.session import get_db
 from app.main import create_app
 from app.models.auth import Permission, Role, User
 from app.models.inventory_masters import Consumable, Supplier, SupplierConsumable, Unit
-from app.models.prd import PlanningVersion
+from app.models.prd import ImportBatch, PlanningVersion
 from app.models.purchase_approval import PurchaseApproval
 from app.models.requirements import MonthlyRequirementRecord
 from app.security.passwords import PasswordService
@@ -213,3 +213,42 @@ def test_duplicate_workspace_submission_does_not_create_duplicate_approval(
         select(func.count(PurchaseApproval.id))
     )
     assert count == 1
+
+
+def test_central_workspace_api_does_not_fall_back_to_stale_monthly_rows(purchase_client):
+    client, session, user, headers = purchase_client
+    version = session.scalar(select(PlanningVersion))
+    session.add(ImportBatch(filename='central-production.xlsx', file_size_bytes=1, uploaded_by=user.id,
+        planning_version_id=version.id, status='VALIDATED', row_count=2, valid_row_count=2,
+        validation_summary={'workflow':'BASIC_CENTRAL_V1'}))
+    session.commit()
+    response = client.get(f'{BASE}?month=10&year=2026', headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()['plan_metadata']['source_workflow'] == 'BASIC_CENTRAL_V1'
+    assert response.json()['records'] == []
+    assert 'no saved consumable requirements' in response.json()['notice']
+    export = client.get(f'{BASE}/export?month=10&year=2026', headers=headers)
+    assert export.status_code == 200
+    submit = client.post(f'{BASE}/submit?month=10&year=2026', headers=headers,
+        json={'record_ids':['stale-monthly-row'], 'reason':'Synthetic central guard'})
+    assert submit.status_code == 409
+    assert 'CENTRAL_PURCHASE_ASSESSMENT_REQUIRED' in submit.text
+
+
+def test_purchase_edit_api_enforces_update_permissions_and_rejects_calculated_fields(purchase_client):
+    client, session, user, headers = purchase_client
+    row = client.get(f'{BASE}?month=10&year=2026', headers=headers).json()['records'][0]
+    edit = {'record_id': row['id'], 'expected_draft_version': 0,
+        'expected_name': row['consumable_name'], 'expected_master_unit': row['master_unit'],
+        'requested_purchase_qty': '12.3456', 'purchase_notes': 'Synthetic API proposal'}
+    payload = {'edits': [edit], 'reason': 'Synthetic API verification'}
+    url = f'{BASE}/save?month=10&year=2026'
+    assert client.post(url, headers=headers, json=payload).status_code == 403
+    user.purchase_update = True
+    session.commit()
+    saved = client.post(url, headers=headers, json=payload)
+    assert saved.status_code == 200, saved.text
+    assert Decimal(saved.json()['records'][0]['requested_purchase_qty']) == Decimal('12.3456')
+    assert Decimal(saved.json()['records'][0]['system_recommended_qty']) == Decimal('50')
+    edit['required_qty'] = '999'
+    assert client.post(url, headers=headers, json=payload).status_code == 422

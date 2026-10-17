@@ -40,7 +40,7 @@ interface CalculationRunResponse {
 const endpoint = '/api/v1/requirements/basic';
 const button = 'rounded border px-3 py-2 text-sm disabled:opacity-40';
 
-export default function CentralRequirements({ purchaseOnly = false }: {purchaseOnly?: boolean}) {
+export default function CentralRequirements({ purchaseOnly = false, initialVersionId = '' }: {purchaseOnly?: boolean; initialVersionId?: string}) {
   const {user} = useAuth(); const superAdmin = Boolean(user?.is_super_admin);
   const canCalculate = superAdmin || Boolean(user?.requirements_update);
   const [versions,setVersions] = useState<CentralVersion[]>([]); const [identity,setIdentity] = useState('');
@@ -86,11 +86,11 @@ export default function CentralRequirements({ purchaseOnly = false }: {purchaseO
 
   useEffect(()=>{
     let current=true;setLoading(true);
-    void readWorkspace().then(value=>{if(current)acceptWorkspace(value);})
+    void readWorkspace(initialVersionId).then(value=>{if(current)acceptWorkspace(value);})
       .catch(failure=>{if(current)setError(failure.message);})
       .finally(()=>{if(current)setLoading(false);});
     return ()=>{current=false;};
-  },[readWorkspace,acceptWorkspace]);
+  },[readWorkspace,acceptWorkspace,initialVersionId]);
 
   useEffect(()=>{
     const current = ++generation.current;
@@ -114,7 +114,7 @@ export default function CentralRequirements({ purchaseOnly = false }: {purchaseO
     if(pending.current)return;
     pending.current=true;setLoading(true);setError('');
     try {
-      acceptWorkspace(await readWorkspace(identity));
+      acceptWorkspace(await readWorkspace(identity || initialVersionId));
     } catch(failure) {
       setError(failure instanceof Error?failure.message:'The saved results could not be loaded.');
     } finally {pending.current=false;setLoading(false);}
