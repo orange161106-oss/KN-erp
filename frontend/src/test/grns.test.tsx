@@ -87,7 +87,7 @@ test('renders Excel table with headers, toolbar buttons, and formula bar', async
   expect(screen.getByText('fx')).toBeInTheDocument();
 
   // Table headers
-  expect(screen.getByText('Part Number')).toBeInTheDocument();
+  expect(await screen.findByText('Part Number')).toBeInTheDocument();
   expect(screen.getByText('Item ID')).toBeInTheDocument();
   expect(screen.getByText('Description')).toBeInTheDocument();
   expect(screen.getByText('Qty')).toBeInTheDocument();

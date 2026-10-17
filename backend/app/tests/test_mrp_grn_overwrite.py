@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 import io
 from uuid import uuid4
@@ -17,7 +17,9 @@ from app.models.auth import Role, User
 from app.models.inventory_masters import Consumable, Unit
 from app.models.prd import PlanningVersion
 from app.models.requirements import MonthlyRequirementRecord
+from app.models.stock_statements import StockStatementBatch, StockStatementLine
 from app.security.tokens import create_access_token
+from app.services.requirements_workspace import calculate_workspace_requirements, get_t_minus_2_period
 
 
 @pytest.fixture
@@ -470,7 +472,7 @@ def test_mrp_grn_ingest_store_export_with_title_and_summary_rows(client, db_sess
     # Check consumables created and rates set
     con_a = db_session.scalar(select(Consumable).where(Consumable.item_id == "ITEM-A"))
     assert con_a is not None
-    assert con_a.latest_grn_rate == Decimal("50.00")  # Picked Rate, not LandedCost Rate (55.0)
+    assert con_a.latest_grn_rate == Decimal("55.00")  # Prioritized LandedCost Rate (55.0) over basic Rate (50.0)
 
     # 2. If real D:\kn\GRN-Oct.xlsx exists, test direct intake of all 108 valid rows / 86 unique items
     import os
@@ -491,5 +493,141 @@ def test_mrp_grn_ingest_store_export_with_title_and_summary_rows(client, db_sess
         assert real_data["period"] == "2026-10"
         assert real_data["consumables_updated_count"] == 86
         assert real_data["inserted_count"] == 86
+
+
+def test_mrp_t2_stock_statement_baseline_sourcing(client, db_session, test_setup):
+    headers = test_setup["auth_headers"]
+
+    # 1. Verify period helper
+    assert get_t_minus_2_period(10, 2026) == (8, 2026)
+    assert get_t_minus_2_period(2, 2026) == (12, 2025)
+    assert get_t_minus_2_period(1, 2026) == (11, 2025)
+
+    # 2. Seed active T-2 (August 2026) stock statement
+    t2_batch = StockStatementBatch(
+        statement_month=8,
+        statement_year=2026,
+        statement_date=date(2026, 8, 31),
+        source_filename="Stock-Statement-Aug-2026.xlsx",
+        file_hash="dummy_hash_aug",
+        status="active",
+        row_count=2,
+    )
+    db_session.add(t2_batch)
+    db_session.flush()
+
+    line_a = StockStatementLine(
+        batch_id=t2_batch.id,
+        item_id="CON-DRILL-01",
+        item_class="CONSUMABLE",
+        closing_qty=Decimal("150.0000"),
+        closing_value=Decimal("7500.0000"),
+        source_row=2,
+    )
+    line_b = StockStatementLine(
+        batch_id=t2_batch.id,
+        item_id="CON-NEW-99",
+        item_class="CONSUMABLE",
+        closing_qty=Decimal("30.0000"),
+        closing_value=Decimal("1500.0000"),
+        source_row=3,
+    )
+    db_session.add_all([line_a, line_b])
+
+    # 3. Seed active October 2026 MonthlyRequirementRecord for CON-DRILL-01
+    rec_drill = MonthlyRequirementRecord(
+        planning_period="2026-10",
+        planning_month=10,
+        planning_year=2026,
+        part_name="Gear Box",
+        part_number="PART-GB-01",
+        consumable_code="CON-DRILL-01",
+        consumable_name="Solid Carbide Drill 6mm",
+        process_name="Drilling",
+        production_order_qty=Decimal("1000.0000"),
+        scheduled_consumable_qty=Decimal("200.0000"),
+        gross_requirement=Decimal("200.0000"),
+        msl=Decimal("20.0000"),
+        opening_stock=Decimal("0.0000"),
+        grn_received_qty=Decimal("0.0000"),
+        consumed_qty=Decimal("0.0000"),
+        closing_stock=Decimal("0.0000"),
+        net_order_requirement=Decimal("0.0000"),
+        plant="Plant 1",
+        plant_id="PLANT_1",
+        status="Normal",
+    )
+    db_session.add(rec_drill)
+    db_session.commit()
+
+    # 4. Query calculate_workspace_requirements for October 2026 (T=10, 2026 -> T-2 = 8, 2026)
+    records = calculate_workspace_requirements(db_session, month=10, year=2026)
+    r_map = {r.consumable_code: r for r in records}
+    assert "CON-DRILL-01" in r_map
+    r_drill = r_map["CON-DRILL-01"]
+
+    # Verify T-2 stock statement closing balance is dynamically sourced as opening_stock
+    assert r_drill.opening_stock == "150.0000"
+    assert r_drill.closing_stock == "150.0000"  # (150 + 0) - 0
+    # Net order requirement: max(0, (gross 200 + msl 20) - closing 150) = 70
+    assert r_drill.net_order_requirement == "70.0000"
+    assert r_drill.stock_qty == "150.0000"
+    assert r_drill.shortage_qty == "70.0000"
+
+    # 5. Upload store GRN with received quantity of 50.0000 for CON-DRILL-01 and 40.0000 for CON-NEW-99
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Item ID", "Item Description", "GRN Qty", "Rate", "GRN No"])
+    ws.append(["CON-DRILL-01", "Solid Carbide Drill 6mm", 50, 45.0, "GRN-2026-001"])
+    ws.append(["CON-NEW-99", "Special Reamer 8mm", 40, 120.0, "GRN-2026-002"])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    res = client.post(
+        "/api/v1/mrp/upload-grn",
+        headers=headers,
+        data={"planning_month": 10, "planning_year": 2026},
+        files={"file": ("test_grn_oct.xlsx", buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["status"] == "success"
+    assert data["updated_count"] == 1
+    assert data["inserted_count"] == 1
+
+    # 6. Verify matched existing record CON-DRILL-01 retains T-2 opening stock and recalculated balance
+    rec_updated = db_session.scalar(
+        select(MonthlyRequirementRecord).where(
+            MonthlyRequirementRecord.consumable_code == "CON-DRILL-01",
+            MonthlyRequirementRecord.planning_month == 10,
+            MonthlyRequirementRecord.planning_year == 2026,
+        )
+    )
+    assert rec_updated is not None
+    assert rec_updated.opening_stock == Decimal("150.0000")  # Sourced from August 2026
+    assert rec_updated.grn_received_qty == Decimal("50.0000")
+    # closing_stock = (150 + 50) - 0 = 200
+    assert rec_updated.closing_stock == Decimal("200.0000")
+    # net_order_requirement = max(0, (200 + 20) - 200) = 20
+    assert rec_updated.net_order_requirement == Decimal("20.0000")
+    assert rec_updated.stock_qty == Decimal("200.0000")
+    assert rec_updated.shortage_qty == Decimal("20.0000")
+
+    # 7. Verify newly inserted record CON-NEW-99 also sources T-2 opening stock
+    rec_new = db_session.scalar(
+        select(MonthlyRequirementRecord).where(
+            MonthlyRequirementRecord.consumable_code == "CON-NEW-99",
+            MonthlyRequirementRecord.planning_month == 10,
+            MonthlyRequirementRecord.planning_year == 2026,
+        )
+    )
+    assert rec_new is not None
+    assert rec_new.opening_stock == Decimal("30.0000")  # Sourced from August 2026
+    assert rec_new.grn_received_qty == Decimal("40.0000")
+    assert rec_new.closing_stock == Decimal("70.0000")  # (30 + 40) - 0
+    assert rec_new.stock_qty == Decimal("70.0000")
+
 
 

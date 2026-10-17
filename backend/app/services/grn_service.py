@@ -87,10 +87,17 @@ QTY_SLUGS = {
     "receiptqty", "grnquantity", "receivedquantity", "quantity", "received", "accepted"
 }
 
-RATE_SLUGS = {
-    "rate", "unitprice", "basicrate", "landedcostrate", "unitrate",
-    "grnrate", "price", "cost", "unitcost", "itemrate"
+LANDED_RATE_SLUGS = {
+    "landedcostrate", "landedrate", "landedcost", "landingrate",
+    "totallandedcost", "landedprice", "totallandedrate"
 }
+BASE_RATE_SLUGS = {
+    "rate", "unitrate", "unitprice", "basicrate", "grnrate", "price"
+}
+OTHER_RATE_SLUGS = {
+    "cost", "unitcost", "itemrate"
+}
+RATE_SLUGS = LANDED_RATE_SLUGS | BASE_RATE_SLUGS | OTHER_RATE_SLUGS
 
 GRN_NO_SLUGS = {
     "grnno", "grnnumber", "grnid", "docno", "documentno",
@@ -136,9 +143,11 @@ def _score_qty_slug(slug: str) -> int:
 
 
 def _score_rate_slug(slug: str) -> int:
+    if slug in ("landedcostrate", "landedrate", "landedcost", "landingrate", "totallandedcost", "landedprice", "totallandedrate"):
+        return 4
     if slug in ("rate", "unitrate", "unitprice", "basicrate", "grnrate", "price"):
         return 3
-    if slug in ("landedcostrate", "cost", "unitcost", "itemrate"):
+    if slug in ("cost", "unitcost", "itemrate"):
         return 2
     return 1
 

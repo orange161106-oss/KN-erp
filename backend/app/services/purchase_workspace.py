@@ -216,22 +216,22 @@ def list_purchase_workspace(
         )
     ).all()
 
-    # Look up previous month's stock statement and current month's stock parameters
-    prev_month = 12 if month == 1 else month - 1
-    prev_year = year - 1 if month == 1 else year
+    # Look up T-2 procurement baseline stock statement and current month's stock parameters
+    t2_month = 11 if month == 1 else (12 if month == 2 else month - 2)
+    t2_year = year - 1 if month in (1, 2) else year
 
-    prev_statement_batch = session.scalar(
+    t2_statement_batch = session.scalar(
         select(StockStatementBatch).where(
-            StockStatementBatch.statement_month == prev_month,
-            StockStatementBatch.statement_year == prev_year,
+            StockStatementBatch.statement_month == t2_month,
+            StockStatementBatch.statement_year == t2_year,
             StockStatementBatch.status == "active",
         )
     )
     stmt_lines_map: dict[str, StockStatementLine] = {}
-    if prev_statement_batch:
+    if t2_statement_batch:
         lines = session.scalars(
             select(StockStatementLine).where(
-                StockStatementLine.batch_id == prev_statement_batch.id,
+                StockStatementLine.batch_id == t2_statement_batch.id,
                 StockStatementLine.item_class == "CONSUMABLE",
             )
         ).all()
@@ -318,7 +318,7 @@ def list_purchase_workspace(
 
         item_key = code.strip().upper()
         flags: list[str] = []
-        if prev_statement_batch:
+        if t2_statement_batch:
             if item_key in stmt_lines_map:
                 stmt_line = stmt_lines_map[item_key]
                 if stmt_line.closing_qty is not None:
@@ -327,10 +327,10 @@ def list_purchase_workspace(
                     effective_stock = _q4(bucket["stock"])
             else:
                 effective_stock = _q4(bucket["stock"])
-                flags.append(f"Not in {prev_month:02d}/{prev_year} statement")
+                flags.append(f"Not in {t2_month:02d}/{t2_year} statement")
         else:
             effective_stock = _q4(bucket["stock"])
-            flags.append(f"No stock statement for {prev_month:02d}/{prev_year}")
+            flags.append(f"No stock statement for {t2_month:02d}/{t2_year}")
 
         if not current_param_batch:
             flags.append(f"No stock parameters for {month:02d}/{year}")

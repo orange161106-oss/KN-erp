@@ -32,6 +32,7 @@ from app.models.requirements import (
     MonthlyRequirementRecord,
     RequirementCalculationError,
 )
+from app.models.stock_statements import StockStatementBatch, StockStatementLine
 from app.models.rules import ConsumptionNorm
 from app.schemas.requirements_workspace import (
     MonthlyPlanMetadata,
@@ -43,6 +44,21 @@ from app.schemas.requirements_workspace import (
     RequirementRowError,
     RequirementWorkspaceRecord,
 )
+
+
+def get_t_minus_2_period(month: int, year: int) -> tuple[int, int]:
+    """Calculate T-2 planning period (month, year) for physical inventory baseline.
+
+    e.g. Oct 2026 (10, 2026) -> Aug 2026 (8, 2026)
+    Feb 2026 (2, 2026) -> Dec 2025 (12, 2025)
+    Jan 2026 (1, 2026) -> Nov 2025 (11, 2025)
+    """
+    if month == 1:
+        return 11, year - 1
+    elif month == 2:
+        return 12, year - 1
+    else:
+        return month - 2, year
 
 
 def get_monthly_plan_metadata(
@@ -193,6 +209,16 @@ def calculate_workspace_requirements(
     if month and year:
         target_period = f"{year:04d}-{month:02d}"
 
+    t_month, t_year = month, year
+    if not (t_month and t_year) and target_period and "-" in target_period:
+        try:
+            parts = target_period.split("-")
+            t_year, t_month = int(parts[0]), int(parts[1])
+        except (ValueError, IndexError):
+            pass
+
+    t2_month, t2_year = get_t_minus_2_period(t_month, t_year) if (t_month and t_year) else (None, None)
+
     # 1. Query dedicated monthly planning records
     query = select(MonthlyRequirementRecord).options(joinedload(MonthlyRequirementRecord.planning_version)).where(MonthlyRequirementRecord.is_deleted == False)  # noqa: E712
     if target_period:
@@ -206,20 +232,66 @@ def calculate_workspace_requirements(
         MonthlyRequirementRecord.is_deleted == False,
     ).limit(1).scalar_subquery() if target_period else None
 
+    t2_batch_id_subquery = select(StockStatementBatch.id).where(
+        StockStatementBatch.statement_month == t2_month,
+        StockStatementBatch.statement_year == t2_year,
+        StockStatementBatch.status == "active",
+    ).limit(1).scalar_subquery() if (t2_month and t2_year) else None
+
     period_row = session.execute(
-        select(PlanningVersion, batch_metadata, mrr_count_subquery)
+        select(PlanningVersion, batch_metadata, mrr_count_subquery, t2_batch_id_subquery)
         .where(PlanningVersion.planning_period == target_period)
         .order_by(PlanningVersion.version_number.desc()).limit(1)
     ).first() if target_period else None
     period_version = period_row[0] if period_row else None
     central = bool(period_row and (period_row[1] or {}).get('workflow') == basic_planning.WORKFLOW)
     has_mrr = bool(period_row and (period_row[2] or 0) > 0)
+    t2_batch_id = period_row[3] if period_row else None
+
+    if not t2_batch_id and not period_row and t2_month and t2_year:
+        t2_batch_id = session.scalar(
+            select(StockStatementBatch.id).where(
+                StockStatementBatch.statement_month == t2_month,
+                StockStatementBatch.statement_year == t2_year,
+                StockStatementBatch.status == "active",
+            ).limit(1)
+        )
+
+    t2_stock_by_code: dict[str, Decimal] = {}
+    if t2_batch_id:
+        t2_lines = session.execute(
+            select(StockStatementLine.item_id, StockStatementLine.closing_qty).where(
+                StockStatementLine.batch_id == t2_batch_id,
+                StockStatementLine.item_class == "CONSUMABLE",
+            )
+        ).all()
+        for item_id, closing_qty in t2_lines:
+            if item_id:
+                t2_stock_by_code[item_id.strip().upper()] = closing_qty or Decimal("0.0")
+
     monthly_rows = [] if central else session.scalars(query.order_by(MonthlyRequirementRecord.row_index, MonthlyRequirementRecord.created_at)).all()
 
     results: list[RequirementWorkspaceRecord] = []
 
     if monthly_rows:
         for r in monthly_rows:
+            code_upper = r.consumable_code.strip().upper() if r.consumable_code else ""
+            if code_upper in t2_stock_by_code:
+                op_stock = t2_stock_by_code[code_upper]
+            else:
+                op_stock = getattr(r, "opening_stock", Decimal("0.0")) or Decimal("0.0")
+
+            grn_rec = getattr(r, "grn_received_qty", Decimal("0.0")) or Decimal("0.0")
+            consumed = getattr(r, "consumed_qty", Decimal("0.0")) or Decimal("0.0")
+            cls_stk = (op_stock + grn_rec) - consumed
+            gross_req = getattr(r, "gross_requirement", Decimal("0.0")) or (r.scheduled_consumable_qty or Decimal("0.0"))
+            msl_qty = getattr(r, "msl", Decimal("0.0")) or Decimal("0.0")
+            net_order = max(Decimal("0.0000"), (gross_req + msl_qty) - cls_stk)
+
+            has_stock_data = (code_upper in t2_stock_by_code) or (grn_rec > Decimal("0")) or (op_stock > Decimal("0"))
+            stock_qty_val = format(cls_stk, ".4f") if has_stock_data else format(r.stock_qty, ".4f")
+            shortage_qty_val = format(net_order, ".4f") if has_stock_data else format(r.shortage_qty, ".4f")
+
             results.append(
                 RequirementWorkspaceRecord(
                     id=str(r.id),
@@ -245,19 +317,19 @@ def calculate_workspace_requirements(
                     description=r.consumable_name,
                     unit=r.unit,
                     required_qty=format(r.scheduled_consumable_qty, ".4f"),
-                    stock_qty=format(r.stock_qty, ".4f"),
-                    shortage_qty=format(r.shortage_qty, ".4f"),
+                    stock_qty=stock_qty_val,
+                    shortage_qty=shortage_qty_val,
                     po_pending_qty=format(r.po_pending_qty, ".4f"),
-                    msl=format(r.msl, ".4f"),
+                    msl=format(msl_qty, ".4f"),
                     status=r.status,
                     remarks=r.remarks,
                     # Month-End Overwrite & MRP Balance Tracking
-                    opening_stock=format(getattr(r, "opening_stock", Decimal("0.0")), ".4f"),
-                    grn_received_qty=format(getattr(r, "grn_received_qty", Decimal("0.0")), ".4f"),
-                    consumed_qty=format(getattr(r, "consumed_qty", Decimal("0.0")), ".4f"),
-                    closing_stock=format(getattr(r, "closing_stock", Decimal("0.0")), ".4f"),
-                    gross_requirement=format(getattr(r, "gross_requirement", Decimal("0.0")), ".4f"),
-                    net_order_requirement=format(getattr(r, "net_order_requirement", Decimal("0.0")), ".4f"),
+                    opening_stock=format(op_stock, ".4f"),
+                    grn_received_qty=format(grn_rec, ".4f"),
+                    consumed_qty=format(consumed, ".4f"),
+                    closing_stock=format(cls_stk, ".4f"),
+                    gross_requirement=format(gross_req, ".4f"),
+                    net_order_requirement=format(net_order, ".4f"),
                     last_synced_at=r.last_synced_at,
                     grn_source_file=r.grn_source_file,
                     invoice_no=r.invoice_no,
@@ -317,20 +389,36 @@ def calculate_workspace_requirements(
                 mat_code = material.code.strip().upper() if material and material.code else ""
                 matching_mrrs = mrr_by_code.get(mat_code, [])
                 grn_rec_qty = Decimal("0.0")
-                cls_stk = Decimal("0.0")
                 mrr_file = None
                 mrr_inv = None
                 mrr_dt = None
                 mrr_sync = None
+                matched_mrr = None
                 if matching_mrrs:
                     plant_k = _normalize_plant_identifier(plant.name if plant else None)
                     matched_mrr = next((m for m in matching_mrrs if _normalize_plant_identifier(m.plant_id or m.plant) == plant_k), matching_mrrs[0])
                     grn_rec_qty = matched_mrr.grn_received_qty or Decimal("0.0")
-                    cls_stk = matched_mrr.closing_stock if matched_mrr.closing_stock is not None else grn_rec_qty
                     mrr_file = matched_mrr.grn_source_file
                     mrr_inv = matched_mrr.invoice_no
                     mrr_dt = matched_mrr.grn_date
                     mrr_sync = matched_mrr.last_synced_at
+
+                if mat_code in t2_stock_by_code:
+                    op_stock = t2_stock_by_code[mat_code]
+                elif matched_mrr:
+                    op_stock = getattr(matched_mrr, "opening_stock", Decimal("0.0")) or Decimal("0.0")
+                else:
+                    op_stock = Decimal("0.0")
+
+                consumed = (getattr(matched_mrr, "consumed_qty", Decimal("0.0")) or Decimal("0.0")) if matched_mrr else Decimal("0.0")
+                cls_stk = (op_stock + grn_rec_qty) - consumed
+                gross_req = row.calculated_qty or Decimal("0.0")
+                msl_qty = (getattr(matched_mrr, "msl", Decimal("0.0")) or Decimal("0.0")) if matched_mrr else Decimal("0.0")
+                net_order = max(Decimal("0.0000"), (gross_req + msl_qty) - cls_stk)
+
+                has_stock_data = (mat_code in t2_stock_by_code) or bool(matched_mrr and (grn_rec_qty > Decimal("0") or op_stock > Decimal("0")))
+                stock_display = format(cls_stk, ".4f") if has_stock_data else "Unavailable"
+                shortage_display = format(net_order, ".4f") if has_stock_data else "Unavailable"
 
                 results.append(
                     RequirementWorkspaceRecord(
@@ -352,14 +440,18 @@ def calculate_workspace_requirements(
                         description=material.name if material else "",
                         unit=row.uom,
                         required_qty=format(row.calculated_qty, ".4f"),
-                        stock_qty="Unavailable",
-                        shortage_qty="Unavailable",
+                        stock_qty=stock_display,
+                        shortage_qty=shortage_display,
                         po_pending_qty="Unavailable",
-                        msl="Unavailable",
+                        msl="Unavailable" if not has_stock_data else format(msl_qty, ".4f"),
                         status="Calculated",
                         remarks=row.rounding_policy,
+                        opening_stock=format(op_stock, ".4f"),
                         grn_received_qty=format(grn_rec_qty, ".4f"),
-                        closing_stock=format(cls_stk if cls_stk > Decimal("0") else grn_rec_qty, ".4f"),
+                        consumed_qty=format(consumed, ".4f"),
+                        closing_stock=format(cls_stk, ".4f"),
+                        gross_requirement=format(gross_req, ".4f"),
+                        net_order_requirement=format(net_order, ".4f"),
                         last_synced_at=mrr_sync,
                         grn_source_file=mrr_file,
                         invoice_no=mrr_inv,
@@ -374,20 +466,32 @@ def calculate_workspace_requirements(
                 mat_code = material.code.strip().upper() if material and material.code else ""
                 matching_mrrs = mrr_by_code.get(mat_code, [])
                 grn_rec_qty = Decimal("0.0")
-                cls_stk = Decimal("0.0")
                 mrr_file = None
                 mrr_inv = None
                 mrr_dt = None
                 mrr_sync = None
+                matched_mrr = None
                 if matching_mrrs:
                     plant_k = _normalize_plant_identifier(plant.name if plant else None)
                     matched_mrr = next((m for m in matching_mrrs if _normalize_plant_identifier(m.plant_id or m.plant) == plant_k), matching_mrrs[0])
                     grn_rec_qty = matched_mrr.grn_received_qty or Decimal("0.0")
-                    cls_stk = matched_mrr.closing_stock if matched_mrr.closing_stock is not None else grn_rec_qty
                     mrr_file = matched_mrr.grn_source_file
                     mrr_inv = matched_mrr.invoice_no
                     mrr_dt = matched_mrr.grn_date
                     mrr_sync = matched_mrr.last_synced_at
+
+                if mat_code in t2_stock_by_code:
+                    op_stock = t2_stock_by_code[mat_code]
+                elif matched_mrr:
+                    op_stock = getattr(matched_mrr, "opening_stock", Decimal("0.0")) or Decimal("0.0")
+                else:
+                    op_stock = Decimal("0.0")
+
+                consumed = (getattr(matched_mrr, "consumed_qty", Decimal("0.0")) or Decimal("0.0")) if matched_mrr else Decimal("0.0")
+                cls_stk = (op_stock + grn_rec_qty) - consumed
+
+                has_stock_data = (mat_code in t2_stock_by_code) or bool(matched_mrr and (grn_rec_qty > Decimal("0") or op_stock > Decimal("0")))
+                stock_display = format(cls_stk, ".4f") if has_stock_data else "Unavailable"
 
                 results.append(
                     RequirementWorkspaceRecord(
@@ -409,14 +513,18 @@ def calculate_workspace_requirements(
                         description=error.error_message,
                         unit="",
                         required_qty="Unavailable",
-                        stock_qty="Unavailable",
+                        stock_qty=stock_display,
                         shortage_qty="Unavailable",
                         po_pending_qty="Unavailable",
                         msl="Unavailable",
                         status="Configuration required",
                         remarks=error.error_code,
+                        opening_stock=format(op_stock, ".4f"),
                         grn_received_qty=format(grn_rec_qty, ".4f"),
-                        closing_stock=format(cls_stk if cls_stk > Decimal("0") else grn_rec_qty, ".4f"),
+                        consumed_qty=format(consumed, ".4f"),
+                        closing_stock=format(cls_stk, ".4f"),
+                        gross_requirement="0.0000",
+                        net_order_requirement="0.0000",
                         last_synced_at=mrr_sync,
                         grn_source_file=mrr_file,
                         invoice_no=mrr_inv,
@@ -434,6 +542,23 @@ def calculate_workspace_requirements(
                     or (m.grn_received_qty and m.grn_received_qty > Decimal("0"))
                 )
                 if is_store_receipt and m.consumable_code.strip().upper() not in added_codes:
+                    m_code = m.consumable_code.strip().upper()
+                    if m_code in t2_stock_by_code:
+                        m_op = t2_stock_by_code[m_code]
+                    else:
+                        m_op = getattr(m, "opening_stock", Decimal("0.0")) or Decimal("0.0")
+
+                    m_grn = getattr(m, "grn_received_qty", Decimal("0.0")) or Decimal("0.0")
+                    m_con = getattr(m, "consumed_qty", Decimal("0.0")) or Decimal("0.0")
+                    m_cls = (m_op + m_grn) - m_con
+                    m_gross = getattr(m, "gross_requirement", Decimal("0.0")) or (m.scheduled_consumable_qty or Decimal("0.0"))
+                    m_msl = getattr(m, "msl", Decimal("0.0")) or Decimal("0.0")
+                    m_net = max(Decimal("0.0000"), (m_gross + m_msl) - m_cls)
+
+                    has_stock_data = (m_code in t2_stock_by_code) or (m_grn > Decimal("0")) or (m_op > Decimal("0"))
+                    m_stk = m_cls if has_stock_data else m.stock_qty
+                    m_short = m_net if has_stock_data else m.shortage_qty
+
                     results.append(
                         RequirementWorkspaceRecord(
                             id=str(m.id),
@@ -456,18 +581,18 @@ def calculate_workspace_requirements(
                             description=m.consumable_name,
                             unit=m.unit,
                             required_qty=format(m.scheduled_consumable_qty, ".4f"),
-                            stock_qty=format(m.stock_qty, ".4f"),
-                            shortage_qty=format(m.shortage_qty, ".4f"),
+                            stock_qty=format(m_stk, ".4f"),
+                            shortage_qty=format(m_short, ".4f"),
                             po_pending_qty=format(m.po_pending_qty, ".4f"),
-                            msl=format(m.msl, ".4f"),
+                            msl=format(m_msl, ".4f"),
                             status=m.status,
                             remarks=m.remarks,
-                            opening_stock=format(getattr(m, "opening_stock", Decimal("0.0")), ".4f"),
-                            grn_received_qty=format(getattr(m, "grn_received_qty", Decimal("0.0")), ".4f"),
-                            consumed_qty=format(getattr(m, "consumed_qty", Decimal("0.0")), ".4f"),
-                            closing_stock=format(getattr(m, "closing_stock", Decimal("0.0")), ".4f"),
-                            gross_requirement=format(getattr(m, "gross_requirement", Decimal("0.0")), ".4f"),
-                            net_order_requirement=format(getattr(m, "net_order_requirement", Decimal("0.0")), ".4f"),
+                            opening_stock=format(m_op, ".4f"),
+                            grn_received_qty=format(m_grn, ".4f"),
+                            consumed_qty=format(m_con, ".4f"),
+                            closing_stock=format(m_cls, ".4f"),
+                            gross_requirement=format(m_gross, ".4f"),
+                            net_order_requirement=format(m_net, ".4f"),
                             last_synced_at=m.last_synced_at,
                             grn_source_file=m.grn_source_file,
                             invoice_no=m.invoice_no,
@@ -476,7 +601,7 @@ def calculate_workspace_requirements(
                             updated_at=m.updated_at,
                         )
                     )
-                    added_codes.add(m.consumable_code.strip().upper())
+                    added_codes.add(m_code)
 
     # Filter predicate
     def matches(record: RequirementWorkspaceRecord) -> bool:
@@ -1544,10 +1669,17 @@ QTY_SLUGS = {
     "receiptqty", "grnquantity", "receivedquantity", "quantity", "received", "accepted"
 }
 
-RATE_SLUGS = {
-    "rate", "unitprice", "basicrate", "landedcostrate", "unitrate",
-    "grnrate", "price", "cost", "unitcost", "itemrate"
+LANDED_RATE_SLUGS = {
+    "landedcostrate", "landedrate", "landedcost", "landingrate",
+    "totallandedcost", "landedprice", "totallandedrate"
 }
+BASE_RATE_SLUGS = {
+    "rate", "unitrate", "unitprice", "basicrate", "grnrate", "price"
+}
+OTHER_RATE_SLUGS = {
+    "cost", "unitcost", "itemrate"
+}
+RATE_SLUGS = LANDED_RATE_SLUGS | BASE_RATE_SLUGS | OTHER_RATE_SLUGS
 
 GRN_NO_SLUGS = {
     "grnno", "grnnumber", "grnid", "docno", "documentno",
@@ -1593,9 +1725,11 @@ def _score_qty_slug(slug: str) -> int:
 
 
 def _score_rate_slug(slug: str) -> int:
+    if slug in ("landedcostrate", "landedrate", "landedcost", "landingrate", "totallandedcost", "landedprice", "totallandedrate"):
+        return 4
     if slug in ("rate", "unitrate", "unitprice", "basicrate", "grnrate", "price"):
         return 3
-    if slug in ("landedcostrate", "cost", "unitcost", "itemrate"):
+    if slug in ("cost", "unitcost", "itemrate"):
         return 2
     return 1
 
@@ -1857,6 +1991,29 @@ def ingest_mrp_grn(
         .limit(1)
     )
 
+    t2_month, t2_year = get_t_minus_2_period(planning_month, planning_year)
+    t2_batch = session.scalar(
+        select(StockStatementBatch)
+        .where(
+            StockStatementBatch.statement_month == t2_month,
+            StockStatementBatch.statement_year == t2_year,
+            StockStatementBatch.status == "active",
+        )
+        .limit(1)
+    )
+    t2_stock_by_code: dict[str, Decimal] = {}
+    if t2_batch:
+        lines = session.execute(
+            select(StockStatementLine.item_id, StockStatementLine.closing_qty)
+            .where(
+                StockStatementLine.batch_id == t2_batch.id,
+                StockStatementLine.item_class == "CONSUMABLE",
+            )
+        ).all()
+        for item_id, closing_qty in lines:
+            if item_id:
+                t2_stock_by_code[item_id.strip().upper()] = closing_qty or Decimal("0.0")
+
     consumables_updated_count = 0
     updated_count = 0
     inserted_count = 0
@@ -1925,14 +2082,24 @@ def ingest_mrp_grn(
             # Overwrite existing record's grn_received_qty (month-end overwrite, not additive summing)
             for rec in matched_recs:
                 rec.grn_received_qty = incoming_qty
-                opening = rec.opening_stock if rec.opening_stock is not None else Decimal("0.0")
+                if code_upper in t2_stock_by_code:
+                    opening = t2_stock_by_code[code_upper]
+                elif raw_upper in t2_stock_by_code:
+                    opening = t2_stock_by_code[raw_upper]
+                elif rec.opening_stock is not None:
+                    opening = rec.opening_stock
+                else:
+                    opening = Decimal("0.0")
+                rec.opening_stock = opening
+
                 consumed = rec.consumed_qty if rec.consumed_qty is not None else Decimal("0.0")
                 closing = (opening + rec.grn_received_qty) - consumed
                 rec.closing_stock = closing
 
                 gross = rec.gross_requirement if rec.gross_requirement and rec.gross_requirement > Decimal("0") else (rec.scheduled_consumable_qty or Decimal("0.0"))
                 rec.gross_requirement = gross
-                net_req = max(Decimal("0.0"), gross - closing)
+                msl_qty = rec.msl if rec.msl is not None else Decimal("0.0")
+                net_req = max(Decimal("0.0"), (gross + msl_qty) - closing)
                 rec.net_order_requirement = net_req
 
                 # Sync spreadsheet display columns
@@ -1953,8 +2120,18 @@ def ingest_mrp_grn(
                 rec.updated_at = now
                 updated_count += 1
         else:
-            # Insert a new record initialized with the uploaded GRN quantity
-            closing = incoming_qty
+            # Insert a new record initialized with T-2 opening stock and uploaded GRN quantity
+            if code_upper in t2_stock_by_code:
+                opening = t2_stock_by_code[code_upper]
+            elif raw_upper in t2_stock_by_code:
+                opening = t2_stock_by_code[raw_upper]
+            else:
+                opening = Decimal("0.0000")
+
+            closing = opening + incoming_qty
+            gross = Decimal("0.0000")
+            msl_qty = Decimal("0.0000")
+            net_req = max(Decimal("0.0000"), (gross + msl_qty) - closing)
             assigned_plant = raw_plant or plant_id or "Plant 1"
             assigned_plant_id = raw_plant or plant_id or "PLANT_1"
             new_rec = MonthlyRequirementRecord(
@@ -1974,17 +2151,17 @@ def ingest_mrp_grn(
                 unit=consumable_uom,
                 plant=assigned_plant,
                 plant_id=assigned_plant_id,
-                opening_stock=Decimal("0.0000"),
+                opening_stock=opening,
                 grn_received_qty=incoming_qty,
                 consumed_qty=Decimal("0.0000"),
                 closing_stock=closing,
-                gross_requirement=Decimal("0.0000"),
-                net_order_requirement=Decimal("0.0000"),
+                gross_requirement=gross,
+                net_order_requirement=net_req,
                 stock_qty=closing,
-                shortage_qty=Decimal("0.0000"),
+                shortage_qty=net_req,
                 po_pending_qty=Decimal("0.0000"),
-                msl=Decimal("0.0000"),
-                status="Normal",
+                msl=msl_qty,
+                status="Critical shortage" if (net_req > Decimal("0") and closing <= Decimal("0")) else ("Low" if net_req > Decimal("0") else "Normal"),
                 last_synced_at=now,
                 grn_source_file=filename,
                 invoice_no=inv_no,
