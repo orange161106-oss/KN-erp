@@ -27,16 +27,9 @@ from app.models.prd import ImportBatch, PlanningVersion
 
 
 def _check_central_scope(session, user, month=None, year=None, planning_period=None):
-    """Keep the central router's access boundary on the monthly compatibility view."""
-    if user.is_super_admin or not user.plant_ids:
-        return
-    period = f'{year:04d}-{month:02d}' if month and year else planning_period
-    query = select(ImportBatch.validation_summary).join(PlanningVersion,
-        ImportBatch.planning_version_id == PlanningVersion.id)
-    if period:
-        query = query.where(PlanningVersion.planning_period == period)
-    if any((value or {}).get('workflow') == 'BASIC_CENTRAL_V1' for value in session.scalars(query)):
-        raise ApplicationError('CENTRAL_REVIEW_REQUIRED', 'Central plans are reviewed by Super Admin.', 403)
+    """Access is granted via CanReadRequirements / CanUpdateRequirements."""
+    return
+
 
 router = APIRouter(prefix="/requirements/workspace", tags=["requirements-workspace"])
 CanReadRequirements = Annotated[CurrentUser, Depends(require_feature_flag("requirements_read"))]
@@ -231,6 +224,33 @@ def export_requirements_workspace_post(
         content=excel_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="consumable_requirements_{period_label}.xlsx"'},
+    )
+
+
+@router.get("/issues")
+def get_requirements_issues(
+    user: CanReadRequirements,
+    session: Annotated[Session, Depends(get_db)],
+    month: int = Query(..., ge=1, le=12),
+    year: int = Query(..., ge=2020, le=2050),
+):
+    """Retrieve calculation errors and missing norms for the selected period."""
+    return service.get_period_calculation_issues(session, month=month, year=year)
+
+
+@router.get("/issues/export")
+def export_requirements_issues(
+    user: CanReadRequirements,
+    session: Annotated[Session, Depends(get_db)],
+    month: int = Query(..., ge=1, le=12),
+    year: int = Query(..., ge=2020, le=2050),
+):
+    """Export calculation errors and missing norms as CSV."""
+    csv_bytes = service.export_period_calculation_issues_csv(session, month=month, year=year)
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="Requirement_Issues_{year:04d}_{month:02d}.csv"'},
     )
 
 

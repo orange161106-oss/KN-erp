@@ -3,19 +3,25 @@ import {afterEach,beforeEach,expect,test,vi} from 'vitest';
 import {apiClient} from '../api/client';
 import {AuthContext} from '../features/auth/context';
 import CentralProductionImport from '../features/prd/CentralProductionImport';
-import CentralRequirements from '../features/requirements/CentralRequirements';
 import Requirements from '../features/requirements/Requirements';
 import CentralPurchaseAssessment from '../features/purchasing/CentralPurchaseAssessment';
+
 const endpoint='/api/v1/requirements/basic';
 const version={id:'version-1',planning_period:'2026-10',revision_label:'R3',status:'VALIDATED',is_latest:true,source_filename:'source.xlsx'};
 const material={consumable_id:'mat-1',consumable_code:'DRILL',consumable_name:'Synthetic drill',uom:'PCS',final_required_qty:'230',is_fully_confirmed:true};
-const calculation={id:'calc-1',product_code:'PROD-A',process_name:'Drilling',consumable_code:'DRILL',consumable_name:'Synthetic drill',source_production_qty:'100',raw_requirement:'200',calculated_qty:'200',uom:'PCS',rule_version:1,parameters:{rate:'2'},calculation_steps:[{step_number:1,description:'Multiply approved rate',formula:'100 × 2',result:'200'}]};
-const results={calculations:[calculation],errors:[],summary:[{...material,is_fully_confirmed:false}]};
-const centralView=(value:unknown=results,currentVersion=version)=>({versions:[currentVersion],selected_version_id:currentVersion.id,results:value});
 const sourcePreview={sheet_name:'Prd. Order',planning_period:'2026-10',revision_label:'R3',as_of_date:'2026-10-01',review_token:'reviewed-token',
   rows:[{source_row_number:5,part_number:'PART-A',item_id:'ITEM-A',product_code:'PROD-A',product_name:'Synthetic part',quantity:'100',unit:'PCS',norm_count:1,errors:[],norm_errors:[]}],errors:[],can_confirm:true,norm_ready:true};
-function authorized(component:React.ReactNode,superAdmin=true){return render(<AuthContext.Provider value={{user:{id:'operator',username:'operator',roles:[],permissions:[],is_super_admin:superAdmin,requirements_read:true,requirements_update:superAdmin,plant_ids:[]},login:vi.fn(),logout:vi.fn()}}>{component}</AuthContext.Provider>);}
-beforeEach(()=>{localStorage.clear();});afterEach(()=>{vi.restoreAllMocks();vi.unstubAllGlobals();});
+
+function authorized(component:React.ReactNode,superAdmin=true){
+  return render(
+    <AuthContext.Provider value={{user:{id:'operator',username:'operator',roles:[],permissions:[],is_super_admin:superAdmin,requirements_read:true,requirements_update:superAdmin,plant_ids:[]},login:vi.fn(),logout:vi.fn()}}>
+      {component}
+    </AuthContext.Provider>
+  );
+}
+
+beforeEach(()=>{localStorage.clear();});
+afterEach(()=>{vi.restoreAllMocks();vi.unstubAllGlobals();});
 
 test('production upload previews before confirmation and submits the exact reviewed revision',async()=>{
   const imported=vi.fn();const close=vi.fn();const post=vi.spyOn(apiClient,'postFormData').mockResolvedValueOnce(sourcePreview).mockResolvedValueOnce({imported_count:1});
@@ -134,38 +140,17 @@ test('monthly consumable planning and central plan display the same production-b
     part_thickness:'0',process_count:2,stock_qty:'Unavailable',shortage_qty:'Unavailable',po_pending_qty:'Unavailable',msl:'Unavailable',status:'Calculated',remarks:null};
   vi.spyOn(apiClient,'get').mockImplementation(async path => {
     if(path.includes('/requirements/workspace/view')) return {records:[row],plan_metadata:metadata} as never;
-    return centralView({...results,calculations:[{...calculation,product_part_number:'PART-A',product_item_id:'ITEM-A',product_name:'Synthetic part'}]},{...version,status:'CALCULATED'}) as never;
+    return {} as never;
   });
   const post=vi.spyOn(apiClient,'post').mockResolvedValue({message:'Production-based requirements updated.',records:[row],plan_metadata:metadata});
-  authorized(<Requirements defaultTab="mrp"/>);
-  await screen.findByText(/These are the same production-based requirements/);
+  authorized(<Requirements />);
+  await screen.findByText(/Production-based requirements calculated deterministically/);
   expect(screen.getByRole('cell',{name:'DRILL'})).toBeInTheDocument();
   expect(screen.getAllByRole('cell',{name:'200'}).length).toBeGreaterThan(0);
   expect(screen.queryByRole('button',{name:/Upload Excel/})).not.toBeInTheDocument();
+  expect(screen.queryByText('Central requirement plan')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button',{name:/Recalculate$/}));
   await waitFor(()=>expect(post).toHaveBeenCalledWith('/api/v1/requirements/workspace/recalculate?month=10&year=2026',{}));
-  fireEvent.click(screen.getByRole('button',{name:'Central requirement plan'}));
-  await screen.findByRole('heading',{name:'Consumables required per product'});
-  expect(await screen.findByRole('cell',{name:'PART-A'})).toBeInTheDocument();
-  expect(screen.getByRole('cell',{name:'ITEM-A'})).toBeInTheDocument();
-  expect(screen.getAllByRole('cell',{name:'200'}).length).toBeGreaterThan(0);
-});
-
-test('resolved missing norms clear after recalculation and hard configuration issues still block approval', async () => {
-  let resolved=false;
-  const missing={id:'error-1',product_code:'PROD-B',error_code:'NO_CONSUMPTION_NORM',error_message:'Missing norm.',
-    context_data:{part_number:'PART-B',item_id:'ITEM-B',part_description:'Synthetic B',planned_quantity:'50'}};
-  vi.spyOn(apiClient,'get').mockImplementation(async () => centralView({...results,errors:resolved?[{...missing,error_code:'PROCESS_REQUIRED',error_message:'Choose an active process.'}]:[missing]},{...version,status:'CALCULATED_WITH_ERRORS'}) as never);
-  vi.spyOn(apiClient,'post').mockImplementation(async()=>{resolved=true;return {no_consumption_norms:[]} as never;});
-  authorized(<CentralRequirements/>);
-  await screen.findByRole('cell',{name:'PART-B'});
-  expect(screen.getByRole('cell',{name:'50'})).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button',{name:'Calculate and save'}));
-  await waitFor(()=>expect(screen.queryByText(/parts have no consumption norms defined/)).not.toBeInTheDocument());
-  expect(screen.getByRole('button',{name:'Approve central plan'})).toBeDisabled();
-  expect(screen.getByRole('cell',{name:'PROD-A'})).toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText('Search product requirements'),{target:{value:'unknown'}});
-  expect(screen.queryByRole('cell',{name:'PROD-A'})).not.toBeInTheDocument();
 });
 
 test('purchase assessment never copies gross demand or treats missing inventory as zero',async()=>{
