@@ -50,6 +50,10 @@ deployment record only.
 
 ## Shared implementation contracts
 
+- [Company monthly purchase formula](25_COMPANY_MONTHLY_PURCHASE.md): owner-supplied
+  KNL-Formula.xlsx, selected-month uploaded MSL/MOQ, previous closing stock, monthly
+  preview versus saved timed assessments, and explicit missing-input handling.
+
 - [Central basic consumable planning](24_CENTRAL_BASIC_PLANNING_CONTRACT.md):
   owner-approved direct production → norms → central Super Admin review → inventory/
   purchase workflow, reviewed files, source/approval evidence, migration and QA limits.

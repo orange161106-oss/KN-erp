@@ -40,12 +40,18 @@ interface CalculationRunResponse {
 const endpoint = '/api/v1/requirements/basic';
 const button = 'rounded border px-3 py-2 text-sm disabled:opacity-40';
 
-export default function CentralRequirements({ purchaseOnly = false, initialVersionId = '' }: {purchaseOnly?: boolean; initialVersionId?: string}) {
+export default function CentralRequirements({ purchaseOnly = false, initialVersionId = '', embedded = false,
+  asOfDate, refreshKey = 0, onPlanSaved, onBusyChange }: {
+  purchaseOnly?: boolean; initialVersionId?: string; embedded?: boolean; asOfDate?: string; refreshKey?: number;
+  onPlanSaved?: () => void; onBusyChange?: (busy: boolean) => void;
+}) {
   const {user} = useAuth(); const superAdmin = Boolean(user?.is_super_admin);
   const canCalculate = superAdmin || Boolean(user?.requirements_update);
   const [versions,setVersions] = useState<CentralVersion[]>([]); const [identity,setIdentity] = useState('');
   const [results,setResults] = useState<Results|null>(null); const [preview,setPreview] = useState<Preview|null>(null);
-  const [asOf,setAsOf] = useState(() => new Date().toISOString().slice(0, 10));
+  const [ownAsOf,setAsOf] = useState(() => {const now=new Date();return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;});
+  const asOf = asOfDate ?? ownAsOf;
+  const [showCalculationDetails,setShowCalculationDetails] = useState(false);
   const [busy,setBusy] = useState(false); const [loading,setLoading] = useState(false);
   const [error,setError] = useState(''); const [message,setMessage] = useState('');
   const [selected,setSelected] = useState(new Set<string>()); const [detail,setDetail] = useState<Calculation|null>(null);
@@ -59,6 +65,8 @@ export default function CentralRequirements({ purchaseOnly = false, initialVersi
 
   const pending = useRef(false); const generation = useRef(0);
   const preloadedIdentity = useRef('');
+  useEffect(()=>{onBusyChange?.(busy);},[busy,onBusyChange]);
+  useEffect(()=>{setPreview(null);},[asOf]);
   const version = versions.find(row=>row.id===identity);
   const calculationOriginals = useMemo(()=>new Map((results?.calculations||[]).map(row=>[row.id,row])),[results]);
   const sourceOriginals = useMemo(()=>new Map((preview?.sources||[]).map(row=>[row.id,row])),[preview]);
@@ -85,12 +93,12 @@ export default function CentralRequirements({ purchaseOnly = false, initialVersi
     `${endpoint}/workspace${versionId?`?planning_version_id=${encodeURIComponent(versionId)}`:''}`,60000),[]);
 
   useEffect(()=>{
-    let current=true;setLoading(true);
+    let current=true;setLoading(true);setError('');setPreview(null);
     void readWorkspace(initialVersionId).then(value=>{if(current)acceptWorkspace(value);})
       .catch(failure=>{if(current)setError(failure.message);})
       .finally(()=>{if(current)setLoading(false);});
     return ()=>{current=false;};
-  },[readWorkspace,acceptWorkspace,initialVersionId]);
+  },[readWorkspace,acceptWorkspace,initialVersionId,refreshKey]);
 
   useEffect(()=>{
     const current = ++generation.current;
@@ -122,7 +130,8 @@ export default function CentralRequirements({ purchaseOnly = false, initialVersi
 
   async function run(action:'preview'|'calculate'|'approve', ackMissing = false) {
     if(pending.current||!identity) return;
-    const targetDate = asOf || new Date().toISOString().slice(0, 10);
+    if(action!=='approve'&&!asOf){setError('Select a calculation date before previewing or calculating.');return;}
+    const targetDate = asOf;
     pending.current=true;setBusy(true);setError('');setMessage('');
     let saved = false;
     try{
@@ -144,6 +153,7 @@ export default function CentralRequirements({ purchaseOnly = false, initialVersi
           setAcknowledgeMissingNorms(false);
         }
         saved = true;
+        onPlanSaved?.();
         // The write has committed. A later read failure must not display the old
         // zero-row calculation or tell the operator to repeat the write.
         setResults(null);setPreview(null);
@@ -208,18 +218,19 @@ export default function CentralRequirements({ purchaseOnly = false, initialVersi
     {key:'id',label:'Calculation Details',width:140,render:(_value,row)=><button className="underline" onClick={()=>setDetail(row)}>View formula</button>}];
 
   return <div className="space-y-4 min-w-0">
-    <section className="rounded-xl border bg-white p-5 space-y-3"><h2 className="text-xl font-bold">{purchaseOnly?'Central purchase assessment':'Central basic requirement plan'}</h2>
+    <section className={`rounded-xl border bg-white ${embedded?'p-3':'p-5'} space-y-3`}><h2 className="text-xl font-bold">{purchaseOnly?'Central purchase assessment':embedded?'Central review and approval':'Central basic requirement plan'}</h2>
       <p className="text-sm">Production quantities × approved consumption norms → Super Admin review → consolidated inventory and purchase assessment.</p>
-      <div className="flex flex-wrap items-end gap-3"><label>Production revision<select aria-label="Central production revision" disabled={loading||busy} value={identity} onChange={event=>setIdentity(event.target.value)} className="block rounded border p-2"><option value="">Choose imported production</option>{versions.map(row=><option key={row.id} value={row.id}>{row.planning_period} · {row.revision_label} · {row.status}{row.is_latest?' · Latest':' · History'}</option>)}</select></label>
-        {!purchaseOnly&&<><label>Norm effective date<input type="date" value={asOf} onChange={event=>{setAsOf(event.target.value);setPreview(null);}} className="block rounded border p-2"/></label>
-          <button className={button} disabled={busy||loading||!identity} onClick={()=>void run('preview')}>Preview matching</button>
-          {canCalculate&&<button className={`${button} bg-burnt-orange text-white`} disabled={busy||loading||!version?.is_latest||version.status==='APPROVED'} onClick={()=>void run('calculate')}>Calculate and save</button>}
+      <div className="flex flex-wrap items-end gap-3"><label>Production revision<select aria-label="Central production revision" disabled={embedded||loading||busy} value={identity} onChange={event=>setIdentity(event.target.value)} className="block rounded border p-2"><option value="">Choose imported production</option>{versions.map(row=><option key={row.id} value={row.id}>{row.planning_period} · {row.revision_label} · {row.status}{row.is_latest?' · Latest':' · History'}</option>)}</select></label>
+        {!purchaseOnly&&<>{!embedded&&<label>Norm effective date<input type="date" value={asOf} onChange={event=>{setAsOf(event.target.value);setPreview(null);}} className="block rounded border p-2"/></label>}
+          <button className={button} disabled={busy||loading||!identity||!asOf} onClick={()=>void run('preview')}>Preview matching</button>
+          {canCalculate&&<button className={`${button} bg-burnt-orange text-white`} disabled={busy||loading||!asOf||!version?.is_latest||version.status==='APPROVED'} onClick={()=>void run('calculate')}>Calculate and save</button>}
           {superAdmin&&<button className={`${button} bg-emerald-700 text-white`} disabled={busy||loading||!results||!version?.is_latest||!['CALCULATED','CALCULATED_WITH_ERRORS'].includes(version.status)||hasHardErrors} onClick={()=>{
             if (hasMissingNorms) setShowApprovalModal(true);
             else void run('approve', false);
           }}>Approve central plan</button>}</>}
-        <button className={button} disabled={busy||!results} onClick={()=>void download('xlsx')}>Export Excel</button><button className={button} disabled={busy||!results} onClick={()=>void download('csv')}>Export CSV</button>
+        <button className={button} disabled={busy||!results} onClick={()=>void download('xlsx')}>{embedded?'Export review Excel':'Export Excel'}</button><button className={button} disabled={busy||!results} onClick={()=>void download('csv')}>{embedded?'Export review CSV':'Export CSV'}</button>
         <button className={button} disabled={busy||loading} onClick={()=>void reloadResults()}>Reload results</button>
+        {embedded&&<button className={button} onClick={()=>setShowCalculationDetails(value=>!value)}>{showCalculationDetails?'Hide calculation details':'Show calculation details'}</button>}
       </div>
       {version&&<p className="text-sm">Source: {version.source_filename} · Status: <strong>{version.status}</strong>{!version.is_latest&&' · Historical revision; calculation and approval are protected.'}</p>}
       {!identity&&!loading&&!error&&<p>Upload a production workbook in Production for sale to start central planning.</p>}
@@ -227,7 +238,7 @@ export default function CentralRequirements({ purchaseOnly = false, initialVersi
       {error&&<p role="alert" className="rounded bg-red-50 p-3 text-red-700">{error}</p>}{message&&<p role="status" className="rounded bg-green-50 p-3 text-green-800">{message}</p>}
     </section>
 
-    {!purchaseOnly&&results&&<section className="min-w-0 rounded-xl border bg-white">
+    {!purchaseOnly&&results&&(!embedded||showCalculationDetails)&&<section className="min-w-0 rounded-xl border bg-white">
       <div className="flex flex-wrap items-center gap-3 p-4">
         <div><h3 className="font-semibold">Consumables required per product</h3>
           <p className="text-sm">{results.calculations.length} saved requirement lines. Quantities use the selected production revision and saved consumption formulas.</p></div>
@@ -246,7 +257,8 @@ export default function CentralRequirements({ purchaseOnly = false, initialVersi
     )}
 
     {missingParts.length > 0 && (
-      <section className="rounded-xl border border-amber-300 bg-amber-50/60 p-4 space-y-3">
+      <details open={!embedded} className="rounded-xl border border-amber-300 bg-amber-50/60 p-4 space-y-3">
+        <summary className="font-semibold cursor-pointer">Missing consumption norms</summary>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="font-semibold text-amber-950 text-base">
@@ -296,7 +308,7 @@ export default function CentralRequirements({ purchaseOnly = false, initialVersi
             </tbody>
           </table>
         </div>
-      </section>
+      </details>
     )}
 
     {preview&&<section className="rounded-xl border bg-white p-4 space-y-2"><h3 className="font-semibold">Product and norm matching</h3><p>{preview.sources.length} source rows · {preview.complete?'All rows matched':'Corrections required'}. Preview does not save or approve demand.</p>
@@ -316,7 +328,7 @@ export default function CentralRequirements({ purchaseOnly = false, initialVersi
 
     {detail&&!purchaseOnly&&<section className="rounded-xl border bg-white p-4"><button className="float-right underline" onClick={()=>setDetail(null)}>Close details</button><h3 className="font-semibold">{detail.product_code} → {detail.consumable_code}, norm v{detail.rule_version}</h3><p className="text-sm">Approved parameters: {JSON.stringify(detail.parameters)}</p><ol>{detail.calculation_steps.map(step=><li key={step.step_number} className="mt-2"><strong>{step.description}</strong><p>{step.formula} = {step.result}</p></li>)}</ol></section>}
     
-    {results&&<section className="rounded-xl border bg-white p-4 space-y-3"><h3 className="font-semibold">Consolidated consumable requirements</h3><p className="text-sm">Each material is consolidated across products before usable stock or incoming supply is applied. Basic demand remains separate from purchase quantity.</p>
+    {results&&<details open={!embedded} className="rounded-xl border bg-white p-4 space-y-3"><summary className="font-semibold cursor-pointer">Consumable summary and purchase assessment</summary><h3 className="font-semibold">Consolidated consumable requirements</h3><p className="text-sm">Each material is consolidated across products before usable stock or incoming supply is applied. Basic demand remains separate from purchase quantity.</p>
       <div className="overflow-auto">
         <table className="w-full text-sm text-left">
           <thead>
@@ -390,7 +402,7 @@ export default function CentralRequirements({ purchaseOnly = false, initialVersi
           </tbody>
         </table>
       </div>
-    </section>}
+    </details>}
 
     {showApprovalModal && (
       <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">

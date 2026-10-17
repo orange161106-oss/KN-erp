@@ -49,6 +49,8 @@ export interface DataTableProps<T extends { id: string; row_index?: number | nul
   onDiscardChanges?: () => void;
   isLoading?: boolean;
   virtualize?: boolean;
+  /** Bound Fit mode when the table lives in a scrolling page rather than a fixed panel. */
+  fitHeight?: React.CSSProperties['height'];
   emptyMessage?: string;
   onAddRow?: () => void;
   canCreate?: boolean;
@@ -105,6 +107,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
   onDiscardChanges,
   isLoading = false,
   virtualize = false,
+  fitHeight,
   emptyMessage = 'No records found matching your filters.',
   onAddRow,
   canCreate = true,
@@ -1052,7 +1055,7 @@ export default function DataTable<T extends { id: string; row_index?: number | n
         pasteText(event.clipboardData.getData('text/plain'));
       }}
       style={{
-        height: isFullscreen ? '100dvh' : heightMode === 'fit' ? undefined : `${currentHeightPx}px`,
+        height: isFullscreen ? '100dvh' : heightMode === 'fit' ? fitHeight : `${currentHeightPx}px`,
         maxHeight: isFullscreen ? '100dvh' : undefined,
       }}
       className={`min-w-0 w-full flex flex-col ${heightMode === 'fit' ? 'min-h-0' : 'min-h-[320px]'} bg-white border border-ink-text/15 rounded-lg shadow-2xs select-none transition-[height] duration-75 ${

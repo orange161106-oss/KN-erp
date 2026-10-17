@@ -19,9 +19,9 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(endpoint: string, method: string, data?: unknown, timeoutMs?: number): Promise<T> {
+async function request<T>(endpoint: string, method: string, data?: unknown, timeoutMs?: number, responseType: 'json' | 'blob' = 'json'): Promise<T> {
   const requestToken = accessToken;
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const headers: Record<string, string> = { Accept: responseType === 'blob' ? '*/*' : 'application/json' };
   if (requestToken) headers.Authorization = `Bearer ${requestToken}`;
   const formData = data instanceof FormData;
   if (data !== undefined && !formData) headers['Content-Type'] = 'application/json';
@@ -46,7 +46,8 @@ async function request<T>(endpoint: string, method: string, data?: unknown, time
     throw new ApiError(response.status, typeof body?.code === 'string' ? body.code : 'API_ERROR', message,
       response.status === 503 && body?.code === 'DATABASE_UNAVAILABLE' && body?.details?.retryable === true);
   }
-  return response.status === 204 ? undefined as T : response.json();
+  if (response.status === 204) return undefined as T;
+  return responseType === 'blob' ? response.blob() as Promise<T> : response.json();
 }
 function read<T>(endpoint: string, timeoutMs = 30000): Promise<T> {
   const key = `${timeoutMs}:${endpoint}`;
@@ -77,6 +78,7 @@ async function write<T>(endpoint: string, method: string, data?: unknown, timeou
 
 export const apiClient = {
   get: read,
+  getBlob: (endpoint: string, timeoutMs = 60000) => request<Blob>(endpoint, 'GET', undefined, timeoutMs, 'blob'),
   post: <T>(endpoint: string, data: unknown) => write<T>(endpoint, 'POST', data),
   put: <T>(endpoint: string, data: unknown) => write<T>(endpoint, 'PUT', data),
   patch: <T>(endpoint: string, data?: unknown) => write<T>(endpoint, 'PATCH', data),

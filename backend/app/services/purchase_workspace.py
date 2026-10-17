@@ -7,13 +7,16 @@ from uuid import UUID
 
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.comments import Comment
 from openpyxl.utils import get_column_letter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApplicationError
 from app.models.inventory_masters import Consumable, Supplier, SupplierConsumable, Unit
-from app.models.prd import PlanningVersion
+from app.models.prd import PlanningVersion, PRDOrderItem
+from app.models.masters import Product
+from app.models.production import Process
 from app.models.purchase_approval import PurchaseApproval
 from app.models.purchase_order import PurchaseDemandEvidence
 from app.models.purchase_plan import PurchasePlanDraft
@@ -35,6 +38,7 @@ from app.schemas.purchase_workspace import (
 from app.services.purchase_approval import submit_purchase_approval
 from app.services.requirements_workspace import get_monthly_plan_metadata
 from app.services.stock_management_service import resolve_stock_parameter_for_item
+from app.services.monthly_purchase import MonthlyPurchaseInputs
 
 
 def _filter_records(records, search, status_filter):
@@ -69,8 +73,8 @@ def _with_plan_edits(session, workspace):
     return workspace
 
 
-def _central_workspace(session, version, meta, *, month, year, search, status_filter, current_user):
-    """Show saved central demand without inventing stock or bypassing traced assessment."""
+def _central_workspace(session, version, meta, *, month, year, search, status_filter, current_user, view='normal'):
+    """Company monthly preview alongside immutable, previously submitted evidence."""
     if current_user and not current_user.is_super_admin and current_user.plant_ids:
         raise ApplicationError('CENTRAL_REVIEW_REQUIRED', 'Central plans are reviewed by Super Admin.', 403)
     totals = session.execute(select(
@@ -85,32 +89,53 @@ def _central_workspace(session, version, meta, *, month, year, search, status_fi
     approved = version.status == 'APPROVED' and version.approved_at is not None
     submitted = {}
     if approved:
-        # Only the existing traced assessment can supply central purchase quantities.
+        # Existing assessments retain their own engine, sources and original quantities.
         for approval, report, supplier in session.execute(select(PurchaseApproval, PurchaseDemandEvidence.report, Supplier)
             .join(PurchaseDemandEvidence, PurchaseDemandEvidence.approval_id == PurchaseApproval.id)
             .join(Supplier, Supplier.id == PurchaseApproval.supplier_id)
             .where(PurchaseApproval.planning_version_id == version.id)
             .order_by(PurchaseApproval.created_at.desc(), PurchaseApproval.id.desc())):
             submitted.setdefault((approval.consumable_id, approval.uom), (approval, report, supplier))
-    error_count = max(0, meta.record_count - sum(row[6] for row in totals))
+    error_count = max(0, meta.issue_count, meta.record_count - sum(row[6] for row in totals))
     if not totals:
-        notice = 'Production is uploaded, but no saved consumable requirements are available for this revision. Open the central requirement plan, calculate and save, then review the results.'
+        notice = 'Production is uploaded, but no saved consumable requirements are available for this revision. Open Requirement, use Recalculate, then review the results.'
     elif not approved:
         notice = f'{len(totals)} consumables have saved central requirements. '
         if error_count:
             notice += f'{error_count} requirement configuration issues need review. '
-        notice += 'Review the requirements and approve the central plan before completing the inventory and supplier assessment. Purchase quantities remain unavailable until that assessment.'
+        notice += 'Monthly preview uses MSL and MOQ from this month\'s Stock Management and previous month\'s closing stock. Pending POs are not deducted. Review the requirements and approve the central plan using the menu beside Recalculate in Requirement before purchase submission.'
     else:
-        notice = 'Central requirements are approved. Complete the central inventory and supplier assessment to calculate purchase quantities. Submitted assessments appear here with their saved stock and purchase evidence.'
+        notice = 'Central requirements are approved. Monthly quantities are a company-formula preview. Purchase submission still requires Stock and purchase assessment in Requirement. Previously submitted assessments keep their saved quantities and calculation basis.'
+    inputs = MonthlyPurchaseInputs(session, month=month, year=year, material_ids={row[0] for row in totals}) if totals else None
+    # Only an explicit Product Master supplier selection is displayed; never pick
+    # the first supplier alphabetically or treat supplier absence as zero demand.
+    master_suppliers = {(mapping.consumable_id, supplier.id): supplier for mapping, supplier in session.execute(
+        select(SupplierConsumable, Supplier).join(Supplier, Supplier.id == SupplierConsumable.supplier_id)
+        .where(SupplierConsumable.consumable_id.in_({row[0] for row in totals}),
+               SupplierConsumable.is_active == True, Supplier.is_active == True))} if totals else {}
     records = []
     for material_id, code, name, unit_id, uom, required, count, created_at, updated_at in totals:
         previous = submitted.get((material_id, uom))
         approval, report, supplier = previous if previous else (None, {}, None)
         status = 'REQUIREMENT_REVIEW_REQUIRED' if not approved else 'ASSESSMENT_REQUIRED'
-        remarks = 'Review and approve the central requirement plan.' if not approved else 'Use Central purchase assessment to select verified inventory and supplier policies.'
+        remarks = 'Requirement: review issues, then use the Recalculate menu to approve the plan.' if not approved else 'Requirement: Recalculate menu, Stock and purchase assessment. Select verified stock and supplier rules.'
         if approval:
             status = 'SUBMITTED'
             remarks = f'Latest traced purchase assessment is {approval.status}. Stock and incoming quantities are the saved assessment evidence.'
+            calculated = dict(calculation_basis=approval.rule_version,
+                calculation_details='Saved submitted assessment; original quantities and stock sources are retained.')
+        else:
+            calculated = inputs.calculate(material_id=material_id, unit_id=unit_id, uom=uom, required=_q4(required))
+            material = inputs.masters.get(material_id, (None, None))[0]
+            supplier = master_suppliers.get((material_id, material.supplier_id)) if material else None
+            remarks = calculated['calculation_details']
+            if approved and calculated['recommended_quantity'] is None:
+                status = 'MONTHLY_INPUTS_REQUIRED'
+            elif approved and calculated['recommended_quantity'] == 0:
+                status = 'NO_PURCHASE_REQUIRED'
+        stock_qty = calculated.pop('stock_qty', None)
+        raw_qty = calculated.pop('raw_quantity', None)
+        monthly_qty = calculated.pop('recommended_quantity', None)
         records.append(PurchaseWorkspaceRecord(
             id=f'{version.id}:{material_id}:{unit_id}', planning_period=version.planning_period,
             planning_month=month, planning_year=year, plan_id=str(version.id), revision=version.revision_label,
@@ -118,13 +143,37 @@ def _central_workspace(session, version, meta, *, month, year, search, status_fi
             required_qty=_q4(required), source_row_count=count, created_at=created_at, updated_at=updated_at,
             supplier_id=supplier.id if supplier else None, supplier_code=supplier.code if supplier else None,
             supplier_name=supplier.name if supplier else None,
-            stock_qty=_q4(report['current_stock']) if report.get('current_stock') is not None else None,
+            stock_qty=(_q4(report['current_stock']) if report.get('current_stock') is not None else None) if approval else stock_qty,
             po_pending_qty=_q4(report['confirmed_incoming_before_receipt']) if report.get('confirmed_incoming_before_receipt') is not None else None,
-            shortage_qty=approval.raw_calculated_qty if approval else None,
-            system_recommended_qty=approval.system_recommended_qty if approval else None,
+            shortage_qty=approval.raw_calculated_qty if approval else raw_qty,
+            system_recommended_qty=approval.system_recommended_qty if approval else monthly_qty,
             approval_id=approval.id if approval else None, approval_status=approval.status if approval else None,
             status=status, remarks=remarks,
+            **calculated,
         ))
+    if view == 'md' and records:
+        by_material = {}
+        for requirement, item, product, process in session.execute(
+            select(CalculatedRequirement, PRDOrderItem, Product, Process)
+            .join(PRDOrderItem, PRDOrderItem.id == CalculatedRequirement.prd_order_item_id)
+            .join(Product, Product.id == CalculatedRequirement.product_id)
+            .join(Process, Process.id == CalculatedRequirement.process_id)
+            .where(CalculatedRequirement.planning_version_id == version.id)
+            .order_by(CalculatedRequirement.consumable_id, PRDOrderItem.source_row_number)
+        ):
+            params = requirement.parameters or {}
+            by_material.setdefault((requirement.consumable_id, requirement.uom), []).append({
+                'part_number': product.part_number or product.code,
+                'part_name': product.name,
+                'production_order_part': item.product_code,
+                'process_name': process.name,
+                'part_thickness': params.get('part_thickness'),
+                'process_count': params.get('process_count'),
+                'production_qty': str(requirement.source_production_qty),
+                'required_qty': str(requirement.calculated_qty),
+            })
+        for record in records:
+            record.md_sources = by_material.get((record.consumable_id, record.unit), [])
     return PurchaseWorkspaceResponse(plan_metadata=meta,
         records=_filter_records(records, search, status_filter), notice=notice)
 
@@ -197,6 +246,7 @@ def list_purchase_workspace(
     status_filter: Optional[str] = None,
     category: Optional[str] = None,
     current_user: CurrentUser | None = None,
+    view: str = 'normal',
 ) -> PurchaseWorkspaceResponse:
     planning_period = f"{year:04d}-{month:02d}"
     meta = get_monthly_plan_metadata(session, month, year)
@@ -207,7 +257,7 @@ def list_purchase_workspace(
 
     if meta.source_workflow == 'BASIC_CENTRAL_V1':
         return _with_plan_edits(session, _central_workspace(session, version, meta, month=month, year=year,
-            search=search, status_filter=status_filter, current_user=current_user))
+            search=search, status_filter=status_filter, current_user=current_user, view=view))
 
     rows = session.scalars(
         select(MonthlyRequirementRecord).where(
@@ -390,6 +440,18 @@ def list_purchase_workspace(
         records.append(record)
 
     records = _filter_records(records, search, status_filter)
+    if view == 'md':
+        by_code = {}
+        for source in rows:
+            by_code.setdefault(source.consumable_code.strip().upper(), []).append({
+                'part_number': source.part_number, 'part_name': source.part_name,
+                'production_order_part': source.part_number, 'process_name': source.process_name,
+                'part_thickness': str(source.part_thickness), 'process_count': source.process_count,
+                'production_qty': str(source.production_order_qty),
+                'required_qty': str(source.scheduled_consumable_qty),
+            })
+        for record in records:
+            record.md_sources = by_code.get(record.consumable_code.strip().upper(), [])
     return _with_plan_edits(session, PurchaseWorkspaceResponse(plan_metadata=meta, records=records))
 
 
@@ -484,7 +546,7 @@ def submit_purchase_workspace_records(
     workspace = list_purchase_workspace(session, month=month, year=year, current_user=current_user)
     if workspace.plan_metadata.source_workflow == 'BASIC_CENTRAL_V1':
         raise ApplicationError('CENTRAL_PURCHASE_ASSESSMENT_REQUIRED',
-            'Submit central purchase demand through Central purchase assessment after requirement approval and inventory/supplier review.', 409)
+            'Submit purchase demand through Stock and purchase assessment in Requirement after plan approval and stock/supplier review.', 409)
     selected = [row for row in workspace.records if row.id in set(record_ids)]
     if not selected:
         raise ApplicationError("NO_MATCHING_RECORDS", "No selected purchase records were found.", 404)
@@ -536,6 +598,7 @@ def export_purchase_workspace_excel(
     status_filter: Optional[str] = None,
     record_ids: Optional[list[str]] = None,
     current_user: CurrentUser | None = None,
+    view: str = 'normal',
 ) -> bytes:
     workspace = list_purchase_workspace(
         session,
@@ -544,11 +607,15 @@ def export_purchase_workspace_excel(
         search=search,
         status_filter=status_filter,
         current_user=current_user,
+        view=view,
     )
     records = workspace.records
     if record_ids:
         ids = set(record_ids)
         records = [r for r in records if r.id in ids]
+
+    if view in ('normal', 'md'):
+        return _export_purchase_view(records, month=month, year=year, view=view)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -576,6 +643,7 @@ def export_purchase_workspace_excel(
     if workspace.notice:
         ws.cell(row=3, column=1, value=workspace.notice)
 
+    central = workspace.plan_metadata.source_workflow == 'BASIC_CENTRAL_V1'
     headers = [
         "Consumable Code",
         "Consumable Name",
@@ -583,9 +651,9 @@ def export_purchase_workspace_excel(
         "Supplier Name",
         "Unit",
         "Required Qty",
-        "Stock Qty",
-        "PO Pending Qty",
-        "Shortage Qty",
+        "Stock Qty (see calculation basis)" if central else "Stock Qty",
+        "Incoming (assessment only)" if central else "PO Pending Qty",
+        "Raw Purchase Need" if central else "Shortage Qty",
         "System Recommended Qty",
         "Status",
         "Approval Status",
@@ -595,6 +663,14 @@ def export_purchase_workspace_excel(
         "Requested Purchase Qty",
         "Requested Purchase Unit",
         "Purchase Remarks",
+        "MSL",
+        "MOQ",
+        "Unit Rate (Product Master)",
+        "Purchase Value",
+        "Stock Period",
+        "Calculation Basis",
+        "Calculation Details",
+        "Missing Inputs",
     ]
     for col, header in enumerate(headers, start=1):
         cell = ws.cell(row=4, column=col, value=header)
@@ -607,35 +683,157 @@ def export_purchase_workspace_excel(
         values = [
             record.consumable_code,
             record.consumable_name,
-            record.supplier_code or "",
-            record.supplier_name or "",
+            record.supplier_code or "Not selected",
+            record.supplier_name or "Not selected",
             record.unit,
             record.required_qty,
-            record.stock_qty,
-            record.po_pending_qty,
-            record.shortage_qty,
-            record.system_recommended_qty,
+            record.stock_qty if record.stock_qty is not None else "Unavailable",
+            ("Not used by monthly formula" if record.calculation_basis == 'KNL_MONTHLY_V1' else
+             record.po_pending_qty if record.po_pending_qty is not None else "Unavailable"),
+            record.shortage_qty if record.shortage_qty is not None else "Unavailable",
+            record.system_recommended_qty if record.system_recommended_qty is not None else "Unavailable",
             record.status,
-            record.approval_status or "",
+            record.approval_status or "Not submitted",
             record.source_row_count,
             record.remarks or "",
-            record.master_unit or "",
-            record.requested_purchase_qty,
+            record.master_unit or "Not specified",
+            record.requested_purchase_qty if record.requested_purchase_qty is not None else "Not entered",
             record.requested_purchase_unit or record.unit,
             record.purchase_notes or "",
+            record.minimum_stock_level if record.minimum_stock_level is not None else "Unavailable",
+            record.minimum_order_qty if record.minimum_order_qty is not None else "Unavailable",
+            record.unit_rate if record.unit_rate is not None else "Unavailable",
+            record.purchase_value if record.purchase_value is not None else "Unavailable",
+            record.stock_period or "See saved assessment",
+            record.calculation_basis or "LEGACY_MONTHLY",
+            record.calculation_details or record.remarks or "",
+            '; '.join(record.input_issues),
         ]
         for col, value in enumerate(values, start=1):
             cell = ws.cell(row=row_idx, column=col, value=value)
+            if isinstance(value, str):
+                cell.data_type = 's'
             cell.font = data_font
             cell.border = thin_border
-            if col in (6, 7, 8, 9, 10, 16):
-                cell.number_format = "#,##0.0000"
+            if col in (6, 7, 8, 9, 10, 16, 19, 20, 21, 22):
+                cell.number_format = "#,##0.00000000" if col == 22 else "#,##0.0000"
                 cell.alignment = Alignment(horizontal="right")
+                if value == 'Unavailable':
+                    reason = (('; '.join(record.input_issues) or 'No Product Master rate is available for the purchase value.')
+                        if record.calculation_basis == 'KNL_MONTHLY_V1' else
+                        'Requirement approval is pending. Stock and supplier assessment has not been completed.'
+                        if record.status == 'REQUIREMENT_REVIEW_REQUIRED' else
+                        'No saved stock and supplier assessment supplies this value.' if central else
+                        'No calculated value is available for this field.')
+                    cell.comment = Comment(reason, 'KNL ERP')
+                    cell.font = Font(name='Calibri', size=10, color='9A6700')
+            if col == 16 and value == 'Not entered':
+                cell.comment = Comment('No requested purchase quantity has been entered. This is a separate proposal, not the system recommendation.', 'KNL ERP')
 
-    for col in ws.columns:
-        width = max(len(str(cell.value or "")) for cell in col)
-        ws.column_dimensions[get_column_letter(col[0].column)].width = max(12, min(width + 3, 48))
+    # Size from actual headers/data; the long notice must not widen the item-code column.
+    for col_idx in range(1, len(headers) + 1):
+        width = max(len(str(ws.cell(row_idx, col_idx).value or '')) for row_idx in range(4, ws.max_row + 1))
+        ws.column_dimensions[get_column_letter(col_idx)].width = max(12, min(width + 3, 48))
+    ws.row_dimensions[4].height = 30
+    if workspace.notice:
+        ws.merge_cells('A3:J3')
+        ws['A3'].alignment = Alignment(wrap_text=True, vertical='center')
+        ws.row_dimensions[3].height = 45
+    ws.freeze_panes = 'C5'
+    ws.auto_filter.ref = f'A4:{get_column_letter(len(headers))}{ws.max_row}'
 
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _export_purchase_view(records, *, month: int, year: int, view: str) -> bytes:
+    """Export the selected customer layout using saved sources only; blanks are not zeroes."""
+    prev_month, prev_year = (12, year - 1) if month == 1 else (month - 1, year)
+    prev_label = f"{calendar.month_abbr[prev_month]}-{str(prev_year)[-2:]}"
+    month_label = f"{calendar.month_abbr[month]}-{str(year)[-2:]}"
+    normal = [
+        ('S. No.', '#'), ('Req. Type', 'category'), ('Item Id', 'consumable_code'),
+        ('Description', 'consumable_name'), ('Unit', 'unit'), ('Output / Unit', 'output_unit'),
+        ('MOQ.', 'minimum_order_qty'), ('Min. Stock. Level', 'minimum_stock_level'),
+        ('Max. Stock Level', 'max_stock_level'), ('Rate', 'unit_rate'),
+        (f'O/s. {prev_label}', 'opening_qty'), (f'Receipt {prev_label}', 'receipt_qty'),
+        (f'Issues {prev_label}', 'issue_qty'), (f'C/s. {prev_label}', 'stock_qty'),
+        (f'Prd. Qty. {prev_label}', None), (f'Sch. {month_label}', None),
+        (f'Req. Qty. {month_label}', 'required_qty'), ('Order Qty.', 'system_recommended_qty'),
+        ('Order Value', 'purchase_value'), ('Pur. Qty.', None), ('Pur. Value', None),
+        ('Bal. Pur. Qty', None), ('Bal. Pur. Value', None),
+    ]
+    md = [
+        ('Supplier ID', 'supplier_code'), ('Supplier name', 'supplier_name'),
+        ('Item Id', 'consumable_code'), ('Category', 'category'),
+        ('Type of material', 'type_of_material'), ('S. No.', '#'),
+        ('Description', 'consumable_name'), ('Part No. of saleable item', '@part_number'),
+        ('Used for- Name of Saleable part', '@part_name'),
+        ('Used Part no (prd order)', '@production_order_part'),
+        ('Process name', '@process_name'), ('Material thickness in mm / Gsm', '@part_thickness'),
+        ('No of process per part', '@process_count'), ('Output/ Unit', 'output_unit'),
+        ('Rate', 'unit_rate'), (f"Opening Qty {calendar.month_abbr[prev_month]}'{str(prev_year)[-2:]}", 'opening_qty'),
+        (f"Opening Value {calendar.month_abbr[prev_month]}'{str(prev_year)[-2:]}", 'opening_value'),
+        (f"Receipt. Qty. {calendar.month_abbr[prev_month]}'{str(prev_year)[-2:]}", 'receipt_qty'),
+        (f"Issue Qty. {calendar.month_abbr[prev_month]}'{str(prev_year)[-2:]}", 'issue_qty'),
+        (f"Closing Qty {calendar.month_abbr[prev_month]}'{str(prev_year)[-2:]}", 'stock_qty'),
+        (f"Closing Value {calendar.month_abbr[prev_month]}'{str(prev_year)[-2:]}", 'closing_value'),
+        ('Rate', 'unit_rate'), ('Min stock level', 'minimum_stock_level'),
+        ('Max stock level', 'max_stock_level'), ('Minimum order qty.', 'minimum_order_qty'),
+        ('Lead time to supply in days', 'lead_time_days'),
+        ('Sch. Qty. as per assy R1', '@production_qty'), ('Purchasing Unit', 'unit'),
+        ('Sch. Qty. Cons. Itemwise R1', '@required_qty'),
+        (f"Opening stock {calendar.month_abbr[month]}'{str(year)[-2:]}", 'stock_qty'),
+        ('Req. Qty.', 'required_qty'), ('Order Qty R1', 'system_recommended_qty'),
+        ('Order Value R1', 'purchase_value'),
+    ]
+    trailing = [
+        'Receipt qty. R1', 'Receipt value R1', 'Sch. Qty. as per assy R2',
+        'Sch. Qty. Cons. Itemwise R2', 'Req. R2', 'closing stock',
+        'Req.qty lessed by issue qty', 'Issue Qty. till', 'Order Qty. R2',
+        'Order Value R2', 'Receipt qty. R2', 'Receipt value R2',
+        'Total Receipt Qty.', 'Total receipt value', 'P1', 'P2', 'P3', 'P4', 'P5',
+        'tool room', 'Quality', 'PMD', 'NPD', 'HRD', 'Accounts',
+        'Purchase ,Stores&admin', 'Sales', 'Req. given by users', 'Total Value.',
+        'Avg.Monthly Consumption', 'Avg.Daily Consumption', 'Minimum order Quantity.',
+        'Lead time to supply in days', 'Mini number of days to hold in production',
+        'Min stock level', 'Max stock level', 'Lead time qty', 'Re-Order Level',
+        'Cost of MSL', 'REORDER LEVEL(MSL+(Avg.reqd.con per dayxLead timr to supply in days))',
+        'Avg. consumption per day', 'Previous month Plan value', 'Previous month Actual value',
+    ]
+    for position, label in enumerate(trailing, 34):
+        md.append((label, {65: 'minimum_order_qty', 66: 'lead_time_days',
+                           68: 'minimum_stock_level', 69: 'max_stock_level'}.get(position)))
+    columns = md if view == 'md' else normal
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'MD View' if view == 'md' else 'Normal View'
+    ws.append([f'KNL PURCHASE PLAN — {view.upper()} VIEW — {calendar.month_name[month]} {year}'])
+    ws.append(['Blank cells indicate that no verified value is available; R1/R2 and purchase actuals are not inferred.'])
+    ws.append([label for label, _ in columns])
+    for index, record in enumerate(records, 1):
+        sources = record.md_sources if view == 'md' and record.md_sources else [None]
+        for source in sources:
+            values = []
+            for _label, key in columns:
+                if key == '#':
+                    value = index
+                elif key and key.startswith('@'):
+                    value = source.get(key[1:]) if source else None
+                else:
+                    value = getattr(record, key, None) if key else None
+                values.append(value)
+            ws.append(values)
+    for cell in ws[3]:
+        cell.fill = PatternFill(start_color='1B3A5C', end_color='1B3A5C', fill_type='solid')
+        cell.font = Font(color='FFFFFF', bold=True)
+        cell.alignment = Alignment(wrap_text=True, vertical='center')
+    ws.row_dimensions[3].height = 42
+    for number, (label, _) in enumerate(columns, 1):
+        ws.column_dimensions[get_column_letter(number)].width = min(40, max(15, len(label) + 2))
+    ws.freeze_panes = 'D4' if view == 'md' else 'E4'
+    ws.auto_filter.ref = f'A3:{get_column_letter(len(columns))}{max(ws.max_row, 3)}'
+    stream = io.BytesIO()
+    wb.save(stream)
+    return stream.getvalue()

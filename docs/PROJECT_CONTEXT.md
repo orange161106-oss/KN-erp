@@ -578,3 +578,252 @@ The final local service check found both servers stopped; they were restarted in
 hidden windows. Frontend returned HTTP 200 and the running backend OpenAPI exposes
 the new save route. The temporary sample browser tab was closed after verification.
 
+## Purchase page opening repair — 2026-10-17
+
+After the recent merge, PurchaseApprovals still rendered the central screen for
+Super Admin but no longer imported CentralRequirements. Its TabKey and read guard
+also omitted central. This caused a render-time ReferenceError and the generic
+PageBoundary fallback, rather than a missing-record or database error. Restored
+the component import, central tab type and guard that prevents hidden approval
+reads on central/workspace tabs. Kept the working-tree conflict-marker cleanup
+and existing tab/navigation behavior. The same merge removed central test fixtures;
+restored those fixtures from the prior verified revision, without altering tests'
+business expectations. Requirements' issue banner now explicitly handles absent
+metadata/counts to restore the TypeScript build.
+
+Added purchase-page-loading.test.tsx against the complete PurchaseApprovals inside
+PageBoundary. It covers Super Admin opening, Purchase Plan rows, selected-revision
+review navigation, read-only queue/handoff access and recoverable central read
+errors. Eighteen focused frontend checks, TypeScript and Vite build passed. An
+isolated browser fixture using the real shell, boundary and Purchase components
+opened both central assessment and Purchase Plan with sample data and no console
+errors; no company login, reads, edits or approvals were performed. Screenshot:
+.cache/purchase-page-restored-2026-10-17.png. The sample tab and fixture were cleaned
+up. This repair changes no backend endpoint, schema, quantity formula or authority.
+
+## Purchase Plan authenticated Excel export — 2026-10-17
+
+Owner's Export Excel opened the protected workspace/export URL in a new browser
+tab. Browser navigation did not attach the application's in-memory Bearer token,
+so the server correctly returned NOT_AUTHENTICATED even while the ERP was signed
+in. PurchaseWorkspace now requests the workbook through additive apiClient.getBlob,
+which reuses the existing API base URL, authorization, timeout and error/session
+handling and reads successful bodies as binary. It downloads a temporary object
+URL with the period-specific .xlsx filename, then removes the link and releases
+the object URL. Tokens are never added to URLs. Backend authorization is unchanged.
+
+All/selected-row/filtered export modes retain month/year and their existing query
+scope, including repeated record_ids. Export buttons show progress and block
+duplicate downloads; errors are displayed in the grid without saving JSON as an
+Excel file or opening an unauthenticated tab. No database/schema/quantity/approval
+change; other modules' export flows were not changed by this scoped fix.
+
+Changed frontend API client and PurchaseWorkspace; added purchase-export.test.tsx
+and backend test_purchase_excel_download.py. Twenty-six focused frontend checks,
+TypeScript and Vite production build passed. One isolated backend API check
+confirmed unauthenticated rejection, authenticated valid .xlsx content/filename,
+selected-row scope and search/status filters using openpyxl. No company data or
+real account session was accessed for these tests.
+
+## Both-contributor merge review — 2026-10-17
+
+Owner explained accidental conflict resolution and requested preserving both sides,
+repairing compatible bugs, then discussing mismatched features before choosing what
+to remove. Reviewed common base 1381def, our e235905, incoming MRP-consolidation
+5c2de7d/b4ccd59 and merge 760785b. Incoming changed 20 files; our side 29, with three
+overlapping paths. Both branch patches and all pre-review unsaved/untracked work
+were backed up under .cache/merge-review-2026-10-17/.
+
+Incoming single MRP view, compact issue banner, issue APIs and CSV remain. Our
+period-specific production upload, central component/review link, Purchase editing,
+audited proposals, scrolling and authenticated Excel export remain. Repaired only
+compatible integration: separate issue_count is honored by Purchase, metadata keeps
+two batched queries, issue rows use real PRD/product identity instead of a nonexistent
+error.product_code, and issues CSV downloads authenticate and escape formula text.
+
+Pending owner choices: combined versus separate screens; existing central/plant
+scope versus incoming Requirements-flag access; reviewer-selected date versus MRP's
+first-of-month input. Older manual/Plant Review UI/router removals remain pending
+discussion, with original source recoverable. No policy/date/approval decision or
+company data change was made automatically. See
+[merge comparison](validation/MERGE_REVIEW_2026-10-17.md) for evidence and options.
+
+Verification: 32 frontend checks, TypeScript and Vite build passed. Backend audit:
+20 passed, 2 existing central/plant boundary tests failed because the incoming
+monthly API now permits those central reads. Failures remain visible; full merge
+completion awaits an explicit access decision and corresponding validation.
+
+## Owner-selected merge recovery completed — 2026-10-17
+
+The owner answered the three merge questions: one Requirement/MRP screen with
+central review and both contributors' features; retain existing central/plant
+restrictions; use a date selected by the reviewer. This section supersedes the
+pending-choice status in the immediately preceding dated audit.
+
+Requirements.tsx now embeds CentralRequirements for the loaded production-based
+period/revision. The incoming MRP grid, filters, manual monthly intake/editing,
+issue count/banner/list/CSV remain. Central preview, calculation, separate Super
+Admin approval, missing-norm acknowledgement, formula details, consolidated
+breakdown and purchase assessment remain on the same screen. Advanced details
+expand without a second primary Requirement tab. A single Calculation date feeds
+preview/calculation; central monthly recalculate now requires explicit as_of_date
+and records it in calculation evidence. No formula or norm-selection rule changed.
+
+Central/plant scope checks are restored in the monthly router, including incoming
+issue list/export. Existing grants and immutable calculated-row/approved-history
+guards remain. Saving/calculating/approving reloads the grid; in-flight central
+operations lock period/date, period switches clear old review, and Load Requirements
+refreshes both surfaces and clears resolved central read errors.
+
+Purchase defaults to Purchase Plan as in the incoming branch, retaining central
+assessment, revision history, saved requested quantities/remarks, master edits,
+cell/row editing, scrolling, queue/handoff and authenticated export. Its review
+button navigates to /requirements?period=YYYY-MM; Requirement reads that period.
+The MRP workbook download also uses apiClient.getBlob for authenticated binary
+downloads with all/selected/filtered scope. DataTable has additive optional
+fitHeight so the unified scrolling page bounds its grid in Fit mode; other grids'
+defaults and existing height controls remain intact.
+
+The incoming retirement of separate legacy Plant Review/manual-planner navigation
+and plant/aggregation route groups remains. Active monthly-workspace manual features,
+stored history, original source/commits and pre-recovery backups remain available.
+No further routes were removed, no migrations were required and no company records
+or approvals were changed. No commit/push was performed.
+
+Validation: 54 frontend checks across 10 focused files and 32 backend checks across
+the active workflow/merge/export paths passed, including both formerly failing
+central scope tests, explicit reviewer date, manual monthly recalculation and
+unchanged saved quantities. TypeScript and Vite production build passed. An extra
+legacy plant-planner suite run was stopped after failures against already-retired
+route groups; tests were not hidden/rewritten and this is not a full-suite pass.
+See [final merge review](validation/MERGE_REVIEW_2026-10-17.md) for scope and evidence.
+A browser fixture with the actual components and 65 synthetic rows verified both
+scroll directions, last-row access and Compact/Fit controls; screenshot is
+.cache/unified-requirements-2026-10-17.png. Fixture and sample tab were cleaned up.
+
+## Purchase central tab removed at owner's request — 2026-10-17
+
+Owner clarified that the incoming removal of the central purchase screen should
+also be kept. Removed CentralRequirements import/render, central tab and central
+selection state from PurchaseApprovals. Purchase has only Purchase Plan, Approval
+Queue and Approved Handoff. PurchaseWorkspace's optional requirement link now
+accepts a period and opens /requirements?period=YYYY-MM for both pending and
+approved plans; the approved link is named View requirements. Assessment remains
+within the existing unified Requirement screen. This supersedes the previous
+entry's statement that Purchase retains a separate central assessment tab.
+
+No backend/formula/access/approval or stored-record change. Purchase proposal/master
+editing, downloads and queue/handoff remain. Focused Purchase tests and TypeScript
+validation cover the three tabs, selected-period navigation, editing and exports.
+
+## Compact Requirement layout requested by owner — 2026-10-17
+
+Owner supplied the MRP screenshot and explicitly requested removal of the large
+Central review panel, asking why it had been retained. It had been retained under
+the earlier combine-both-features choice; the latest visual request supersedes that
+embedded layout. Requirements.tsx no longer imports/renders CentralRequirements.
+The page presents month/year, Load Requirements, Recalculate, Excel export, issue
+CSV/banner, filters and the existing per-product grid. Initial loading uses one
+combined monthly workspace read; no central workspace read occurs on page opening.
+
+Recalculate now opens a compact date confirmation and calls the existing monthly
+recalculate endpoint with the reviewer-selected as_of_date. Production-based rows
+and approved calculations remain protected, and pending recalculation locks the
+period and invalidates earlier reads. No recalculation automatically approves a
+plan. Date input was moved out of the always-visible toolbar to match the screenshot.
+
+The large central preview, calculation-details, consolidated-summary and assessment
+panels are not embedded. Existing grid audit actions remain. To preserve the prior
+explicit Super Admin review/purchase gates without that panel, a small arrow menu
+beside Recalculate exposes Approve plan and Stock and purchase assessment. The new
+RequirementPlanAction is lazy-loaded and fetches exact-revision evidence only when
+opened. Hard calculation errors and historical revisions block approval; missing
+norms still require explicit acknowledgement. Assessment uses the existing traced
+component only for approved plans/materials. No backend/schema/formula/grant/approval
+rule or company record was changed.
+
+Validation: 22 focused frontend checks across compact MRP, date recalculation,
+on-demand approval/acknowledgement/error blocking, read-only access, issues/exports
+and existing central logic passed. TypeScript and Vite production build passed.
+A browser preview used actual components with 65 synthetic rows and stubbed APIs,
+confirmed the compact layout and date-dialog cancel behavior, and saved screenshot
+.cache/requirements-compact-2026-10-17.png. Temporary sample files/tab were removed.
+
+## Purchase Excel missing-value investigation — 2026-10-17
+
+Owner supplied purchase_recommendations_2026_10 (2).xlsx and asked why remaining
+columns were empty and whether a company formula was needed. Read the supplied
+workbook without editing it: one sheet, 31 data rows and 18 columns. Every row is
+REQUIREMENT_REVIEW_REQUIRED; the export-time notice records 159 configuration
+issues. Required quantities and calculation/master units are populated. All stock,
+incoming, raw need, recommendation and supplier fields are absent, rather than
+numeric results lost during export. Requested quantities/approval statuses/remarks
+are separate optional workflow fields. This describes that export's snapshot, not
+an assertion about the current database state.
+
+Owner selected “I'll provide the company monthly formula.” Actual formula and its
+stock month/balance, pending-order handling, MSL/MOQ/pack rules and worked example
+are pending. Do not change the quantity engine, default missing inputs to zero,
+approve the plan, or treat monthly statement balances as reviewed usable stock
+without that information. Existing contracts are still the implemented rule.
+
+Independent export correction in purchase_workspace.py: unavailable numeric results
+now display Unavailable with comments distinguishing pending requirement approval
+from absent stock/supplier assessment. Missing supplier selection, approval and
+requested proposal display Not selected / Not submitted / Not entered; optional
+free-text remarks remain blank. Numeric values, true zeros and selection/filter/auth
+behavior remain intact. Central stock/incoming/raw-need headers match their UI
+meaning. Header wrapping/filter/frozen identifiers and wrapped report notice make
+the report usable; column sizing ignores the long title/notice. Instructions now
+point to the Requirement Recalculate menu instead of the removed central page.
+No formula, API numeric type, database record or approval was changed.
+
+Validation: 16 focused backend checks passed for central records/export, authenticated
+Excel selection/filter, saved edits and numeric-zero preservation. Input workbook
+is unchanged. Calculation completion still requires the owner's supplied formula
+and input conventions; export presentation changes do not supply missing quantities.
+
+## Owner-supplied monthly purchase formula — 2026-10-17
+
+The owner supplied Downloads/KNL-Formula.xlsx and confirmed **Use uploaded Stock
+Management MSL and MOQ**. This supersedes the pending-formula status above. Read-only
+review identified a 150-definition formula catalog, not a complete operating plan.
+Plan!AD4 is `gap = MSL + required − previous closing`; positive gap is raised to MOQ,
+otherwise zero. Plan!AE4 multiplies quantity by rate. CO2 example: 981 + 2550 − 235
+= 3296, above MOQ675; at rate9 value29664. Item-specific MSL-day variants, questionable
+R2 source references and unrelated consumption families were not installed by inference.
+
+Added exact Decimal KNL_MONTHLY_V1 calculation and batched source loader. Production-
+based Purchase Plan previews use previous month's active Stock Statement closing
+(January -> prior December), selected month's active Stock Management MSL/MOQ,
+consolidated saved requirement and known Product Master rate. Shared item stock is
+applied once. Existing known unit-label synonyms match; blank/numeric units and
+unapproved conversions do not. Missing item/closing/limit, ambiguous limits/batches
+and master mismatches stay null with precise input issues. Valid zero is preserved.
+No PO deduction, pack rounding, lead-time demand or maximum cap is invented.
+
+Screen and authenticated Excel now show MSL/MOQ/rate/value/stock period/calculation
+basis. Excel appends details/issues after the original18 columns; pending incoming
+is Not used by monthly formula. Source batch/file/hash/line/parameter IDs and operands
+are available in API details. Existing submitted timed assessments keep their own
+stock, incoming, quantities and engine version. Current monthly previews do not
+create approval/PO rows or change the existing requirement review, timed assessment
+and independent purchase-approval gates. Legacy manually imported monthly behavior,
+proposal/master edits, norm maths, compact layout and access restrictions remain.
+See [company formula contract](25_COMPANY_MONTHLY_PURCHASE.md).
+
+Connected-data verification used READ ONLY / REPEATABLE READ transactions: October
+has31 saved consumables; all31 have MSL/MOQ/rates;27 have sufficient stock inputs and
+calculate. Four remain explicit source issues: AAC100002QC and AAC100003QC have blank
+September closing balances; AAC100159QC and BAA110159QC are absent from September's
+statement. NOS/PCS is compatible and is not the cause of those blanks. No company
+records, requirements, approvals or source files were changed or submitted. Existing
+requirement configuration issues still require review before plan approval.
+
+Validation:39 focused backend checks (formula boundaries/example, source periods,
+ambiguity/units/zero, shared stock, immutable assessments, edits and authenticated
+Excel) and15 focused frontend checks passed. TypeScript and Vite production build
+passed. A sandboxed run stalled at the TestClient export check after38 checks; it
+was stopped and the same focused suite passed outside the sandbox. No full-suite
+claim, migration, commit or push. The supplied workbook remains unchanged.
+

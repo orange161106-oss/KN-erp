@@ -1,5 +1,50 @@
 # Central basic consumable planning — 2026-10-15
 
+## Purchase export investigation — 2026-10-17
+
+The supplied October Purchase export contains 31 materials whose quantities are
+calculated, but every row is REQUIREMENT_REVIEW_REQUIRED. Its notice records 159
+configuration issues. Stock, incoming, raw purchase need, recommendation and supplier
+values are absent before review/assessment; the export had serialized these nulls
+as unexplained blanks. Exports now identify unavailable/missing inputs explicitly,
+retain known numeric zeros/values, and use the central assessment column meanings.
+The report does not calculate purchase quantities or approve records during export.
+The owner elected to supply a company monthly purchase formula. Its actual formula,
+stock-period/balance convention, pending supply, MSL and rounding rules are still
+required before implementing a different calculation; no rule is inferred meanwhile.
+
+## Owner-approved merge resolution — 2026-10-17
+
+Latest layout correction: the owner requested the supplied compact MRP layout and
+removal of the embedded Central review panel. Requirement now loads only the monthly
+workspace initially. Recalculate is in its toolbar, with the previously approved
+reviewer-selected date entered in a compact confirmation dialog. The large central
+preview/details/summary/assessment sections are no longer embedded. Approval remains
+an explicit Super Admin action in the toolbar's Plan actions menu; it loads the
+selected revision's diagnostics on demand and retains hard-error, historical-version
+and missing-norm-acknowledgement guards. Stock/purchase assessment is also available
+on demand from that menu for approved plans. Removing the panel is not authority to
+auto-approve requirements, waive purchase gates or change quantity formulas.
+
+Follow-up correction: the owner explicitly requested removing the restored Central
+purchase assessment tab from Purchase to match the incoming version. Purchase has
+only Purchase Plan, Approval Queue and Approved Handoff. Requirement review links
+open the combined Requirement screen for the selected period, including after
+approval. Assessment remains available within Requirement; its formulas, access
+checks and backend APIs are unchanged.
+
+The owner selected one Requirement/MRP screen retaining central review and both
+contributors' features, the existing central/plant access restrictions, and a
+reviewer-selected calculation date. The MRP grid/issues report remains the main
+view; central matching, calculation, Super Admin approval, formula detail and
+consolidated assessment are integrated on that page. Central review follows the
+loaded period/revision. Purchase review links open this unified screen; purchase
+assessment, approval queue, saved proposals and exports remain available.
+Monthly central recalculation must receive an explicit as_of_date; no first-day
+default is selected silently. Formula handlers and current norm-matching policy
+are unchanged by this input-alignment change. Plant-scoped users cannot read,
+calculate or export central demand through monthly compatibility/issue APIs.
+
 ## Owner decisions and scope
 
 Munees approved a direct Production for sale → Consumption Norms → basic requirement
@@ -363,3 +408,22 @@ fixture using the real shell/Purchase components verified both scroll directions
 last-row access, enabled right-click actions and row saving. It used sample records,
 not company mutations. Read-only connected-data verification confirmed 31 October
 consumables from 65 saved lines and zero proposal records; no company approval changed.
+
+## Company monthly purchase preview — owner decision 2026-10-17
+
+This supersedes the earlier statement that all purchase quantities must remain
+unavailable until a timed assessment. The owner supplied KNL-Formula.xlsx and
+confirmed selected-month uploaded Stock Management MSL/MOQ. Production-based
+Purchase Plan rows without submitted evidence now preview `MSL + required − previous
+month closing`, raised to MOQ only for a positive gap; otherwise zero. No pending
+PO deduction, pack rounding or assumed MSL-day calculation is part of this rule.
+Quantity × known Product Master rate supplies purchase value. Missing stock/limits
+stay unavailable with a specific cause. See [company formula contract](25_COMPANY_MONTHLY_PURCHASE.md).
+
+The monthly statement is a dated balance for this company monthly formula, not a
+timed usable-stock assessment. Existing submitted M5.1 evidence and its stock,
+incoming and recommendation are preserved and labelled by engine. Existing plan
+approval, stock/supplier assessment and independent purchase review remain required
+for submission; GET/export do not approve or submit anything. Consumption norms,
+the compact Requirement layout, legacy manual monthly workflow and access rules
+are unchanged. No company records or schema were changed.

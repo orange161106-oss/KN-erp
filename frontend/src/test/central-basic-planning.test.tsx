@@ -3,12 +3,16 @@ import {afterEach,beforeEach,expect,test,vi} from 'vitest';
 import {apiClient} from '../api/client';
 import {AuthContext} from '../features/auth/context';
 import CentralProductionImport from '../features/prd/CentralProductionImport';
+import CentralRequirements from '../features/requirements/CentralRequirements';
 import Requirements from '../features/requirements/Requirements';
 import CentralPurchaseAssessment from '../features/purchasing/CentralPurchaseAssessment';
 
 const endpoint='/api/v1/requirements/basic';
 const version={id:'version-1',planning_period:'2026-10',revision_label:'R3',status:'VALIDATED',is_latest:true,source_filename:'source.xlsx'};
 const material={consumable_id:'mat-1',consumable_code:'DRILL',consumable_name:'Synthetic drill',uom:'PCS',final_required_qty:'230',is_fully_confirmed:true};
+const calculation={id:'calc-1',product_code:'PROD-A',process_name:'Drilling',consumable_code:'DRILL',consumable_name:'Synthetic drill',source_production_qty:'100',raw_requirement:'200',calculated_qty:'200',uom:'PCS',rule_version:1,parameters:{rate:'2'},calculation_steps:[{step_number:1,description:'Multiply approved rate',formula:'100 × 2',result:'200'}]};
+const results={calculations:[calculation],errors:[],summary:[{...material,is_fully_confirmed:false}]};
+const centralView=(value:unknown=results,currentVersion=version)=>({versions:[currentVersion],selected_version_id:currentVersion.id,results:value});
 const sourcePreview={sheet_name:'Prd. Order',planning_period:'2026-10',revision_label:'R3',as_of_date:'2026-10-01',review_token:'reviewed-token',
   rows:[{source_row_number:5,part_number:'PART-A',item_id:'ITEM-A',product_code:'PROD-A',product_name:'Synthetic part',quantity:'100',unit:'PCS',norm_count:1,errors:[],norm_errors:[]}],errors:[],can_confirm:true,norm_ready:true};
 
@@ -140,6 +144,7 @@ test('monthly consumable planning and central plan display the same production-b
     part_thickness:'0',process_count:2,stock_qty:'Unavailable',shortage_qty:'Unavailable',po_pending_qty:'Unavailable',msl:'Unavailable',status:'Calculated',remarks:null};
   vi.spyOn(apiClient,'get').mockImplementation(async path => {
     if(path.includes('/requirements/workspace/view')) return {records:[row],plan_metadata:metadata} as never;
+    if(path.includes('/requirements/basic/workspace')) return centralView(results,{...version,status:'CALCULATED'}) as never;
     return {} as never;
   });
   const post=vi.spyOn(apiClient,'post').mockResolvedValue({message:'Production-based requirements updated.',records:[row],plan_metadata:metadata});
@@ -149,8 +154,11 @@ test('monthly consumable planning and central plan display the same production-b
   expect(screen.getAllByRole('cell',{name:'200'}).length).toBeGreaterThan(0);
   expect(screen.queryByRole('button',{name:/Upload Excel/})).not.toBeInTheDocument();
   expect(screen.queryByText('Central requirement plan')).not.toBeInTheDocument();
+  expect(screen.queryByRole('heading',{name:'Central review and approval'})).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button',{name:/Recalculate$/}));
-  await waitFor(()=>expect(post).toHaveBeenCalledWith('/api/v1/requirements/workspace/recalculate?month=10&year=2026',{}));
+  fireEvent.change(screen.getByLabelText('Calculation date'),{target:{value:'2026-10-17'}});
+  fireEvent.click(screen.getByRole('button',{name:'Recalculate requirements'}));
+  await waitFor(()=>expect(post).toHaveBeenCalledWith('/api/v1/requirements/workspace/recalculate?month=10&year=2026&as_of_date=2026-10-17',{}));
 });
 
 test('purchase assessment never copies gross demand or treats missing inventory as zero',async()=>{

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { apiClient } from '../../api/client';
 import { useAuth } from '../auth/context';
@@ -6,6 +6,7 @@ import { canPerform } from '../../core/rbac';
 import DataTable, { type ColumnDef, type HeaderGroupDef } from '../../components/DataTable';
 import Toolbar from '../../components/Toolbar';
 import MonthlyExcelUploadModal from './MonthlyExcelUploadModal';
+const RequirementPlanAction = lazy(()=>import('./RequirementPlanAction'));
 
 export interface RequirementRecord {
   id: string;
@@ -94,8 +95,14 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
   const canRecalculate = canUpdate;
 
   // Planning Period State (Month 1-12, Year)
-  const [selectedMonth, setSelectedMonth] = useState<number>(10); // Default October
-  const [selectedYear, setSelectedYear] = useState<number>(2026);  // Default 2026
+  const initialPeriod = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('period') : null;
+  const requestedPeriod = initialPeriod && /^\d{4}-(0[1-9]|1[0-2])$/.test(initialPeriod) ? initialPeriod : '2026-10';
+  const [selectedMonth, setSelectedMonth] = useState<number>(Number(requestedPeriod.slice(5)));
+  const [selectedYear, setSelectedYear] = useState<number>(Number(requestedPeriod.slice(0,4)));
+  const [calculationDate,setCalculationDate] = useState(()=>{const now=new Date();return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;});
+  const [showRecalculate,setShowRecalculate] = useState(false);
+  const [planAction,setPlanAction] = useState<'approve'|'assess'|null>(null);
+  const pendingRecalculate = useRef(false);
 
   // Plan Metadata State
   const [planMetadata, setPlanMetadata] = useState<MonthlyPlanMetadata | null>(null);
@@ -110,7 +117,35 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isRecalculating, setIsRecalculating] = useState(false);
+  const periodBusy = isRecalculating || showRecalculate || planAction !== null;
+  const [isExportingIssues, setIsExportingIssues] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const pendingExport = useRef(false);
+  const pendingIssuesExport = useRef(false);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  const downloadIssues = async () => {
+    if (pendingIssuesExport.current) return;
+    pendingIssuesExport.current = true;
+    setIsExportingIssues(true);
+    setStatusMessage(null);
+    try {
+      const blob = await apiClient.getBlob(`/api/v1/requirements/workspace/issues/export?month=${selectedMonth}&year=${selectedYear}`);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `requirement_issues_${selectedYear}_${String(selectedMonth).padStart(2, '0')}.csv`;
+      document.body.appendChild(link);
+      try { link.click(); }
+      finally { link.remove(); URL.revokeObjectURL(url); }
+      setStatusMessage({type:'success',text:'Issues CSV download started.'});
+    } catch (error) {
+      setStatusMessage({type:'error',text:error instanceof Error ? error.message : 'Could not download the issues list.'});
+    } finally {
+      pendingIssuesExport.current = false;
+      setIsExportingIssues(false);
+    }
+  };
 
   // Selection & UI state
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
@@ -128,6 +163,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
   // 2. Load Records for Period
   const loadRecords = useCallback(async () => {
+    if(pendingRecalculate.current)return;
     const generation=++loadGeneration.current;
     setIsLoading(true);
     setStatusMessage(null);
@@ -310,27 +346,34 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
   }, [modifiedRecords.size]);
 
   const handleMonthChange = (newMonth: number) => {
+    if(periodBusy)return;
     if (modifiedRecords.size > 0) {
       if (!window.confirm('You have unsaved changes. Discard changes and change month?')) {
         return;
       }
       setModifiedRecords(new Map());
     }
+    ++loadGeneration.current;setPlanMetadata(null);setRecords([]);setSelectedRowIds(new Set());
     setSelectedMonth(newMonth);
   };
 
   const handleYearChange = (newYear: number) => {
+    if(periodBusy)return;
     if (modifiedRecords.size > 0) {
       if (!window.confirm('You have unsaved changes. Discard changes and change year?')) {
         return;
       }
       setModifiedRecords(new Map());
     }
+    ++loadGeneration.current;setPlanMetadata(null);setRecords([]);setSelectedRowIds(new Set());
     setSelectedYear(newYear);
   };
 
   // Recalculate deterministic consumable requirements
   const handleRecalculate = async () => {
+    if(pendingRecalculate.current||!calculationDate)return;
+    pendingRecalculate.current=true;
+    ++loadGeneration.current;setIsLoading(false);setShowRecalculate(false);
     setIsRecalculating(true);
     setStatusMessage(null);
 
@@ -342,13 +385,14 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
         low_stock: number;
         records: RequirementRecord[];
         plan_metadata: MonthlyPlanMetadata;
-      }>(`/api/v1/requirements/workspace/recalculate?month=${selectedMonth}&year=${selectedYear}`, {});
+      }>(`/api/v1/requirements/workspace/recalculate?month=${selectedMonth}&year=${selectedYear}&as_of_date=${calculationDate}`, {});
 
       setRecords(res.records);
       const orig = new Map<string, RequirementRecord>();
       res.records.forEach(r => orig.set(r.id, { ...r }));
       setOriginalMap(orig);
       setModifiedRecords(new Map());
+      setSelectedRowIds(new Set());setSelectedCell(null);
       if (res.plan_metadata) setPlanMetadata(res.plan_metadata);
 
       setStatusMessage({
@@ -361,12 +405,14 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
         text: err instanceof Error ? err.message : 'Recalculation failed.',
       });
     } finally {
+      pendingRecalculate.current=false;
       setIsRecalculating(false);
     }
   };
 
   // Export Excel
-  const handleExport = (mode: 'ALL' | 'FILTERED' | 'SELECTED') => {
+  const handleExport = async (mode: 'ALL' | 'FILTERED' | 'SELECTED') => {
+    if(pendingExport.current)return;
     let url = `/api/v1/requirements/workspace/export?month=${selectedMonth}&year=${selectedYear}`;
     const params = new URLSearchParams();
 
@@ -381,7 +427,16 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
     const q = params.toString();
     if (q) url += `&${q}`;
-    window.open(url, '_blank');
+    pendingExport.current=true;setIsExporting(true);setStatusMessage(null);
+    try {
+      const blob=await apiClient.getBlob(url);const downloadUrl=URL.createObjectURL(blob);
+      const link=document.createElement('a');link.href=downloadUrl;
+      link.download=`consumable_requirements_${selectedYear}_${String(selectedMonth).padStart(2,'0')}.xlsx`;
+      document.body.appendChild(link);
+      try{link.click();}finally{link.remove();URL.revokeObjectURL(downloadUrl);}
+      setStatusMessage({type:'success',text:'Requirements Excel download started.'});
+    }catch(error){setStatusMessage({type:'error',text:error instanceof Error?error.message:'Could not export requirements.'});}
+    finally{pendingExport.current=false;setIsExporting(false);}
   };
 
   // Filter options
@@ -652,7 +707,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
   );
 
   return (
-    <div className="flex flex-col h-full space-y-3 font-['Plus_Jakarta_Sans',sans-serif]">
+    <div className="flex min-h-full min-w-0 flex-col gap-3 font-['Plus_Jakarta_Sans',sans-serif]">
       {productionBased && (
         <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
           Production-based requirements calculated deterministically from Production order quantities (R0) and Consumption Norms (Sch).
@@ -673,7 +728,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
         </div>
 
         {/* Section 6: Top-Right Saved Plan Metadata Card */}
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
           <div className="bg-vanilla-surface border border-ink-text/15 rounded p-2 text-xs shadow-2xs min-w-[280px]">
             {planMetadata?.has_plan ? (
               <div className="space-y-1">
@@ -758,7 +813,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
       {/* Section 3: Prominent Planning-Period Selector & Action Toolbar */}
       <div className="bg-white border border-gray-200 rounded p-2 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
           {/* Month Selector */}
           <div className="flex items-center gap-1.5">
             <label htmlFor="req-planning-month-select" className="text-xs font-bold text-gray-700">Planning Month:</label>
@@ -766,6 +821,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
               id="req-planning-month-select"
               aria-label="Planning Month"
               value={selectedMonth}
+              disabled={periodBusy}
               onChange={e => handleMonthChange(parseInt(e.target.value, 10))}
               className="px-2.5 py-1 text-xs border border-gray-300 rounded bg-white text-gray-800 font-medium focus:ring-1 focus:ring-brand-steel"
             >
@@ -784,6 +840,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
               id="req-planning-year-select"
               aria-label="Planning Year"
               value={selectedYear}
+              disabled={periodBusy}
               onChange={e => handleYearChange(parseInt(e.target.value, 10))}
               className="px-2.5 py-1 text-xs border border-gray-300 rounded bg-white text-gray-800 font-medium focus:ring-1 focus:ring-brand-steel"
             >
@@ -798,7 +855,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
           <button
             type="button"
             onClick={() => void loadRecords()}
-            disabled={isLoading}
+            disabled={isLoading||periodBusy}
             className="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-800 border border-gray-300 rounded font-semibold text-xs transition-colors shadow-2xs flex items-center gap-1"
           >
             <span>🔄</span>
@@ -848,10 +905,11 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
           {/* Recalculate Button */}
           {canRecalculate && (
+            <div className="flex items-stretch">
             <button
               type="button"
-              onClick={() => void handleRecalculate()}
-              disabled={isRecalculating || isLoading || (!productionBased && records.length === 0) || (productionBased && planMetadata?.status === 'APPROVED')}
+              onClick={() => setShowRecalculate(true)}
+              disabled={periodBusy || isLoading || (!productionBased && records.length === 0) || (productionBased && planMetadata?.status === 'APPROVED')}
               className="px-3 py-1 bg-brand-navy hover:bg-opacity-90 disabled:opacity-50 text-white rounded font-semibold text-xs shadow-2xs transition-colors flex items-center gap-1"
             >
               {isRecalculating ? (
@@ -866,6 +924,18 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
                 </>
               )}
             </button>
+            {isSuperAdmin&&productionBased&&planMetadata?.plan_id&&<details className="relative">
+              <summary aria-label="Requirement plan actions" className="cursor-pointer list-none rounded border border-gray-300 bg-white px-2 py-1 text-xs">▾</summary>
+              <div className="absolute right-0 z-30 mt-1 w-56 rounded border bg-white p-1 shadow-lg">
+                <button type="button" disabled={periodBusy||isLoading||!['CALCULATED','CALCULATED_WITH_ERRORS'].includes(planMetadata.status)}
+                  onClick={event=>{event.currentTarget.closest('details')?.removeAttribute('open');setPlanAction('approve');}}
+                  className="w-full rounded px-3 py-2 text-left text-xs disabled:opacity-40 hover:bg-gray-50">Approve plan</button>
+                <button type="button" disabled={periodBusy||isLoading||planMetadata.status!=='APPROVED'}
+                  onClick={event=>{event.currentTarget.closest('details')?.removeAttribute('open');setPlanAction('assess');}}
+                  className="w-full rounded px-3 py-2 text-left text-xs disabled:opacity-40 hover:bg-gray-50">Stock and purchase assessment</button>
+              </div>
+            </details>}
+            </div>
           )}
 
           {/* Export Excel Button */}
@@ -873,11 +943,12 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
             <div className="relative group">
               <button
                 type="button"
+                disabled={isExporting}
                 onClick={() => handleExport(selectedRowIds.size > 0 ? 'SELECTED' : 'ALL')}
                 className="px-3 py-1 bg-white hover:bg-gray-50 border border-gray-300 text-gray-800 rounded font-semibold text-xs shadow-2xs transition-colors flex items-center gap-1"
               >
                 <span>📥</span>
-                <span>Export Excel ▾</span>
+                <span>{isExporting ? 'Exporting…' : 'Export Excel ▾'}</span>
               </button>
               <div className="absolute right-0 top-full mt-1 w-36 bg-white border border-gray-200 rounded shadow-lg py-1 z-30 hidden group-hover:block">
                 <button
@@ -910,25 +981,26 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
       </div>
 
       {/* Issues Alert Line */}
-      {Boolean(planMetadata?.issue_count && planMetadata.issue_count > 0) && (
+      {planMetadata && planMetadata.issue_count !== undefined && planMetadata.issue_count > 0 && (
         <div className="flex items-center justify-between px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-900 shadow-2xs">
           <div className="flex items-center gap-2">
             <span className="font-bold">⚠️ {planMetadata.issue_count} issue{planMetadata.issue_count === 1 ? '' : 's'}:</span>
             <span>missing norms or unmapped processes for planned parts in this period.</span>
           </div>
-          <a
-            href={`/api/v1/requirements/workspace/issues/export?month=${selectedMonth}&year=${selectedYear}`}
-            download={`requirement_issues_${selectedYear}_${String(selectedMonth).padStart(2, '0')}.csv`}
+          <button
+            type="button"
+            disabled={isExportingIssues}
+            onClick={() => void downloadIssues()}
             className="px-2.5 py-1 bg-white hover:bg-amber-100 border border-amber-300 rounded font-semibold text-xs text-amber-900 transition-colors shadow-2xs flex items-center gap-1"
           >
             <span>📥</span>
-            <span>Download issues list (CSV)</span>
-          </a>
+            <span>{isExportingIssues ? 'Downloading issues…' : 'Download issues list (CSV)'}</span>
+          </button>
         </div>
       )}
 
       {/* Main Spreadsheet Grid Container */}
-      <div className="flex-1 min-h-0 bg-white border border-gray-300 rounded shadow-xs flex flex-col overflow-hidden">
+      <div className="flex-1 min-h-[420px] min-w-0 bg-white border border-gray-300 rounded shadow-xs flex flex-col overflow-hidden">
         {/* Toolbar for search and column filters */}
         <Toolbar
           canImport={false}
@@ -982,6 +1054,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
         <div className="flex-1 min-h-0">
           <DataTable
             virtualize
+            fitHeight="clamp(420px, 65vh, 720px)"
             columns={columns}
             headerGroups={headerGroups}
             data={filteredRecords}
@@ -1016,6 +1089,21 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
           />
         </div>
       </div>
+
+      {showRecalculate&&<div role="dialog" aria-modal="true" aria-labelledby="recalculate-requirements-title" className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4">
+        <form className="w-full max-w-md space-y-4 rounded-xl bg-white p-5 shadow-xl" onSubmit={event=>{event.preventDefault();void handleRecalculate();}}>
+          <h2 id="recalculate-requirements-title" className="text-lg font-bold">Recalculate requirements</h2>
+          <p className="text-sm">Choose the calculation date for {MONTH_NAMES[selectedMonth-1]} {selectedYear}. This saves calculated quantities and does not approve the plan.</p>
+          <label className="block text-sm">Calculation date<input aria-label="Calculation date" type="date" required value={calculationDate}
+            onChange={event=>setCalculationDate(event.target.value)} className="ml-2 rounded border p-2"/></label>
+          <div className="flex justify-end gap-2"><button type="button" className="rounded border px-3 py-2 text-sm" onClick={()=>setShowRecalculate(false)}>Cancel</button>
+            <button type="submit" disabled={!calculationDate||isRecalculating} className="rounded bg-brand-navy px-3 py-2 text-sm text-white disabled:opacity-40">Recalculate requirements</button></div>
+        </form>
+      </div>}
+      {planAction&&planMetadata?.plan_id&&<Suspense fallback={<p role="status">Loading plan action…</p>}>
+        <RequirementPlanAction key={`${planMetadata.plan_id}/${planAction}`} versionId={planMetadata.plan_id} period={planMetadata.planning_period} action={planAction}
+          onClose={()=>setPlanAction(null)} onApproved={()=>{setPlanAction(null);void loadRecords();}}/>
+      </Suspense>}
 
       {/* Upload Excel Modal */}
       <MonthlyExcelUploadModal

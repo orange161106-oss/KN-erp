@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { apiClient, ApiError } from '../../api/client';
 import { useAuth } from '../auth/context';
 import { TableSkeleton } from '../../components/ui/Skeleton';
@@ -39,6 +40,7 @@ interface PurchaseApprovalsProps {
 type TabKey = 'workspace' | 'queue' | 'handoff';
 
 export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsProps) {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
   const hasModernFlags = user && (
@@ -51,12 +53,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
   const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.purchase_update : true));
   const hasActions = Boolean(isSuperAdmin || canUpdate);
 
-<<<<<<< HEAD
-  const [activeTab, setActiveTab] = useState<TabKey>(isSuperAdmin ? 'central' : 'workspace');
-  const [centralContext, setCentralContext] = useState<{ versionId?: string; reviewRequired: boolean }>({ reviewRequired: false });
-=======
   const [activeTab, setActiveTab] = useState<TabKey>('workspace');
->>>>>>> b4ccd59bd75b672af564b7683cec78adca4001a6
   const [items, setItems] = useState<PurchaseApprovalResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -180,10 +177,6 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
 
             {/* Navigation Tabs */}
             <nav className="flex gap-1 ml-2 border-l border-gray-200 pl-3">
-<<<<<<< HEAD
-              <button type="button" onClick={()=>{setCentralContext({reviewRequired:false});setActiveTab('central');}} className="px-2.5 py-1 text-xs font-semibold rounded border">Central purchase assessment</button>
-=======
->>>>>>> b4ccd59bd75b672af564b7683cec78adca4001a6
               <button
                 type="button"
                 onClick={() => setActiveTab('workspace')}
@@ -259,15 +252,9 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
       {success && <AlertBox message={success} type="success" />}
 
       {/* Content Area */}
-<<<<<<< HEAD
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
-        {activeTab === 'central' ? <CentralRequirements purchaseOnly={!centralContext.reviewRequired} initialVersionId={centralContext.versionId}/> : activeTab === 'workspace' ? (
-          <PurchaseWorkspace canCreate={canUpdate} onOpenCentral={(versionId, reviewRequired)=>{setCentralContext({versionId,reviewRequired});setActiveTab('central');}} />
-=======
-      <div className="flex-1 min-h-0 flex flex-col">
         {activeTab === 'workspace' ? (
-          <PurchaseWorkspace canCreate={canUpdate} />
->>>>>>> b4ccd59bd75b672af564b7683cec78adca4001a6
+          <PurchaseWorkspace canCreate={canUpdate} onOpenRequirements={period=>navigate(`/requirements?period=${encodeURIComponent(period)}`)} />
         ) : loading ? (
           <TableSkeleton columns={8 + (hasActions ? 1 : 0)} rows={5} />
         ) : items.length === 0 ? (

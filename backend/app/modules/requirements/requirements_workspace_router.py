@@ -1,4 +1,5 @@
 from typing import Annotated, Any, Optional
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
@@ -27,8 +28,16 @@ from app.models.prd import ImportBatch, PlanningVersion
 
 
 def _check_central_scope(session, user, month=None, year=None, planning_period=None):
-    """Access is granted via CanReadRequirements / CanUpdateRequirements."""
-    return
+    """Retain the central boundary on every monthly compatibility read/write."""
+    if user.is_super_admin or not user.plant_ids:
+        return
+    period = f'{year:04d}-{month:02d}' if month and year else planning_period
+    query = select(ImportBatch.validation_summary).join(PlanningVersion,
+        ImportBatch.planning_version_id == PlanningVersion.id)
+    if period:
+        query = query.where(PlanningVersion.planning_period == period)
+    if any((value or {}).get('workflow') == 'BASIC_CENTRAL_V1' for value in session.scalars(query)):
+        raise ApplicationError('CENTRAL_REVIEW_REQUIRED', 'Central plans are reviewed by Super Admin.', 403)
 
 
 router = APIRouter(prefix="/requirements/workspace", tags=["requirements-workspace"])
@@ -151,12 +160,13 @@ def post_recalculate_requirements(
     session: Annotated[Session, Depends(get_db)],
     month: Optional[int] = Query(None, ge=1, le=12),
     year: Optional[int] = Query(None, ge=2020, le=2050),
+    as_of_date: date | None = Query(None),
 ):
     """Deterministically recalculates consumable requirements using approved formulas."""
     _check_central_scope(session, user, month, year)
     if month and year:
         return service.recalculate_monthly_requirements(
-            session=session, current_user_id=user.id, month=month, year=year
+            session=session, current_user_id=user.id, month=month, year=year, as_of_date=as_of_date
         )
     # Fallback to general workspace recalculate
     return RequirementRecalculateResponse(
@@ -235,6 +245,7 @@ def get_requirements_issues(
     year: int = Query(..., ge=2020, le=2050),
 ):
     """Retrieve calculation errors and missing norms for the selected period."""
+    _check_central_scope(session, user, month, year)
     return service.get_period_calculation_issues(session, month=month, year=year)
 
 
@@ -246,6 +257,7 @@ def export_requirements_issues(
     year: int = Query(..., ge=2020, le=2050),
 ):
     """Export calculation errors and missing norms as CSV."""
+    _check_central_scope(session, user, month, year)
     csv_bytes = service.export_period_calculation_issues_csv(session, month=month, year=year)
     return Response(
         content=csv_bytes,

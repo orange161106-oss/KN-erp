@@ -1,4 +1,5 @@
 """Real import provenance and shared central/monthly demand, using disposable data."""
+from datetime import date
 from decimal import Decimal
 from uuid import UUID
 from sqlalchemy import event, select
@@ -80,7 +81,7 @@ def test_monthly_and_central_use_identical_saved_quantities_and_protect_sources(
         planning_year=2026, part_name='Manual history', part_number='HISTORY', consumable_code='DRILL-A',
         consumable_name='Manual value', process_name='Drilling', scheduled_consumable_qty=Decimal('999'))
     db.add(old); db.commit()
-    result = monthly.recalculate_monthly_requirements(db, catalog[0].id, 10, 2026)
+    result = monthly.recalculate_monthly_requirements(db, catalog[0].id, 10, 2026, as_of_date=WHEN)
     assert result.plan_metadata.source_workflow == basic.WORKFLOW
     central = get_calculated_requirements(db, identity)
     assert {r.id: r.calculated_qty for r in central} == {UUID(r.id): Decimal(r.required_qty) for r in result.records}
@@ -95,7 +96,7 @@ def test_monthly_and_central_use_identical_saved_quantities_and_protect_sources(
     version = db.get(PlanningVersion, identity)
     version.status = 'APPROVED'; db.commit()
     with pytest.raises(ApplicationError) as failure:
-        monthly.recalculate_monthly_requirements(db, catalog[0].id, 10, 2026)
+        monthly.recalculate_monthly_requirements(db, catalog[0].id, 10, 2026, as_of_date=WHEN)
     assert failure.value.code == 'CALCULATION_HISTORY_PROTECTED'
 
 
@@ -132,9 +133,37 @@ def test_monthly_routes_cannot_bypass_central_plant_scope(db, catalog):
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_current_user] = lambda: user
     with TestClient(app) as client:
-        for path in ('records', 'plan-metadata', 'export'):
+        for path in ('view', 'records', 'plan-metadata', 'export', 'issues', 'issues/export'):
             assert client.get(f'/api/v1/requirements/workspace/{path}?month=10&year=2026').status_code == 403
         assert client.post('/api/v1/requirements/workspace/recalculate?month=10&year=2026').status_code == 403
+
+
+def test_monthly_central_recalculation_requires_and_records_the_reviewers_date(db, catalog):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.core.errors import register_error_handlers
+    from app.db.session import get_db
+    from app.modules.requirements.requirements_workspace_router import router
+    from app.security.dependencies import get_current_user
+    from app.tests.test_permission_foundation import actor
+    identity = legacy_schedule(db, catalog)
+    user = actor(is_super_admin=True)
+    user.id = catalog[0].id
+    app = FastAPI(); register_error_handlers(app); app.include_router(router, prefix='/api/v1')
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_user] = lambda: user
+    path = '/api/v1/requirements/workspace/recalculate?month=10&year=2026'
+    chosen_date = date(2026, 10, 17)
+    with TestClient(app) as client:
+        missing = client.post(path)
+        assert missing.status_code == 422 and missing.json()['code'] == 'CALCULATION_DATE_REQUIRED'
+        assert client.post(path + '&as_of_date=invalid').status_code == 422
+        assert db.scalar(select(CalculatedRequirement.id)) is None
+        response = client.post(path + f'&as_of_date={chosen_date}')
+        assert response.status_code == 200 and response.json()['record_count'] == 2
+    saved = list(db.scalars(select(CalculatedRequirement).where(CalculatedRequirement.planning_version_id == identity)))
+    assert {row.explanation_payload['as_of_date'] for row in saved} == {str(chosen_date)}
+    assert sorted(row.calculated_qty for row in saved) == [Decimal('30'), Decimal('200')]
 
 
 def test_monthly_metadata_and_saved_line_reads_have_bounded_remote_round_trips(db, catalog):

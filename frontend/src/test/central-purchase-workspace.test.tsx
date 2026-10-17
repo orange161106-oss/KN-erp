@@ -19,25 +19,42 @@ test('Purchase Plan shows central demand and offers review without enabling purc
   vi.spyOn(apiClient,'get').mockResolvedValue({plan_metadata:metadata,records:[row],notice:'159 requirement configuration issues need review. Approve the central plan before purchase assessment.'});
   const open = vi.fn();
   const post = vi.spyOn(apiClient,'post');
-  show(<PurchaseWorkspace canCreate onOpenCentral={open}/>);
+  show(<PurchaseWorkspace canCreate onOpenRequirements={open}/>);
   await screen.findByRole('cell',{name:'DRILL-A'});
   expect(screen.getByRole('cell',{name:'230.0000'})).toBeInTheDocument();
-  expect(screen.getAllByText('Unavailable')).toHaveLength(4);
+  expect(screen.getAllByText('Unavailable')).toHaveLength(8);
   expect(screen.queryByText(/No purchase recommendations found/)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('cell',{name:'DRILL-A'}));
   expect(screen.getByRole('button',{name:'Submit to Approval'})).toBeDisabled();
   fireEvent.click(screen.getByRole('button',{name:'Review central requirements'}));
-  expect(open).toHaveBeenCalledWith('october-version',true);
+  expect(open).toHaveBeenCalledWith('2026-10');
   expect(post).not.toHaveBeenCalled();
 });
 
-test('approved requirements open the matching central assessment and preserve the blocked status filter', async () => {
+test('company monthly quantities and value are visible before review without turning them into approvals', async () => {
+  vi.spyOn(apiClient, 'get').mockResolvedValue({plan_metadata:metadata, records:[{...row,
+    calculation_basis:'KNL_MONTHLY_V1', stock_period:'2026-09', minimum_stock_level:'10.0000', minimum_order_qty:'50.0000',
+    stock_qty:'25.0000', shortage_qty:'215.0000', system_recommended_qty:'215.0000', unit_rate:'9.0000', purchase_value:'1935.00000000',
+    remarks:'MSL + requirement − previous closing stock. Pending POs are not deducted.'}],
+    notice:'Company monthly preview uses uploaded Stock Management MSL and MOQ.'});
+  const {container} = show(<PurchaseWorkspace canCreate/>);
+  await screen.findByRole('cell', {name:'DRILL-A'});
+  expect(screen.getByRole('cell', {name:'1935.00000000'})).toBeInTheDocument();
+  expect(screen.getByRole('cell', {name:'2026-09'})).toBeInTheDocument();
+  expect(screen.getByRole('cell', {name:'KNL_MONTHLY_V1'})).toBeInTheDocument();
+  expect(screen.getByRole('cell', {name:'Not used'})).toBeInTheDocument();
+  fireEvent.doubleClick(container.querySelector('td[data-column-key="system_recommended_qty"]')!);
+  expect(screen.queryByRole('textbox', {name:'Edit System Recommended Qty'})).not.toBeInTheDocument();
+  expect(screen.getByRole('button', {name:'Submit to Approval'})).toBeDisabled();
+});
+
+test('approved requirements link to the matching Requirement period and preserve the blocked status filter', async () => {
   vi.spyOn(apiClient,'get').mockResolvedValue({plan_metadata:{...metadata,status:'APPROVED'},records:[{...row,status:'ASSESSMENT_REQUIRED'}],notice:'Complete the central inventory and supplier assessment.'});
   const open = vi.fn();
-  show(<PurchaseWorkspace canCreate onOpenCentral={open}/>);
+  show(<PurchaseWorkspace canCreate onOpenRequirements={open}/>);
   await screen.findByRole('cell',{name:'DRILL-A'});
-  fireEvent.click(screen.getByRole('button',{name:'Open central purchase assessment'}));
-  expect(open).toHaveBeenCalledWith('october-version',false);
+  fireEvent.click(screen.getByRole('button',{name:'View requirements'}));
+  expect(open).toHaveBeenCalledWith('2026-10');
   fireEvent.change(screen.getByLabelText('Status'),{target:{value:'ASSESSMENT_REQUIRED'}});
   await waitFor(()=>expect(apiClient.get).toHaveBeenLastCalledWith(expect.stringContaining('status=ASSESSMENT_REQUIRED')));
 });

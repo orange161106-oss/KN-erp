@@ -33,6 +33,7 @@ def get_purchase_workspace(
     year: int = Query(..., ge=2020, le=2050),
     search: Optional[str] = None,
     status: Optional[str] = Query(None),
+    view: str = Query('normal', pattern='^(normal|md)$'),
 ):
     return service.list_purchase_workspace(
         session,
@@ -41,6 +42,7 @@ def get_purchase_workspace(
         search=search,
         status_filter=status,
         current_user=current_user,
+        view=view,
     )
 
 
@@ -71,6 +73,7 @@ def export_purchase_workspace(
     search: Optional[str] = None,
     status: Optional[str] = Query(None),
     record_ids: Annotated[list[str] | None, Query()] = None,
+    view: str = Query('normal', pattern='^(normal|md)$'),
 ):
     excel_bytes = service.export_purchase_workspace_excel(
         session,
@@ -80,9 +83,10 @@ def export_purchase_workspace(
         status_filter=status,
         record_ids=record_ids,
         current_user=current_user,
+        view=view,
     )
     return Response(
         content=excel_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="purchase_recommendations_{year:04d}_{month:02d}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="purchase_{view}_view_{year:04d}_{month:02d}.xlsx"'},
     )

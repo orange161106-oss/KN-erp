@@ -1,6 +1,6 @@
 import calendar
 import csv
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 import io
 from typing import Any, Optional
@@ -77,8 +77,7 @@ def get_monthly_plan_metadata(
     if central:
         counts = [select(func.count(model.id)).where(model.planning_version_id == version.id).scalar_subquery()
             for model in (CalculatedRequirement, RequirementCalculationError)]
-        calc_cnt = session.scalar(select(counts[0])) or 0
-        issues_cnt = session.scalar(select(counts[1])) or 0
+        calc_cnt, issues_cnt = session.execute(select(*counts)).one()
         rec_count = calc_cnt
     else:
         rec_count = session.scalar(select(func.count(MonthlyRequirementRecord.id)).where(
@@ -987,7 +986,7 @@ def bulk_delete_requirement_records(
 
 
 def recalculate_monthly_requirements(
-    session, current_user_id: UUID, month: int, year: int
+    session, current_user_id: UUID, month: int, year: int, as_of_date: date | None = None
 ) -> RequirementRecalculateResponse:
     """Deterministically recalculates consumable requirements using approved formulas."""
     planning_period = f"{year:04d}-{month:02d}"
@@ -1008,9 +1007,10 @@ def recalculate_monthly_requirements(
 
     from app.services import basic_planning
     if basic_planning.is_central_version(session, version.id):
-        from datetime import date
         from app.schemas.requirements import CalculationRunRequest
-        result = basic_planning.calculate(session, CalculationRunRequest(planning_version_id=version.id, as_of_date=date(year, month, 1)), current_user_id)
+        if as_of_date is None:
+            raise ApplicationError('CALCULATION_DATE_REQUIRED', 'Select a calculation date before recalculating the central plan.', 422)
+        result = basic_planning.calculate(session, CalculationRunRequest(planning_version_id=version.id, as_of_date=as_of_date), current_user_id)
         records = calculate_workspace_requirements(session, month=month, year=year)
         return RequirementRecalculateResponse(
             message=f"Production-based requirements updated: {result.successful_requirements_count} lines; {result.error_count} configuration issues.",
@@ -1345,10 +1345,11 @@ def get_period_calculation_issues(session, *, month: int, year: int) -> list[dic
     results = []
     for err in errors:
         prod = err.product
+        product_code = err.prd_order_item.product_code if err.prd_order_item else (prod.code if prod else '')
         results.append({
             "id": str(err.id),
-            "product_code": err.product_code or (prod.code if prod else ""),
-            "part_number": (prod.part_number if prod else "") or err.product_code or "",
+            "product_code": product_code,
+            "part_number": (prod.part_number if prod else "") or product_code,
             "item_id": (prod.item_id if prod else "") or "",
             "product_name": (prod.name if prod else "") or "",
             "consumable_code": err.consumable.code if err.consumable else "",
@@ -1364,7 +1365,7 @@ def export_period_calculation_issues_csv(session, *, month: int, year: int) -> b
     writer = csv.writer(out)
     writer.writerow(["Part No.", "Item ID", "Product Code", "Description", "Consumable Item ID", "Issue Code", "Issue Description"])
     for row in issues:
-        writer.writerow([
+        values = [
             row["part_number"],
             row["item_id"],
             row["product_code"],
@@ -1372,5 +1373,6 @@ def export_period_calculation_issues_csv(session, *, month: int, year: int) -> b
             row["consumable_code"],
             row["error_code"],
             row["error_message"],
-        ])
+        ]
+        writer.writerow(["'" + value if isinstance(value, str) and value.startswith(('=', '+', '-', '@')) else value for value in values])
     return out.getvalue().encode("utf-8-sig")

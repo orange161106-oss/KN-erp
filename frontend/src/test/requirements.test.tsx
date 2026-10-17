@@ -156,6 +156,7 @@ test('user can trigger recalculation', async () => {
 
   const recalcBtn = screen.getByRole('button', { name: /Recalculate/ });
   await userEvent.click(recalcBtn);
+  await userEvent.click(screen.getByRole('button',{name:'Recalculate requirements'}));
 
   expect(await screen.findByText(/Recalculation completed/)).toBeInTheDocument();
   const call = fetchMock.mock.calls.find(([url, init]) => String(url).includes('/recalculate') && init?.method === 'POST');

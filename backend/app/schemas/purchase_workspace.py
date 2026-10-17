@@ -35,6 +35,27 @@ class PurchaseWorkspaceRecord(BaseModel):
     po_pending_qty: Optional[Decimal] = Field(default=None, decimal_places=4)
     shortage_qty: Optional[Decimal] = Field(default=None, decimal_places=4)
     system_recommended_qty: Optional[Decimal] = Field(default=None, decimal_places=4)
+    calculation_basis: Optional[str] = None
+    stock_period: Optional[str] = None
+    minimum_stock_level: Optional[Decimal] = None
+    minimum_order_qty: Optional[Decimal] = None
+    unit_rate: Optional[Decimal] = None
+    purchase_value: Optional[Decimal] = None
+    category: Optional[str] = None
+    type_of_material: Optional[str] = None
+    output_unit: Optional[str] = None
+    max_stock_level: Optional[Decimal] = None
+    lead_time_days: Optional[int] = None
+    opening_qty: Optional[Decimal] = None
+    opening_value: Optional[Decimal] = None
+    receipt_qty: Optional[Decimal] = None
+    receipt_value: Optional[Decimal] = None
+    issue_qty: Optional[Decimal] = None
+    closing_value: Optional[Decimal] = None
+    md_sources: list[dict] = Field(default_factory=list)
+    calculation_details: Optional[str] = None
+    calculation_sources: dict = Field(default_factory=dict)
+    input_issues: list[str] = Field(default_factory=list)
     approval_status: Optional[str] = None
     approval_id: Optional[UUID] = None
     status: str
