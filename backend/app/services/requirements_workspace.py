@@ -1763,16 +1763,60 @@ def get_period_calculation_issues(session, *, month: int, year: int) -> list[dic
     ).all()
     results = []
     for err in errors:
-        prod = err.product
+        prod = getattr(err, "product", None)
+        prd_item = getattr(err, "prd_order_item", None)
+        consumable = getattr(err, "consumable", None)
+        ctx = getattr(err, "context_data", None) or {}
+
+        product_ref = (
+            getattr(err, "product_code", None)
+            or (prod.code if prod else None)
+            or (prd_item.product_code if prd_item else None)
+            or ctx.get("product_code")
+            or str(getattr(err, "product_id", "") or "")
+        )
+        part_number = (
+            (prod.part_number if prod else None)
+            or (prd_item.part_number if prd_item else None)
+            or ctx.get("part_number")
+            or getattr(err, "product_code", None)
+            or product_ref
+            or ""
+        )
+        item_id = (
+            (prod.item_id if prod else None)
+            or (prd_item.item_id if prd_item else None)
+            or ctx.get("item_id")
+            or ""
+        )
+        product_name = (
+            (prod.name if prod else None)
+            or (prd_item.product_name if prd_item else None)
+            or ctx.get("product_name")
+            or ""
+        )
+        consumable_code = (
+            (consumable.code if consumable else None)
+            or (consumable.item_id if consumable else None)
+            or ctx.get("consumable_code")
+            or ""
+        )
+        error_code = getattr(err, "error_code", "") or ""
+        error_message = (
+            getattr(err, "error_message", None)
+            or getattr(err, "reason", None)
+            or ""
+        )
+
         results.append({
-            "id": str(err.id),
-            "product_code": err.product_code or (prod.code if prod else ""),
-            "part_number": (prod.part_number if prod else "") or err.product_code or "",
-            "item_id": (prod.item_id if prod else "") or "",
-            "product_name": (prod.name if prod else "") or "",
-            "consumable_code": err.consumable.code if err.consumable else "",
-            "error_code": err.error_code,
-            "error_message": err.error_message,
+            "id": str(getattr(err, "id", "")),
+            "product_code": product_ref,
+            "part_number": part_number,
+            "item_id": item_id,
+            "product_name": product_name,
+            "consumable_code": consumable_code,
+            "error_code": error_code,
+            "error_message": error_message,
         })
     return results
 
