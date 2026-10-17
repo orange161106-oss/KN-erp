@@ -28,8 +28,8 @@ from app.models.prd import ImportBatch, PlanningVersion
 
 
 def _check_central_scope(session, user, month=None, year=None, planning_period=None):
-    """Access is granted via CanReadRequirements / CanUpdateRequirements."""
-    return
+    if not getattr(user, 'is_super_admin', False) and getattr(user, 'plant_ids', None):
+        raise ApplicationError('CENTRAL_REVIEW_REQUIRED', 'Central plans are reviewed by Super Admin.', 403)
 
 
 router = APIRouter(prefix="/requirements/workspace", tags=["requirements-workspace"])

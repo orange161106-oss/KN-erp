@@ -61,31 +61,26 @@ def get_monthly_plan_metadata(
         .limit(1)
     ).first()
 
-    # Check GRN reconciliation status
-    grn_stats = session.execute(
-        select(
-            func.count(MonthlyRequirementRecord.id),
-            func.max(MonthlyRequirementRecord.last_synced_at),
-        ).where(
-            MonthlyRequirementRecord.planning_period == planning_period,
-            MonthlyRequirementRecord.is_deleted == False,  # noqa: E712
-            or_(
-                MonthlyRequirementRecord.grn_received_qty > 0,
-                MonthlyRequirementRecord.last_synced_at.is_not(None),
-                MonthlyRequirementRecord.grn_source_file.is_not(None),
-            ),
-        )
-    ).one()
-    reconciled_count = grn_stats[0] or 0
-    last_synced = grn_stats[1]
-
     if not row:
-        rec_count = session.scalar(
-            select(func.count(MonthlyRequirementRecord.id)).where(
+        rec_stats = session.execute(
+            select(
+                func.count(MonthlyRequirementRecord.id),
+                func.count(MonthlyRequirementRecord.id).filter(
+                    or_(
+                        MonthlyRequirementRecord.grn_received_qty > 0,
+                        MonthlyRequirementRecord.last_synced_at.is_not(None),
+                        MonthlyRequirementRecord.grn_source_file.is_not(None),
+                    )
+                ),
+                func.max(MonthlyRequirementRecord.last_synced_at),
+            ).where(
                 MonthlyRequirementRecord.planning_period == planning_period,
                 MonthlyRequirementRecord.is_deleted == False,  # noqa: E712
             )
-        ) or 0
+        ).one()
+        rec_count = rec_stats[0] or 0
+        reconciled_count = rec_stats[1] or 0
+        last_synced = rec_stats[2]
         return MonthlyPlanMetadata(
             has_plan=rec_count > 0,
             planning_month=month,
@@ -103,16 +98,33 @@ def get_monthly_plan_metadata(
     central = (metadata or {}).get('workflow') == basic_planning.WORKFLOW
     # A production-based monthly view reads the same saved rows as Central.
     issues_cnt = 0
+    reconciled_count = 0
+    last_synced = None
     if central:
         counts = [select(func.count(model.id)).where(model.planning_version_id == version.id).scalar_subquery()
             for model in (CalculatedRequirement, RequirementCalculationError)]
-        calc_cnt = session.scalar(select(counts[0])) or 0
-        issues_cnt = session.scalar(select(counts[1])) or 0
-        rec_count = calc_cnt
+        calc_cnt, issues_cnt = session.execute(select(counts[0], counts[1])).one()
+        rec_count = (calc_cnt or 0) + (issues_cnt or 0)
     else:
         rec_count = session.scalar(select(func.count(MonthlyRequirementRecord.id)).where(
             MonthlyRequirementRecord.planning_version_id == version.id,
             MonthlyRequirementRecord.is_deleted == False)) or 0  # noqa: E712
+        grn_stats = session.execute(
+            select(
+                func.count(MonthlyRequirementRecord.id),
+                func.max(MonthlyRequirementRecord.last_synced_at),
+            ).where(
+                MonthlyRequirementRecord.planning_period == planning_period,
+                MonthlyRequirementRecord.is_deleted == False,  # noqa: E712
+                or_(
+                    MonthlyRequirementRecord.grn_received_qty > 0,
+                    MonthlyRequirementRecord.last_synced_at.is_not(None),
+                    MonthlyRequirementRecord.grn_source_file.is_not(None),
+                ),
+            )
+        ).one()
+        reconciled_count = grn_stats[0] or 0
+        last_synced = grn_stats[1]
 
     return MonthlyPlanMetadata(
         has_plan=True,

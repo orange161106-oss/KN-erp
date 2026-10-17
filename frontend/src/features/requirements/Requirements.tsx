@@ -428,7 +428,6 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
       setGrnFile(null);
       // Auto-refresh spreadsheet and metadata immediately without reload
       await loadRecords();
-      await loadPlanMetadata();
     } catch (err) {
       setGrnError(err instanceof Error ? err.message : 'Failed to ingest GRN file.');
     } finally {
@@ -974,7 +973,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
               ) : (
                 <>
                   <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Recalculate MRP</span>
+                  <span>Recalculate</span>
                 </>
               )}
             </button>
@@ -1025,7 +1024,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
       {Boolean(planMetadata?.issue_count && planMetadata.issue_count > 0) && (
         <div className="flex items-center justify-between px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-900 shadow-2xs">
           <div className="flex items-center gap-2">
-            <span className="font-bold">⚠️ {planMetadata.issue_count} issue{planMetadata.issue_count === 1 ? '' : 's'}:</span>
+            <span className="font-bold">⚠️ {planMetadata?.issue_count} issue{planMetadata?.issue_count === 1 ? '' : 's'}:</span>
             <span>missing norms or unmapped processes for planned parts in this period.</span>
           </div>
           <a
