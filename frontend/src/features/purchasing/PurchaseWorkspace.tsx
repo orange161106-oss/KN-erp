@@ -114,7 +114,7 @@ export default function PurchaseWorkspace({ canCreate, onOpenRequirements }: {
   const [notice, setNotice] = useState<string | null>(null);
   const isCentralPlan = planMetadata?.source_workflow === 'BASIC_CENTRAL_V1';
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
-  const [selectedCell, setSelectedCell] = useState<{ rowId: string; colKey: keyof PurchaseWorkspaceRecord & string } | null>(null);
+  const [selectedCell, setSelectedCell] = useState<{ rowId: string; colKey: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const settledSearch = useDebouncedValue(searchQuery);
   const loadGeneration = useRef(0);
@@ -134,7 +134,7 @@ export default function PurchaseWorkspace({ canCreate, onOpenRequirements }: {
     setOriginalRecords(baseline);
   }, []);
   const unsavedCount = records.filter(row => editableKeys.some(key => String(row[key] ?? '').trim() !== String(originalRecords.get(row.id)?.[key] ?? '').trim())).length;
-  const handleCellChange = (id: string, key: keyof PurchaseWorkspaceRecord & string, value: string) => {
+  const handleCellChange = (id: string, key: string, value: string) => {
     if (!canCreate || isSaving || !editableKeys.some(item => item === key) || (['consumable_name', 'master_unit'].includes(key) && !canEditMaster)) return;
     ++loadGeneration.current;
     const next = recordsRef.current.map(row => row.id === id ? { ...row, [key]: value,
