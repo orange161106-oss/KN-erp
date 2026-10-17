@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     http_slow_request_ms: int = Field(default=1000, ge=1, le=60000)
     inventory_import_enabled: bool = False
     projection_import_enabled: bool = False
+    treat_missing_stock_as_zero: bool = True
     # Schema-only Alembic operations do not need the application's signing key.
     auth_secret_key: SecretStr | None = None
     auth_access_token_expire_minutes: int = Field(default=15, ge=1, le=60)

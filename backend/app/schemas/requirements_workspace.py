@@ -23,6 +23,7 @@ class RequirementWorkspaceRecord(BaseModel):
     process_count: int = 1  # Number of Processes
     production_order_qty: str = "0.0000"  # Production Order for Selected Month
     scheduled_consumable_qty: str = "0.0000"  # Scheduled Consumable Quantity for Selected Month
+    output_per_unit: Optional[str] = None  # Output per Unit / Tool Life
 
     # Group 3: Inventory, Unit & Operational Status
     plant: str = "Plant 1"

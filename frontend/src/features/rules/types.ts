@@ -24,6 +24,7 @@ export interface ConsumptionNorm {
   process_name?: string;
   plant_name?: string;
   unit_code?: string;
+  output_per_unit?: number | string | null;
   reference_data?: NormReferenceData | null;
 }
 
@@ -35,6 +36,7 @@ export interface NormReferenceData {
   process_count?: string | null;
   reference_production_qty?: string | null;
   reference_schedule_qty?: string | null;
+  output_per_unit?: string | null;
   sch?: string | null;
   prd_order?: string | null;
   is_general?: boolean;
@@ -58,6 +60,7 @@ export interface NormImportRow {
   process_count: string | null;
   reference_production_qty: string | null;
   reference_schedule_qty: string | null;
+  output_per_unit?: string | null;
   product_id?: string | null;
   consumable_id?: string | null;
   process_id?: string | null;

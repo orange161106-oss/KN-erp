@@ -214,6 +214,17 @@ def calculate_workspace_requirements(
                     p_thick = str(reference.get("thickness") or row.parameters.get("thickness", "0.0000"))
                     p_count = int(Decimal(str(reference.get("process_count") or row.parameters.get("process_count", row.parameters.get("processes", 1)))))
 
+                tool_life = material.output_per_unit if material else None
+                out_per_unit_str = str(int(tool_life) if tool_life == int(tool_life) else tool_life) if tool_life is not None else None
+                row_unit = material.purchasing_unit if (material and material.purchasing_unit) else row.uom
+
+                import math
+                rule_type = material.rule_type if material and material.rule_type else ('TOOL_LIFE' if (tool_life and tool_life > 1) else 'PRODUCTION_RATE')
+                if (rule_type == 'TOOL_LIFE' or (tool_life is not None and tool_life > 1)) and tool_life and tool_life > 0:
+                    req_qty_val = Decimal(str(math.ceil(row.calculated_qty / tool_life)))
+                else:
+                    req_qty_val = row.calculated_qty
+
                 results.append(
                     RequirementWorkspaceRecord(
                         id=str(row.id),
@@ -229,11 +240,12 @@ def calculate_workspace_requirements(
                         process_count=p_count,
                         production_order_qty=format(row.source_production_qty, ".4f"),
                         scheduled_consumable_qty=format(row.calculated_qty, ".4f"),
+                        output_per_unit=out_per_unit_str,
                         plant=plant.name if plant else "Central / unassigned",
                         process=process.name if process else "",
                         description=material.name if material else "",
-                        unit=row.uom,
-                        required_qty=format(row.calculated_qty, ".4f"),
+                        unit=row_unit,
+                        required_qty=format(req_qty_val, ".4f"),
                         stock_qty="Unavailable",
                         shortage_qty="Unavailable",
                         po_pending_qty="Unavailable",
@@ -1227,15 +1239,15 @@ def export_requirements_excel(
     ws.cell(row=group_row, column=2).font = group_header_font
     ws.cell(row=group_row, column=2).alignment = Alignment(horizontal="center", vertical="center")
 
-    ws.merge_cells(start_row=group_row, start_column=4, end_row=group_row, end_column=10)
+    ws.merge_cells(start_row=group_row, start_column=4, end_row=group_row, end_column=12)
     ws.cell(row=group_row, column=4, value="FOR CONSUMABLES").fill = steel_fill
     ws.cell(row=group_row, column=4).font = group_header_font
     ws.cell(row=group_row, column=4).alignment = Alignment(horizontal="center", vertical="center")
 
-    ws.merge_cells(start_row=group_row, start_column=11, end_row=group_row, end_column=15)
-    ws.cell(row=group_row, column=11, value="INVENTORY & STATUS").fill = navy_fill
-    ws.cell(row=group_row, column=11).font = group_header_font
-    ws.cell(row=group_row, column=11).alignment = Alignment(horizontal="center", vertical="center")
+    ws.merge_cells(start_row=group_row, start_column=13, end_row=group_row, end_column=17)
+    ws.cell(row=group_row, column=13, value="INVENTORY & STATUS").fill = navy_fill
+    ws.cell(row=group_row, column=13).font = group_header_font
+    ws.cell(row=group_row, column=13).alignment = Alignment(horizontal="center", vertical="center")
 
     headers = [
         "#",
@@ -1248,6 +1260,8 @@ def export_requirements_excel(
         "Number of Processes",
         "Production Order for Selected Month",
         "Scheduled Consumable Quantity for Selected Month",
+        "Output per Unit",
+        "Required Qty",
         "Unit",
         "Stock Qty",
         "Shortage Qty",
@@ -1257,11 +1271,11 @@ def export_requirements_excel(
 
     for col_num, h_text in enumerate(headers, start=1):
         cell = ws.cell(row=col_row, column=col_num, value=h_text)
-        cell.fill = navy_fill if col_num in (1, 2, 3, 11, 12, 13, 14, 15) else steel_fill
+        cell.fill = navy_fill if col_num in (1, 2, 3, 13, 14, 15, 16, 17) else steel_fill
         cell.font = col_header_font
         cell.border = thin_border
         cell.alignment = Alignment(
-            horizontal="center" if col_num in (1, 8, 11, 14) else "right" if col_num in (7, 9, 10, 12, 13) else "left",
+            horizontal="center" if col_num in (1, 8, 13, 16) else "right" if col_num in (7, 9, 10, 11, 12, 14, 15) else "left",
             vertical="center",
             wrap_text=True,
         )
@@ -1272,11 +1286,19 @@ def export_requirements_excel(
         ws.row_dimensions[current_row].height = 20
 
         # Numeric conversions for Excel
-        def to_num(val: str) -> float:
+        def to_num(val: Any) -> float:
             try:
-                return float(val.replace(",", "").strip())
+                return float(str(val).replace(",", "").strip())
             except Exception:
                 return 0.0
+
+        tool_life_num = None
+        if row.output_per_unit:
+            try:
+                f = float(str(row.output_per_unit).replace(",", "").strip())
+                tool_life_num = int(f) if f.is_integer() else f
+            except Exception:
+                tool_life_num = None
 
         row_data = [
             r_idx,
@@ -1289,6 +1311,8 @@ def export_requirements_excel(
             row.process_count,
             to_num(row.production_order_qty),
             to_num(row.scheduled_consumable_qty),
+            tool_life_num,
+            to_num(row.required_qty),
             row.unit,
             to_num(row.stock_qty),
             to_num(row.shortage_qty),
@@ -1303,10 +1327,14 @@ def export_requirements_excel(
 
             if col_num == 1:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
-            elif col_num in (7, 9, 10, 12, 13):
+            elif col_num in (7, 9, 10, 12, 14, 15):
                 cell.alignment = Alignment(horizontal="right", vertical="center")
                 cell.number_format = "#,##0.0000"
-            elif col_num in (8, 11, 14):
+            elif col_num == 11:
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+                if isinstance(val, (int, float)):
+                    cell.number_format = "#,##0" if float(val).is_integer() else "#,##0.0000"
+            elif col_num in (8, 13, 16):
                 cell.alignment = Alignment(horizontal="center", vertical="center")
             else:
                 cell.alignment = Alignment(horizontal="left", vertical="center")

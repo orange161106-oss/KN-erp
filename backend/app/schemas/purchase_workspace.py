@@ -44,6 +44,8 @@ class PurchaseWorkspaceRecord(BaseModel):
     category: Optional[str] = None
     type_of_material: Optional[str] = None
     output_unit: Optional[str] = None
+    output_per_unit: Optional[Decimal] = None
+    gross_sch: Optional[Decimal] = None
     max_stock_level: Optional[Decimal] = None
     lead_time_days: Optional[int] = None
     opening_qty: Optional[Decimal] = None
