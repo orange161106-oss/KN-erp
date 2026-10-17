@@ -214,3 +214,51 @@ test('renders directly without tabs and displays compact issues banner when issu
   expect(screen.queryByText('Central requirement plan')).not.toBeInTheDocument();
   expect(screen.queryByText('Monthly Requirement Planner')).not.toBeInTheDocument();
 });
+
+test('clicking Download issues list (CSV) triggers authenticated blob download', async () => {
+  const originalCreateObjectURL = window.URL.createObjectURL;
+  const originalRevokeObjectURL = window.URL.revokeObjectURL;
+  const createObjectURLMock = vi.fn().mockReturnValue('blob:http://localhost/mock-blob');
+  const revokeObjectURLMock = vi.fn();
+  window.URL.createObjectURL = createObjectURLMock;
+  window.URL.revokeObjectURL = revokeObjectURLMock;
+
+  try {
+    fetchMock.mockImplementation(async input => {
+      const path = String(input);
+      if (path.includes('/workspace/view')) {
+        return jsonResponse({
+          records: mockRequirements,
+          plan_metadata: { ...mockMetadata, issue_count: 2 },
+        });
+      }
+      if (path.includes('/issues/export')) {
+        return new Response('Part No.,Item ID,Product Code\nP-1,ITEM-1,PROD-1', {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/csv',
+            'Content-Disposition': 'attachment; filename="requirement_issues_2026_10.csv"',
+          },
+        });
+      }
+      return jsonResponse([]);
+    });
+
+    renderRequirements();
+    await screen.findByText('MIG Welding Wire 1.2mm');
+
+    const downloadBtn = screen.getByRole('button', { name: /Download issues list \(CSV\)/i });
+    expect(downloadBtn).toBeInTheDocument();
+
+    await userEvent.click(downloadBtn);
+
+    const exportCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/issues/export'));
+    expect(exportCall).toBeDefined();
+    expect(String(exportCall![0])).toContain('period=2026-10');
+    expect(createObjectURLMock).toHaveBeenCalled();
+    expect(revokeObjectURLMock).toHaveBeenCalled();
+  } finally {
+    window.URL.createObjectURL = originalCreateObjectURL;
+    window.URL.revokeObjectURL = originalRevokeObjectURL;
+  }
+});

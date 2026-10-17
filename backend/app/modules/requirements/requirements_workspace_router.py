@@ -287,15 +287,30 @@ def get_requirements_issues(
 def export_requirements_issues(
     user: CanReadRequirements,
     session: Annotated[Session, Depends(get_db)],
-    month: int = Query(..., ge=1, le=12),
-    year: int = Query(..., ge=2020, le=2050),
+    month: Optional[int] = Query(None, ge=1, le=12),
+    year: Optional[int] = Query(None, ge=2020, le=2050),
+    period: Optional[str] = Query(None),
 ):
     """Export calculation errors and missing norms as CSV."""
+    if period and (month is None or year is None):
+        delim = "-" if "-" in period else "_"
+        parts = period.strip().split(delim)
+        if len(parts) == 2:
+            try:
+                year = int(parts[0])
+                month = int(parts[1])
+            except ValueError:
+                pass
+    if month is None or year is None:
+        raise ApplicationError("INVALID_PARAMETERS", "Both month and year (or period=YYYY-MM) are required.", 400)
+
+    _check_central_scope(session, user, month, year)
     csv_bytes = service.export_period_calculation_issues_csv(session, month=month, year=year)
+    period_label = f"{year:04d}_{month:02d}"
     return Response(
         content=csv_bytes,
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="Requirement_Issues_{year:04d}_{month:02d}.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="requirement_issues_{period_label}.csv"'},
     )
 
 

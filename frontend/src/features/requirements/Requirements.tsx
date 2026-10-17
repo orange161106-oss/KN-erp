@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
-import { apiClient } from '../../api/client';
+import { apiClient, fetchWithAuth } from '../../api/client';
 import { useAuth } from '../auth/context';
 import { canPerform } from '../../core/rbac';
 import DataTable, { type ColumnDef, type HeaderGroupDef } from '../../components/DataTable';
@@ -136,6 +136,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isRecalculating, setIsRecalculating] = useState(false);
+  const [isDownloadingIssues, setIsDownloadingIssues] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   // Selection & UI state
@@ -435,8 +436,8 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
     }
   };
 
-  // Export Excel
-  const handleExport = (mode: 'ALL' | 'FILTERED' | 'SELECTED') => {
+  // Export Excel with authentication
+  const handleExport = async (mode: 'ALL' | 'FILTERED' | 'SELECTED') => {
     let url = `/api/v1/requirements/workspace/export?month=${selectedMonth}&year=${selectedYear}`;
     const params = new URLSearchParams();
 
@@ -451,7 +452,57 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
     const q = params.toString();
     if (q) url += `&${q}`;
-    window.open(url, '_blank');
+
+    try {
+      const res = await fetchWithAuth(url);
+      if (!res.ok) throw new Error('Download failed');
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `consumable_requirements_${selectedYear}_${String(selectedMonth).padStart(2, '0')}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      console.error('Export Excel error:', err);
+      setStatusMessage({
+        type: 'error',
+        text: 'Failed to export requirements spreadsheet.',
+      });
+    }
+  };
+
+  // Download issues list CSV with authentication
+  const handleDownloadIssues = async () => {
+    setIsDownloadingIssues(true);
+    try {
+      const period = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`;
+      const response = await fetchWithAuth(
+        `/api/v1/requirements/workspace/issues/export?period=${period}`
+      );
+      if (!response.ok) {
+        throw new Error(`Failed to export issues: ${response.statusText}`);
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `requirement_issues_${selectedYear}_${String(selectedMonth).padStart(2, '0')}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Export issues error:", error);
+      setStatusMessage({
+        type: 'error',
+        text: 'Failed to download issues list',
+      });
+    } finally {
+      setIsDownloadingIssues(false);
+    }
   };
 
   // Filter options
@@ -1027,14 +1078,15 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
             <span className="font-bold">⚠️ {planMetadata?.issue_count} issue{planMetadata?.issue_count === 1 ? '' : 's'}:</span>
             <span>missing norms or unmapped processes for planned parts in this period.</span>
           </div>
-          <a
-            href={`/api/v1/requirements/workspace/issues/export?month=${selectedMonth}&year=${selectedYear}`}
-            download={`requirement_issues_${selectedYear}_${String(selectedMonth).padStart(2, '0')}.csv`}
-            className="px-2.5 py-1 bg-white hover:bg-amber-100 border border-amber-300 rounded font-semibold text-xs text-amber-900 transition-colors shadow-2xs flex items-center gap-1"
+          <button
+            type="button"
+            onClick={handleDownloadIssues}
+            disabled={isDownloadingIssues}
+            className="px-2.5 py-1 bg-white hover:bg-amber-100 border border-amber-300 rounded font-semibold text-xs text-amber-900 transition-colors shadow-2xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
           >
             <span>📥</span>
-            <span>Download issues list (CSV)</span>
-          </a>
+            <span>{isDownloadingIssues ? 'Downloading...' : 'Download issues list (CSV)'}</span>
+          </button>
         </div>
       )}
 
