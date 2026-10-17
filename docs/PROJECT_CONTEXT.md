@@ -864,3 +864,30 @@ Validation: 68 backend pytest tests (tool life math, monthly purchase formula, c
 and frontend Vite production build passed with zero errors. All changes committed and pushed to branch feature/mrp-view-consolidation.
 Protected files stock_management_service.py and DataTable.tsx remain untouched.
 
+## Security audit, UI polish & GRN ingestion integration (PR #36) — 2026-10-17
+
+Following PR #35 merge into `develop`, the owner instructed merging `feature/security-audit-ui-polish` into `develop`.
+Created integration branch `feature/integrate-security-audit`. Merged `origin/feature/security-audit-ui-polish` and resolved
+4 conflicts cleanly without compromising the single deterministic KNL engine or owner-approved compact MRP view:
+
+1. `requirements_workspace_router.py`: Retained central scope validation `_check_central_scope` alongside flexible `period=YYYY-MM`
+   and `month/year` query parameter resolution.
+2. `requirements_workspace.py`: Preserved GRN ingestion fields (`grn_received_qty`, `cls_stk`, `mrr_file`, `mrr_inv`, `mrr_date`),
+   tool-life formulas (`req_qty_val`, `out_per_unit_str`, `purchasing_unit`), central record counts, and defensive `getattr` fallback
+   for period calculation issues.
+3. `PurchaseApprovals.tsx`: Preserved `onOpenRequirements` callback prop to `PurchaseWorkspace`.
+4. `Requirements.tsx`: Kept owner-approved compact MRP grid (`fitHeight="clamp(420px, 65vh, 720px)"`, `RequirementPlanAction` lazy load,
+   authenticated blob download with `apiClient.getBlob`), integrated GRN upload modal (`handleUploadMRPGRN`), and restored the
+   issues alert banner.
+
+Unified multi-head Alembic migrations `c004` (Tool Life & Output per Unit) and `df4cc3ac8f31` into single linear head `190996207995`.
+Aligned issues export filename to canonical `Requirement_Issues_YYYY_MM.csv` and purchase export `view` handling defaults.
+
+Verification:
+- Frontend build `tsc -b && vite build` built in 1.78s with zero errors.
+- Core backend test suite: 124/124 tests passed (tool life math, monthly purchase formula, central workspace, norm imports,
+  GRN ingestion, MRP GRN overwrite, issues export authentication, merge compatibility, dynamic sales schedule).
+- Protected files `backend/app/services/stock_management_service.py` and `frontend/src/components/DataTable.tsx` remain untouched.
+- PR #36 created and merged into `develop` (`642b0ed`). Local branch updated and synced with `origin/develop`.
+
+
