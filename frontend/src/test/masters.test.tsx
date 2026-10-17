@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import App from '../App';
-import { apiClient, setAccessToken, setUnauthorizedHandler } from '../api/client';
+import { apiClient, getAccessToken, setAccessToken, setUnauthorizedHandler } from '../api/client';
 import { AuthContext } from '../features/auth/context';
 import type { CurrentUser } from '../features/auth/context';
 import MasterPage from '../features/masters/MasterPage';
@@ -69,7 +69,7 @@ test('ADMIN without explicit grants cannot navigate directly to masters', async 
   window.history.replaceState({}, '', '/masters/units');
   authenticate({ ...identity, permissions: [] }); render(<App />); await signIn();
   expect(await screen.findByRole('alert')).toHaveTextContent('do not have permission');
-  expect(screen.queryByRole('link', { name: 'Masters' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: /Product master|Masters/i })).not.toBeInTheDocument();
   expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/masters/units'))).toBe(false);
 });
 
@@ -164,8 +164,13 @@ test('supplier details create an association with the selected consumable and re
 test('401 on a protected request clears the session and returns to login', async () => {
   authenticate(identity, () => response({ code: 'NOT_AUTHENTICATED', message: 'Valid authentication is required.' }, 401));
   render(<App />); const user = await signIn();
-  await user.click(await screen.findByRole('link', { name: 'Masters' }));
-  expect(await screen.findByLabelText('Username')).toBeInTheDocument();
+  const priorRequests = fetchMock.mock.calls.length;
+  await user.click(await screen.findByRole('link', { name: /Product master|Masters/i }));
+  // Navigation downloads a screen chunk before that screen can request data.
+  await waitFor(() => expect(fetchMock.mock.calls.slice(priorRequests).some(([url]) =>
+    String(url).includes('/api/v1/masters/'))).toBe(true), { timeout: 5000 });
+  expect(await screen.findByLabelText('Username', {}, { timeout: 5000 })).toBeInTheDocument();
+  expect(getAccessToken()).toBeNull();
 });
 
 test('403 is shown without silently enabling access', async () => {

@@ -1,30 +1,59 @@
 """Import shared ORM models so Alembic can discover their metadata."""
 
 from app.models.alerts import InventoryAlert
-from app.models.grn import GRN, GRNItem
+from app.models.grn import GRN, GRNItem, GoodsReceiptRecord, GRNLineItem, GRNRecord
 from app.models.purchase_approval import PurchaseApproval
+from app.models.purchase_plan import PurchasePlanDraft
 from app.models.purchase_order import PurchaseDemandEvidence, PurchaseOrder, PurchaseOrderItem
-from app.models.audit import AuditLog
+ 
+ 
+from app.models.audit import AuditLog, UserSession
 from app.models.auth import Permission, Role, User, role_permissions, user_roles
 from app.models.inventory_masters import Consumable, Supplier, SupplierConsumable, Unit
 from app.models.inventory import StockImportBatch, StockSnapshot, StockTransaction
 from app.models.projection import ProjectionInputSet
 from app.models.mappings import ProductPlant, ProductProcessConsumable
-from app.models.masters import Customer, Product
-from app.models.prd import ImportBatch, ImportError, PlanningVersion, PRDOrderHeader, PRDOrderItem
+from app.models.masters import Customer, CustomerAlias, Product
+from app.models.prd import ImportBatch, ImportError, PlanningVersion, PRDOrderHeader, PRDOrderItem, PRDRecord
 from app.models.plant_workflow import PlantConfirmation, RequirementAdjustment, UserPlant
 from app.models.production import Plant, Process, Route, RouteStep
-from app.models.requirements import CalculatedRequirement, RequirementCalculationError
+from app.models.requirements import (
+    AggregatedRequirement,
+    CalculatedRequirement,
+    MonthlyRequirementPlan,
+    MonthlyRequirementRecord,
+    RequirementCalculationError,
+    RequirementLineItem,
+    RequirementStatus,
+)
 from app.models.rules import ConsumptionNorm
+from app.models.stock_statements import (
+    StockParameter,
+    StockParameterBatch,
+    StockStatementBatch,
+    StockStatementLine,
+)
 
 __all__ = [
+    "AggregatedRequirement",
+    "MonthlyRequirementPlan",
+    "RequirementLineItem",
+    "RequirementStatus",
+    "MonthlyRequirementRecord",
+
+
     "GRN",
     "GRNItem",
+    "GoodsReceiptRecord",
+    "GRNRecord",
+    "GRNLineItem",
+    "PRDRecord",
     "PurchaseDemandEvidence",
     "PurchaseOrder",
     "PurchaseOrderItem",
     "ProjectionInputSet",
     "AuditLog",
+    "UserSession",
     "Permission",
     "Role",
     "User",
@@ -40,6 +69,7 @@ __all__ = [
     "ProductPlant",
     "ProductProcessConsumable",
     "Customer",
+    "CustomerAlias",
     "Product",
     "ImportBatch",
     "ImportError",
@@ -58,5 +88,10 @@ __all__ = [
     "RequirementAdjustment",
     "InventoryAlert",
     "PurchaseApproval",
+    "StockStatementBatch",
+    "StockStatementLine",
+    "StockParameterBatch",
+    "StockParameter",
 ]
+
 

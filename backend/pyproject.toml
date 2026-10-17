@@ -17,9 +17,12 @@ dependencies = [
   "SQLAlchemy>=2.0.36,<2.1",
   "psycopg[binary]>=3.2,<4",
   "alembic>=1.14,<2",
-  "pwdlib[argon2]>=0.3,<1",
+  "pwdlib[argon2,bcrypt]>=0.3,<1",
+  "bcrypt>=4.0,<6",
   "PyJWT>=2.10,<3",
   "openpyxl>=3.1,<4",
+  "numpy>=2.3,<3",
+  "pandas>=2.2,<4",
   "python-multipart>=0.0.20,<1",
 ]
 
@@ -32,4 +35,7 @@ include = ["app*"]
 [tool.pytest.ini_options]
 testpaths = ["app/tests"]
 addopts = "-ra --strict-markers"
-markers = ["integration: requires an explicitly configured disposable PostgreSQL database"]
+markers = [
+  "integration: requires an explicitly configured disposable PostgreSQL database",
+  "company_golden: requires complete KNL-approved numeric examples; empty registry is pending acceptance",
+]

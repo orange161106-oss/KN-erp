@@ -1,15 +1,91 @@
 @import "tailwindcss";
 
 @theme {
+  --color-erp-orange: #ff5e2c;
+  --color-erp-vanilla: #fff6c0;
+  --color-erp-tangerine: #F28B0C;
+  --color-erp-tenne: #D95204;
+  --color-erp-dark-vanilla: #D9BBA9;
+  --color-erp-topaz: #8C2703;
+  --color-erp-chocolate: #400101;
+
+  --color-vanilla-bg: #FBF6EB;
+  --color-vanilla-surface: #F4ECD9;
+  --color-ink-text: #1C140F;
+  --color-burnt-orange: #D95D39;
+  --color-burnt-orange-dark: #C44D29;
+  --color-burnt-orange-hover: #C44D29;
+
   --color-brand-navy: #1B3A5C;
   --color-brand-steel: #3E7CB1;
-  --color-brand-offwhite: #F5F7FA;
-  --color-brand-charcoal: #1F2937;
+  --color-brand-offwhite: #FBF6EB;
+  --color-brand-charcoal: #1C140F;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
 }
 
 body {
-  background-color: var(--color-brand-offwhite);
-  color: var(--color-brand-charcoal);
+  background-color: var(--color-erp-vanilla, #fff6c0);
+  color: var(--color-erp-chocolate, #400101);
   margin: 0;
-  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+}
+
+@media print {
+  /* Hide sidebar, header, navigation, and all buttons during printing */
+  aside,
+  header,
+  nav,
+  button,
+  .no-print {
+    display: none !important;
+  }
+
+  html, body, #root, .app-shell, .app-shell-content {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  body {
+    background-color: #ffffff !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+  }
+
+  .print-container {
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    background: transparent !important;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  th,
+  td {
+    border: 1px solid #d1d5db !important;
+    padding: 6px 10px !important;
+    color: #000000 !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+  }
 }

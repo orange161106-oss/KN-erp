@@ -233,23 +233,23 @@ export default function AlertsCenter() {
           No inventory alerts found matching your filter criteria.
         </div>
       ) : (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+        <div className="bg-white border border-ink-text/10 rounded-lg overflow-hidden shadow-2xs">
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm border-collapse">
               <thead>
-                <tr className="bg-gray-50 border-b text-gray-600">
-                  <th className="px-4 py-3 text-left font-medium">Consumable</th>
-                  <th className="px-4 py-3 text-left font-medium">Type</th>
-                  <th className="px-4 py-3 text-left font-medium">Severity</th>
-                  <th className="px-4 py-3 text-right font-medium">Current Stock</th>
-                  <th className="px-4 py-3 text-right font-medium">MSL Threshold</th>
-                  <th className="px-4 py-3 text-left font-medium">UOM</th>
-                  <th className="px-4 py-3 text-left font-medium">Message</th>
-                  <th className="px-4 py-3 text-left font-medium">Status</th>
-                  <th className="px-4 py-3 text-left font-medium">Action</th>
+                <tr className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
+                  <th className="px-4 py-3 text-left font-semibold">Consumable</th>
+                  <th className="px-4 py-3 text-left font-semibold">Type</th>
+                  <th className="px-4 py-3 text-left font-semibold">Severity</th>
+                  <th className="px-4 py-3 text-right font-semibold">Current Stock</th>
+                  <th className="px-4 py-3 text-right font-semibold">MSL Threshold</th>
+                  <th className="px-4 py-3 text-left font-semibold">UOM</th>
+                  <th className="px-4 py-3 text-left font-semibold">Message</th>
+                  <th className="px-4 py-3 text-left font-semibold">Status</th>
+                  <th className="px-4 py-3 text-left font-semibold">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-ink-text/10">
                 {alerts.map((alert) => (
                   <tr key={alert.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-3">

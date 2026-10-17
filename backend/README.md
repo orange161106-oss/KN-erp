@@ -11,7 +11,8 @@ Actual M2.3 validation and reviewer notes are in [M2_3_REVIEW.md](M2_3_REVIEW.md
 ## Requirements and installation
 
 - Python 3.12 or newer, and `uv` for reproducible dependency installation.
-- A supported PostgreSQL server and an existing database/user with migration permissions.
+- A supported PostgreSQL server and an existing PostgreSQL user with migration permissions.
+  Local database creation can use the setup command below; deployed databases are provisioned separately.
 - Run commands below from `backend/`.
 
 ```powershell
@@ -38,7 +39,14 @@ URL but do not require a signing key.
 | `APP_ENV` | `local`, `test`, `staging`, or `production`; default `local` |
 | `LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; default `INFO` |
 | `DATABASE_URL` | Required PostgreSQL URL; no default |
-| `DB_CONNECT_TIMEOUT_SECONDS` | Connection/pool acquisition timeout; integer 1–60, default 5 |
+| `DB_CONNECT_TIMEOUT_SECONDS` | New connection timeout; integer 1–60, default 5 |
+| `DB_POOL_MODE` | `auto` (default), `session`, or `transaction`; auto uses transaction mode only on port 6543 |
+| `DB_POOL_SIZE` | Retained connections per backend worker; default 5 |
+| `DB_MAX_OVERFLOW` | Extra connections per worker under load; default 5 |
+| `DB_POOL_TIMEOUT_SECONDS` | Maximum wait for a pooled connection; default 10 |
+| `DB_POOL_RECYCLE_SECONDS` | Connection lifetime before reconnecting on checkout; default 1800 |
+| `DB_WARMUP_ON_STARTUP` | Warm one remote connection before accepting logins; default true; skipped for test/loopback databases |
+| `HTTP_SLOW_REQUEST_MS` | Safe slow-request log threshold; default 1000 milliseconds |
 | `TEST_DATABASE_URL` | Test-only disposable PostgreSQL database; read by integration tests |
 | `AUTH_SECRET_KEY` | Required operator-generated secret, at least 32 UTF-8 bytes; no default |
 | `AUTH_ACCESS_TOKEN_EXPIRE_MINUTES` | Access-token lifetime, integer 1–60; default 15 |
@@ -64,10 +72,100 @@ Generate the signing key with a cryptographic secret generator, then supply it
 through the local environment/secret store. Do not reuse sample values or database
 passwords as signing keys. Startup fails when the key is missing or too short.
 
+## Performance and connection diagnostics
+
+Run this read-only check from `backend/` when investigating database errors:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.db.diagnose
+```
+
+It reports three connection/round-trip timings, missing registered-model columns,
+and the maximum connection budget per worker. It does not print credentials,
+employee/business rows, or connection URLs, and does not migrate or change data.
+Schema comparison checks column presence; it does not certify constraints, indexes,
+Alembic ancestry, or business correctness. A failed result exits nonzero.
+
+Direct and session-mode connections use a pool retaining five connections and allowing five overflow connections,
+uses the most recently returned connection first, checks for stale connections,
+and keeps TCP keepalives enabled. A remote startup warm-up prepares just one
+connection; a temporary failure is logged without preventing later reconnection.
+Size the total across **all workers, teammates, jobs and replicas** within your
+database/provider budget. Separate order/projection sessions can need multiple
+connections per request. Increasing worker count also multiplies the pool budget.
+Defaults are a conservative starting point, not a measured production capacity.
+
+Supabase's session and transaction URLs share a hostname. Port 5432 uses bounded
+application reuse; port 6543 uses NullPool and delegates pooling to the provider.
+For a nonstandard proxy port, set `DB_POOL_MODE` explicitly to match its configured
+mode. Transaction mode does not retain an application connection or claim a local
+pool-size budget. Prepared statements stay disabled for pooler compatibility.
+
+Database diagnostics distinguish connection, schema, credentials and capacity
+failures without raw SQL/DSNs. Transient authentication/health/PRD preview reads
+can reconnect once after rollback. The frontend retries only a GET explicitly
+marked transient, once; account changes and writes cancel that recovery. Saves,
+deletions, login requests and receipt imports are never automatically repeated.
+No transaction is resumed midway after a disconnect. A provider outage or a
+failed schema migration still needs its underlying cause addressed.
+
+Excel parsing and synchronous SQL work run in request worker threads so uploads
+do not block the event loop. Large API responses use gzip when negotiated. Logs
+identify slow requests by their registered route template, status and duration,
+without query strings, employee IDs, passwords or uploaded data.
+
+Use a built frontend and a proper static web server/CDN for deployment. Serve
+hashed assets with long-lived caching and the HTML entry with revalidation, so
+deployments do not strand browsers on old chunk names. Vite's development server
+and Uvicorn's `--reload` mode are development tools. No deployment or infrastructure
+change is performed by these code optimizations.
+
 ## Database migrations
 
-Create the application database/user using your PostgreSQL administration process;
-this backend does not create databases or provision system services.
+For your local computer, install/start PostgreSQL and fill `backend/.env` first.
+Set `APP_ENV=local` and a localhost `DATABASE_URL` naming the application database.
+The PostgreSQL username in that URL must already exist. From `backend/`, one command
+creates the missing database and applies every pending Alembic migration:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.db.setup
+```
+
+If your application user cannot create databases, use the local administration login:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.db.setup --admin-user postgres
+```
+
+The admin password is prompted with hidden input. It is not stored; migrations use
+the original application credentials from `.env`. The new database is owned by
+the URL's application user. Existing databases are reused, pending migrations are
+applied, and no database reset, password change or business-data seeding is performed.
+Concurrent invocations for the same database are guarded by an advisory lock.
+If migration fails, fix the cause and rerun; the database is not dropped.
+
+This explicit command is for loopback PostgreSQL with `APP_ENV=local`; it does not
+install PostgreSQL or run on backend startup. Production provisioning stays separate.
+Run `pytest app/tests/test_database_setup.py` for setup behavior tests. A real-server
+test requires separately configured local/disposable PostgreSQL credentials; mocked
+tests do not demonstrate an actual database creation.
+
+For an already provisioned database, the normal migration commands remain:
+
+Supabase provisions its database for you. With its direct connection URL in the
+private `backend/.env`, use `postgresql+psycopg://` and `sslmode=require` (or
+`verify-full` with the server certificate). From `backend/`, this explicit command
+applies migrations without attempting local database creation:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.db.setup --migrate-only
+```
+
+This command changes the configured database's schema. It does not transfer local
+data or provision ERP login accounts. A direct Supabase endpoint must be reachable
+over IPv6, unless the project's IPv4 add-on is enabled. DNS/network errors cannot
+be fixed by changing migration formulas or bypassing the local creation guard.
+Use only one migration operator at a time. Standard Alembic commands also work:
 
 ```powershell
 .venv/Scripts/python.exe -m alembic upgrade head
@@ -106,6 +204,33 @@ Review generated migrations, agree shared schema changes with the relevant owner
 and retain one clean head. Never edit an applied/shared migration. The metadata
 defines constraint naming; explicitly name check constraints. Use UTC timestamps
 and PostgreSQL `NUMERIC` / Python `Decimal` for precise future business values.
+
+## Super Admin and employee setup
+
+The shared-password development seeder is retired. It must not reset accounts or
+assign every permission to every role on Supabase.
+
+After applying migrations, set `SUPER_ADMIN_USERNAME` and `SUPER_ADMIN_PASSWORD`
+privately in `backend/.env`. The password has no built-in default. Provision explicitly:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.db.bootstrap_admin
+```
+
+This command creates one Super Admin or leaves the matching existing account alone.
+It refuses to promote an ordinary employee with the same username. Explicit rotation
+uses `--rotate-password`; ordinary employee APIs cannot modify Super Admin. Startup
+never seeds or resets accounts. Create employees in Administration and select their
+feature flags; base roles do not bypass flags. Existing unmapped permissions, such as
+stock imports and PO pricing/cancellation, still require explicit legacy grants.
+
+Map plant checkbox slots to verified plant UUIDs using `PLANT_PERMISSION_IDS` (a JSON
+object with keys `1` through `5`). Obtain IDs from `/api/v1/plants`; do not infer them
+from names or database row order. An unset slot grants no plant workflow access.
+Legacy `user_plants` rows remain as history and do not override checkbox revocation.
+
+See [the verified workflow setup guide](../docs/validation/KNL_VERIFIED_WORKFLOW_FOUNDATION_2026-10-08.md)
+for the migration/API impact and manual testing sequence.
 
 ## Start and health contract
 
@@ -483,3 +608,44 @@ Run `pytest app/tests/test_purchase_recommendation.py` for engine/API validation
 with the existing disposable TEST_DATABASE_URL run
 `pytest app/tests/integration/test_purchase_recommendation.py` for PostgreSQL
 consistency. Full validation is in [M5.1 handoff](M5_1_REVIEW.md).
+
+## Inventory and purchase reports (M6.2)
+
+Owner: Munees. Reviewer: Keerthi. Migration head is `0017_report_permissions`,
+following `0016_grn_imports`. Apply with `alembic upgrade head`; validate schema
+agreement with `alembic check`. The migration seeds `reports.inventory.read` and
+`reports.purchase.read`, without granting either permission to a role by default.
+
+The `/api/v1/reports` API exposes material stock, M4.2 projected shortage, M4.3
+reorder assessment, supplier purchase plan, pending POs, GRN history and traced
+recommendation-to-receipt fulfilment. It delegates projections/reorder/recommendation
+to their domain services and reads approval, PO and imported GRN evidence for
+reconciliation. Existing-ERP stock and receipt results are explicitly non-live.
+No report table or business formula was added. Contract and open decisions are in
+[`docs/23_INVENTORY_PURCHASE_REPORTS_CONTRACT.md`](../docs/23_INVENTORY_PURCHASE_REPORTS_CONTRACT.md).
+
+Run `pytest app/tests/test_inventory_purchase_reports.py` and
+`pytest app/tests/test_planned_vs_actual_history.py` for report API validation.
+
+## Inventory/purchase golden comparisons (M7.2)
+
+Owner: Munees. The test-only replay uses existing stock/projection/reorder/purchase
+services in fresh in-memory SQLite databases, without application credentials.
+No API, policy or migration is added. The KNL registry is empty pending approved
+numeric cases; 12 separately recorded technical fixtures cannot pass KNL acceptance.
+
+Read [the validation guide](../docs/24_INVENTORY_PURCHASE_GOLDEN_CASES.md) and
+[KNL capture sheet](../docs/validation/M7_2_KNL_CASE_CAPTURE.md). Run:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest app/tests/test_inventory_purchase_golden.py
+.\.venv\Scripts\python.exe -m app.tests.inventory_purchase_golden --report .cache/m7_2/company_report.json
+.\.venv\Scripts\python.exe -m app.tests.inventory_purchase_golden --cases app/tests/data/inventory_purchase/technical_cases.json --report .cache/m7_2/technical_report.json
+```
+
+The runner records every difference and continues after replay errors. Exit 2 and
+`NOT_READY` for the empty company registry are intentional. Technical matches retain
+`company_acceptance=PENDING`; pytest displays a named company-case skip. To close
+company UAT, require the company CLI to exit 0 plus evidence review and sign-off.
+Use `pytest -m company_golden` for recorded company cases. Actual results are in
+[M7.2 handoff](M7_2_REVIEW.md).

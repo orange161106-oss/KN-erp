@@ -1,10 +1,14 @@
 from datetime import datetime
 from decimal import Decimal
+import enum
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
+    Enum as SQLEnum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -19,6 +23,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
 
 
 class CalculatedRequirement(Base):
@@ -45,8 +50,8 @@ class CalculatedRequirement(Base):
     product_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
     )
-    plant_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("plants.id", ondelete="RESTRICT"), nullable=False
+    plant_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("plants.id", ondelete="RESTRICT"), nullable=True
     )
     process_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("processes.id", ondelete="RESTRICT"), nullable=False
@@ -85,7 +90,7 @@ class CalculatedRequirement(Base):
     planning_version: Mapped["PlanningVersion"] = relationship("PlanningVersion")  # noqa: F821
     prd_order_item: Mapped["PRDOrderItem"] = relationship("PRDOrderItem")  # noqa: F821
     product: Mapped["Product"] = relationship("Product")  # noqa: F821
-    plant: Mapped["Plant"] = relationship("Plant")  # noqa: F821
+    plant: Mapped[Optional["Plant"]] = relationship("Plant")  # noqa: F821
     process: Mapped["Process"] = relationship("Process")  # noqa: F821
     consumable: Mapped["Consumable"] = relationship("Consumable")  # noqa: F821
     rule: Mapped["ConsumptionNorm"] = relationship("ConsumptionNorm")  # noqa: F821
@@ -127,4 +132,169 @@ class RequirementCalculationError(Base):
     product: Mapped["Product"] = relationship("Product")  # noqa: F821
     plant: Mapped[Optional["Plant"]] = relationship("Plant")  # noqa: F821
     consumable: Mapped[Optional["Consumable"]] = relationship("Consumable")  # noqa: F821
+
+
+class MonthlyRequirementRecord(Base):
+    __tablename__ = "monthly_requirement_records"
+    __table_args__ = (
+        Index("ix_monthly_req_period", "planning_period"),
+        Index("ix_monthly_req_consumable", "consumable_code"),
+        Index("ix_monthly_req_part", "part_number"),
+        Index("ix_monthly_req_plant_period", "plant_id", "planning_month", "planning_year"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    planning_version_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("planning_versions.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    planning_period: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
+    planning_month: Mapped[int] = mapped_column(Integer, nullable=False)
+    planning_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    row_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # 1. Component identifiers
+    part_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    part_number: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    # 2. Consumable attributes & process specs
+    consumable_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    consumable_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    process_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    part_thickness: Mapped[Decimal] = mapped_column(Numeric(10, 4), default=Decimal("0.0000"), nullable=False)
+    process_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    # 3. Monthly Quantities
+    production_order_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
+    scheduled_consumable_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
+
+    # 4. Inventory, Unit & Status
+    unit: Mapped[str] = mapped_column(String(32), default="NOS", nullable=False)
+    plant: Mapped[str] = mapped_column(String(64), default="Plant 1", nullable=False)
+    plant_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    stock_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
+    shortage_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
+    po_pending_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
+    msl: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
+    status: Mapped[str] = mapped_column(String(64), default="DRAFT", nullable=False)
+    remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # 5. Month-End Overwrite & MRP Balance Tracking
+    opening_stock: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0.0")
+    grn_received_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0.0")
+    consumed_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0.0")
+    closing_stock: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0.0")
+    gross_requirement: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0.0")
+    net_order_requirement: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0.0")
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    grn_source_file: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    invoice_no: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    grn_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # 5. Audit
+    created_by: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    planning_version: Mapped[Optional["PlanningVersion"]] = relationship("PlanningVersion")  # noqa: F821
+
+
+class RequirementStatus(str, enum.Enum):
+    DRAFT = "DRAFT"
+    SUBMITTED = "SUBMITTED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class MonthlyRequirementPlan(Base):
+    __tablename__ = "monthly_requirement_plans"
+    __table_args__ = (
+        UniqueConstraint("plant_id", "month", "year", name="uq_monthly_requirement_plans_plant_month_year"),
+        Index("ix_monthly_req_plan_lookup", "plant_id", "month", "year"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    plant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[RequirementStatus] = mapped_column(
+        SQLEnum(RequirementStatus, name="requirement_status_enum", native_enum=False),
+        default=RequirementStatus.DRAFT,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    line_items: Mapped[list["RequirementLineItem"]] = relationship(
+        "RequirementLineItem", back_populates="plan", cascade="all, delete-orphan"
+    )
+
+
+class RequirementLineItem(Base):
+    __tablename__ = "requirement_line_items"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "consumable_id", name="uq_requirement_line_items_plan_consumable"),
+        Index("ix_req_line_item_plan", "plan_id"),
+        Index("ix_req_line_item_consumable", "consumable_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    serial_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    plan_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("monthly_requirement_plans.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    consumable_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("consumables.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    part_no: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    formula_qty: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
+    requested_qty: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
+    approved_qty: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
+    rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
+    receipt_qty: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
+    receipt_value: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
+    is_modified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+    modification_reason: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    plan: Mapped["MonthlyRequirementPlan"] = relationship("MonthlyRequirementPlan", back_populates="line_items")
+    consumable: Mapped["Consumable"] = relationship("Consumable")  # noqa: F821
+
+
+class AggregatedRequirement(Base):
+    __tablename__ = "aggregated_requirements"
+    __table_args__ = (
+        UniqueConstraint("month", "year", "consumable_id", name="uq_aggregated_requirements_month_year_consumable"),
+        Index("ix_aggregated_req_period", "month", "year"),
+        Index("ix_aggregated_req_consumable", "consumable_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    consumable_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("consumables.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    total_gross_qty: Mapped[float] = mapped_column(Float, nullable=False)
+    net_purchase_qty: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    consumable: Mapped["Consumable"] = relationship("Consumable")  # noqa: F821
+
+
+
 

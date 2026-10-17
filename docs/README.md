@@ -34,7 +34,29 @@ If code and documentation disagree, stop and resolve the conflict before continu
 ## Golden rule
 AI must never invent a manufacturing/business rule. Unknown rules must be marked `TBD`.
 
+## Saved project context
+
+[Code and workflow context](PROJECT_CONTEXT.md) records the 2026-10-13 review,
+current screen/service paths, recent approved UI changes, and unresolved integration
+issues. Use it for orientation, then verify current code and the governing contracts.
+
+[Performance and connection validation](validation/PERFORMANCE_RELIABILITY_2026-10-15.md)
+records the latest optimization measurements, tests and remaining hosting limits.
+
+[Product Master catalog](validation/PRODUCT_MASTER_CATALOG_2026-10-15.md) records the
+current undated upload → review → Save changes flow, count reconciliation, deletion
+and focused checks. The earlier monthly upload design is retained as a historical
+deployment record only.
+
 ## Shared implementation contracts
+
+- [Company monthly purchase formula](25_COMPANY_MONTHLY_PURCHASE.md): owner-supplied
+  KNL-Formula.xlsx, selected-month uploaded MSL/MOQ, previous closing stock, monthly
+  preview versus saved timed assessments, and explicit missing-input handling.
+
+- [Central basic consumable planning](24_CENTRAL_BASIC_PLANNING_CONTRACT.md):
+  owner-approved direct production → norms → central Super Admin review → inventory/
+  purchase workflow, reviewed files, source/approval evidence, migration and QA limits.
 
 - [M1.3 authentication and RBAC](13_AUTH_RBAC_CONTRACT.md): schema, login/current-user
   API, centralized permission checks, token configuration and remaining authority TBDs.
@@ -63,3 +85,6 @@ AI must never invent a manufacturing/business rule. Unknown rules must be marked
 
 - [M5.4 GRNs and inventory](22_GRN_INVENTORY_CONTRACT.md): atomic posted-ERP receipt
   imports, accepted-only fulfilment, source stock links, permissions and retry rules.
+- [M6.2 inventory and purchase reports](23_INVENTORY_PURCHASE_REPORTS_CONTRACT.md):
+  authoritative domain report sources, filters, non-live coverage, permissions,
+  query performance and remaining definition questions.

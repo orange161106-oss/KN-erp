@@ -58,6 +58,22 @@ Do not subtract a pending PO twice.
 
 Then apply approved MOQ, pack-size, order-multiple and supplier rules.
 
+### Company monthly Purchase Plan preview — owner decision 2026-10-17
+
+For production-based monthly Purchase Plan rows that have not already been
+submitted, KNL-Formula.xlsx Plan!AD4 / AE4 now defines a separate rule:
+`gap = selected-month uploaded MSL + consolidated requirement − previous-month closing stock`.
+If gap is positive, recommend `max(gap, selected-month uploaded MOQ)`; otherwise zero.
+Value is quantity × Product Master rate when present. The owner explicitly selected
+uploaded Stock Management MSL/MOQ, rather than deriving MSL from an assumed number
+of working/MSL days. Pending POs, pack multiples, maximum caps and lead-time demand
+are not operands in this formula. Missing/ambiguous source inputs remain unknown.
+
+This dated monthly preview is not an assertion of usable stock at a future receipt
+instant. Existing timed M5.1 assessment/submission, independent human approval and
+immutable saved evidence remain separate and unchanged. Displayed calculation basis
+distinguishes them. See [monthly formula contract](25_COMPANY_MONTHLY_PURCHASE.md).
+
 ## Actual consumption
 Purchases are not consumption.
 

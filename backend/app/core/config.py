@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
 from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -38,13 +39,32 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     database_url: SecretStr
     db_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
+    db_pool_mode: Literal['auto', 'session', 'transaction'] = 'auto'
+    # Per worker: keep the hosted PostgreSQL connection budget bounded.
+    db_pool_size: int = Field(default=5, ge=1, le=50)
+    db_max_overflow: int = Field(default=5, ge=0, le=50)
+    db_pool_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    db_pool_recycle_seconds: int = Field(default=1800, ge=60, le=86400)
+    db_warmup_on_startup: bool = True
+    http_slow_request_ms: int = Field(default=1000, ge=1, le=60000)
     inventory_import_enabled: bool = False
     projection_import_enabled: bool = False
+    treat_missing_stock_as_zero: bool = True
     # Schema-only Alembic operations do not need the application's signing key.
     auth_secret_key: SecretStr | None = None
     auth_access_token_expire_minutes: int = Field(default=15, ge=1, le=60)
     auth_token_issuer: str = Field(default="kn-consumable-erp", min_length=1)
     auth_token_audience: str = Field(default="kn-consumable-web", min_length=1)
+    super_admin_username: str | None = Field(default=None, min_length=3, max_length=128)
+    super_admin_password: SecretStr | None = Field(default=None, min_length=8, max_length=1024)
+    plant_permission_ids: dict[int, UUID] = Field(default_factory=dict)
+
+    @field_validator("plant_permission_ids")
+    @classmethod
+    def validate_plant_ids(cls, value: dict[int, UUID]) -> dict[int, UUID]:
+        if set(value) - set(range(1, 6)) or len(set(value.values())) != len(value):
+            raise ValueError("Map distinct plant UUIDs to slots 1 through 5")
+        return value
 
     @field_validator("auth_secret_key")
     @classmethod
@@ -69,6 +89,13 @@ class Settings(BaseSettings):
     @property
     def sqlalchemy_url(self) -> URL:
         return parse_database_url(self.database_url.get_secret_value())
+
+    @property
+    def alembic_sqlalchemy_url(self) -> URL:
+        url = self.sqlalchemy_url
+        if url.port == 6543:
+            return url.set(port=5432)
+        return url
 
 
 def load_settings() -> Settings:

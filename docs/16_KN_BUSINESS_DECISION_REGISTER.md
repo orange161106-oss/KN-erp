@@ -1,5 +1,13 @@
 # KNL business decisions and confirmation questionnaire
 
+M7.2 evidence audit (2026-10-06): the supplied inventory PDF confirms scope but
+does not supply complete approved numeric stock/MSL/lead-time/reorder/purchase
+cases. INV-08's 1,000 stock / 500 MSL illustration is not an operational default.
+The company-case registry remains empty and KNL numeric acceptance remains pending.
+See [case sources, replay and investigation](24_INVENTORY_PURCHASE_GOLDEN_CASES.md)
+and [the KNL capture sheet](validation/M7_2_KNL_CASE_CAPTURE.md). Synthetic tests
+do not resolve the operational numeric TBDs in this register.
+
 Prepared: 2026-10-02. Coordinator: Munees.
 Technical domain owners: Munees (inventory/purchasing), Keerthi (workflow/access),
 Yathish (production/requirements). KNL business approvers must be identified by KNL.
@@ -518,3 +526,13 @@ PO pending and receipt status derive from imported accepted GRNs and are labelle
 as imported, non-live figures. Over-receipt policy remains unapproved; excess receipts
 are held without writes. Real ERP mapping, corrections/reversals, inspection-pending
 handling and issued cancellation remain TBD. Warehouse authority stays external.
+
+## M6.2 reporting boundary
+
+Munees approved the M6.2 report plan. Reviewer: Keerthi. Reports use existing
+inventory/purchase domain services and immutable source, approval, order and GRN
+records; they do not redefine formulas or infer missing recommendation evidence.
+Read permissions are explicit and have no default role grants. Stock and GRN coverage
+remains imported, dated and non-live. Operational freshness, historical stock-as-of,
+consolidated supplier-plan semantics, overdue delivery and missing operational MSL or
+lead-time authority remain TBD. See `23_INVENTORY_PURCHASE_REPORTS_CONTRACT.md`.

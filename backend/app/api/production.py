@@ -1,6 +1,7 @@
+from app.security.permissions import require_permissions
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import select
 
 # ADJUST THIS IMPORT based on your project's auth setup to secure the routes
@@ -23,7 +24,7 @@ def get_db(request: Request):
 # ==========================
 # PLANT ENDPOINTS
 # ==========================
-@router.post("/plants", response_model=PlantResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/plants", response_model=PlantResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permissions('masters.write'))])
 def create_plant(plant_in: PlantCreate, db: Session = Depends(get_db)):
     db_plant = db.scalar(select(Plant).where(Plant.name == plant_in.name))
     if db_plant:
@@ -34,18 +35,18 @@ def create_plant(plant_in: PlantCreate, db: Session = Depends(get_db)):
     db.refresh(new_plant)
     return new_plant
 
-@router.get("/plants", response_model=list[PlantResponse])
+@router.get("/plants", response_model=list[PlantResponse], dependencies=[Depends(require_permissions('masters.read'))])
 def get_plants(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return db.scalars(select(Plant).where(Plant.is_active == True).offset(skip).limit(limit)).all()
 
-@router.get("/plants/{plant_id}", response_model=PlantResponse)
+@router.get("/plants/{plant_id}", response_model=PlantResponse, dependencies=[Depends(require_permissions('masters.read'))])
 def get_plant(plant_id: UUID, db: Session = Depends(get_db)):
     plant = db.get(Plant, plant_id)
     if not plant:
         raise HTTPException(status_code=404, detail="Plant not found")
     return plant
 
-@router.put("/plants/{plant_id}", response_model=PlantResponse)
+@router.put("/plants/{plant_id}", response_model=PlantResponse, dependencies=[Depends(require_permissions('masters.write'))])
 def update_plant(plant_id: UUID, plant_in: PlantUpdate, db: Session = Depends(get_db)):
     plant = db.get(Plant, plant_id)
     if not plant:
@@ -56,7 +57,7 @@ def update_plant(plant_id: UUID, plant_in: PlantUpdate, db: Session = Depends(ge
     db.refresh(plant)
     return plant
 
-@router.delete("/plants/{plant_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/plants/{plant_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permissions('masters.write'))])
 def delete_plant(plant_id: UUID, db: Session = Depends(get_db)):
     plant = db.get(Plant, plant_id)
     if not plant:
@@ -67,7 +68,7 @@ def delete_plant(plant_id: UUID, db: Session = Depends(get_db)):
 # ==========================
 # PROCESS ENDPOINTS
 # ==========================
-@router.post("/processes", response_model=ProcessResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/processes", response_model=ProcessResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permissions('masters.write'))])
 def create_process(process_in: ProcessCreate, db: Session = Depends(get_db)):
     db_process = db.scalar(select(Process).where(Process.name == process_in.name))
     if db_process:
@@ -78,11 +79,11 @@ def create_process(process_in: ProcessCreate, db: Session = Depends(get_db)):
     db.refresh(new_process)
     return new_process
 
-@router.get("/processes", response_model=list[ProcessResponse])
+@router.get("/processes", response_model=list[ProcessResponse], dependencies=[Depends(require_permissions('masters.read'))])
 def get_processes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return db.scalars(select(Process).where(Process.is_active == True).offset(skip).limit(limit)).all()
 
-@router.put("/processes/{process_id}", response_model=ProcessResponse)
+@router.put("/processes/{process_id}", response_model=ProcessResponse, dependencies=[Depends(require_permissions('masters.write'))])
 def update_process(process_id: UUID, process_in: ProcessUpdate, db: Session = Depends(get_db)):
     process = db.get(Process, process_id)
     if not process:
@@ -93,7 +94,7 @@ def update_process(process_id: UUID, process_in: ProcessUpdate, db: Session = De
     db.refresh(process)
     return process
 
-@router.delete("/processes/{process_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/processes/{process_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permissions('masters.write'))])
 def delete_process(process_id: UUID, db: Session = Depends(get_db)):
     process = db.get(Process, process_id)
     if not process:
@@ -104,7 +105,7 @@ def delete_process(process_id: UUID, db: Session = Depends(get_db)):
 # ==========================
 # ROUTE ENDPOINTS
 # ==========================
-@router.post("/routes", response_model=RouteResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/routes", response_model=RouteResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permissions('masters.write'))])
 def create_route(route_in: RouteCreate, db: Session = Depends(get_db)):
     db_route = db.scalar(select(Route).where(Route.name == route_in.name))
     if db_route:
@@ -130,18 +131,18 @@ def create_route(route_in: RouteCreate, db: Session = Depends(get_db)):
     db.refresh(new_route)
     return new_route
 
-@router.get("/routes", response_model=list[RouteResponse])
+@router.get("/routes", response_model=list[RouteResponse], dependencies=[Depends(require_permissions('masters.read'))])
 def get_routes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return db.scalars(select(Route).where(Route.is_active == True).offset(skip).limit(limit)).all()
+    return db.scalars(select(Route).options(selectinload(Route.steps)).where(Route.is_active == True).offset(skip).limit(limit)).all()
 
-@router.get("/routes/{route_id}", response_model=RouteResponse)
+@router.get("/routes/{route_id}", response_model=RouteResponse, dependencies=[Depends(require_permissions('masters.read'))])
 def get_route(route_id: UUID, db: Session = Depends(get_db)):
     route = db.get(Route, route_id)
     if not route:
         raise HTTPException(status_code=404, detail="Route not found")
     return route
 
-@router.put("/routes/{route_id}", response_model=RouteResponse)
+@router.put("/routes/{route_id}", response_model=RouteResponse, dependencies=[Depends(require_permissions('masters.write'))])
 def update_route(route_id: UUID, route_in: RouteUpdate, db: Session = Depends(get_db)):
     route = db.get(Route, route_id)
     if not route:
@@ -169,7 +170,7 @@ def update_route(route_id: UUID, route_in: RouteUpdate, db: Session = Depends(ge
     db.refresh(route)
     return route
 
-@router.delete("/routes/{route_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/routes/{route_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permissions('masters.write'))])
 def delete_route(route_id: UUID, db: Session = Depends(get_db)):
     route = db.get(Route, route_id)
     if not route:

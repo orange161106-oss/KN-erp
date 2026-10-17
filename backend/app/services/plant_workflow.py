@@ -27,6 +27,7 @@ from app.models.inventory_masters import Consumable, Unit
 from app.models.plant_workflow import PlantConfirmation, RequirementAdjustment, UserPlant
 from app.models.production import Plant
 from app.models.requirements import CalculatedRequirement
+from app.models.prd import PlanningVersion
 from app.schemas.auth import CurrentUser
 from app.schemas.plant_workflow import (
     ConfirmRequirementRequest,
@@ -50,10 +51,14 @@ def _get_user_plant_ids(session: Session, user_id: UUID) -> set[UUID]:
     return set(rows)
 
 
-def _assert_plant_access(session: Session, user_id: UUID, plant_id: UUID) -> None:
+def _assert_plant_access(session: Session, user: CurrentUser, plant_id: UUID) -> None:
+    if plant_id is None:
+        raise ApplicationError('CENTRAL_REVIEW_REQUIRED', 'Central requirements require Super Admin approval of the whole planning revision.', 403)
     """Raise 403 if the user is not assigned to the given plant."""
-    allowed = _get_user_plant_ids(session, user_id)
-    if plant_id not in allowed:
+    plant = session.get(Plant, plant_id)
+    if plant is None or not plant.is_active:
+        raise ApplicationError("PLANT_NOT_FOUND", "An active plant is required.", 422)
+    if not user.is_super_admin and plant_id not in user.plant_ids:
         raise ApplicationError(
             "PLANT_ACCESS_DENIED",
             "You are not authorised to act on behalf of this plant.",
@@ -212,8 +217,11 @@ def list_confirmations(
     *,
     planning_version_id: Optional[UUID] = None,
     plant_id: Optional[UUID] = None,
+    allowed_plant_ids: list[UUID] | None = None,
 ) -> list[PlantConfirmationResponse]:
     stmt = select(PlantConfirmation)
+    if allowed_plant_ids is not None:
+        stmt = stmt.where(PlantConfirmation.plant_id.in_(allowed_plant_ids))
     if planning_version_id:
         stmt = stmt.where(PlantConfirmation.planning_version_id == planning_version_id)
     if plant_id:
@@ -244,7 +252,7 @@ def confirm_requirement(
         )
 
     # Plant-scope security — server enforced
-    _assert_plant_access(session, current_user.id, calc_req.plant_id)
+    _assert_plant_access(session, current_user, calc_req.plant_id)
 
     # Idempotency check — one confirmation per calculated requirement
     existing = session.execute(
@@ -301,7 +309,7 @@ def retract_confirmation(
         raise ApplicationError("CONFIRMATION_NOT_FOUND", "Confirmation not found.", 404)
 
     # Plant-scope security
-    _assert_plant_access(session, current_user.id, confirmation.plant_id)
+    _assert_plant_access(session, current_user, confirmation.plant_id)
 
     _write_audit(
         session,
@@ -329,8 +337,11 @@ def list_adjustments(
     planning_version_id: Optional[UUID] = None,
     plant_id: Optional[UUID] = None,
     status: Optional[str] = None,
+    allowed_plant_ids: list[UUID] | None = None,
 ) -> list[RequirementAdjustmentResponse]:
     stmt = select(RequirementAdjustment)
+    if allowed_plant_ids is not None:
+        stmt = stmt.where(RequirementAdjustment.plant_id.in_(allowed_plant_ids))
     if planning_version_id:
         stmt = stmt.where(RequirementAdjustment.planning_version_id == planning_version_id)
     if plant_id:
@@ -356,7 +367,7 @@ def submit_adjustment(
       - Does NOT modify or replace any calculated_requirement.
     """
     # Plant-scope security
-    _assert_plant_access(session, current_user.id, req.plant_id)
+    _assert_plant_access(session, current_user, req.plant_id)
 
     # Guard — Pydantic already enforces > 0 but be explicit in service layer
     if req.requested_qty <= Decimal("0"):
@@ -376,6 +387,8 @@ def submit_adjustment(
         )
 
     # Resolve UOM from consumable's unit
+    if consumable.unit_id is None:
+        raise ApplicationError("STOCK_UNIT_REQUIRED", "Add the consumable stock unit in Product Master before requesting quantities.", 422)
     unit = session.execute(
         select(Unit).where(Unit.id == consumable.unit_id)
     ).scalar_one_or_none()
@@ -429,7 +442,7 @@ def withdraw_adjustment(
         raise ApplicationError("ADJUSTMENT_NOT_FOUND", "Adjustment not found.", 404)
 
     # Plant-scope security
-    _assert_plant_access(session, current_user.id, adjustment.plant_id)
+    _assert_plant_access(session, current_user, adjustment.plant_id)
 
     # Only the original requester may withdraw
     if adjustment.requested_by != current_user.id:
@@ -484,6 +497,8 @@ def review_adjustment(
     if not adjustment:
         raise ApplicationError("ADJUSTMENT_NOT_FOUND", "Adjustment not found.", 404)
 
+    _assert_plant_access(session, current_user, adjustment.plant_id)
+
     if adjustment.status != "PENDING":
         raise ApplicationError(
             "ADJUSTMENT_ALREADY_REVIEWED",
@@ -528,6 +543,7 @@ def get_final_requirements(
     planning_version_id: UUID,
     plant_id: Optional[UUID] = None,
     consumable_id: Optional[UUID] = None,
+    allowed_plant_ids: list[UUID] | None = None,
 ) -> list[FinalRequirementItemResponse]:
     """Calculate and return the authoritative Final Requirements for a planning version.
 
@@ -544,6 +560,8 @@ def get_final_requirements(
         )
         .where(CalculatedRequirement.planning_version_id == planning_version_id)
     )
+    if allowed_plant_ids is not None:
+        calc_stmt = calc_stmt.where(CalculatedRequirement.plant_id.in_(allowed_plant_ids))
     if plant_id:
         calc_stmt = calc_stmt.where(CalculatedRequirement.plant_id == plant_id)
     if consumable_id:
@@ -590,6 +608,8 @@ def get_final_requirements(
             RequirementAdjustment.status == "APPROVED",
         )
     )
+    if allowed_plant_ids is not None:
+        adj_stmt = adj_stmt.where(RequirementAdjustment.plant_id.in_(allowed_plant_ids))
     if plant_id:
         adj_stmt = adj_stmt.where(RequirementAdjustment.plant_id == plant_id)
     if consumable_id:
@@ -606,7 +626,7 @@ def get_final_requirements(
     all_keys = set(calc_map.keys()) | set(adj_map.keys())
 
     # Pre-fetch plants and consumables for metadata
-    plant_ids = {k[0] for k in all_keys}
+    plant_ids = {k[0] for k in all_keys if k[0] is not None}
     consumable_ids = {k[1] for k in all_keys}
 
     plants: dict[UUID, str] = {}
@@ -626,6 +646,8 @@ def get_final_requirements(
         units = {u.id: u.code for u in u_rows}
 
     results: list[FinalRequirementItemResponse] = []
+    version = session.get(PlanningVersion, planning_version_id) if any(k[0] is None for k in all_keys) else None
+    central_approved = bool(version and version.status == 'APPROVED' and version.approved_by and version.approved_at)
     for p_id, c_id in sorted(all_keys, key=lambda k: (plants.get(k[0], ""), consumables[k[1]].code if k[1] in consumables else "")):
         calc_qty, calc_count = calc_map.get((p_id, c_id), (Decimal("0"), 0))
         adj_qty = adj_map.get((p_id, c_id), Decimal("0"))
@@ -633,6 +655,8 @@ def get_final_requirements(
 
         confirmed_count = conf_map.get((p_id, c_id), 0)
         is_fully_confirmed = (calc_count > 0) and (confirmed_count == calc_count)
+        if p_id is None:
+            is_fully_confirmed = calc_count > 0 and central_approved
 
         c_obj = consumables.get(c_id)
         uom_str = units.get(c_obj.unit_id, "UNK") if c_obj else "UNK"
@@ -641,7 +665,7 @@ def get_final_requirements(
             FinalRequirementItemResponse(
                 planning_version_id=planning_version_id,
                 plant_id=p_id,
-                plant_name=plants.get(p_id),
+                plant_name=plants.get(p_id) if p_id else "Central",
                 consumable_id=c_id,
                 consumable_code=c_obj.code if c_obj else None,
                 consumable_name=c_obj.name if c_obj else None,

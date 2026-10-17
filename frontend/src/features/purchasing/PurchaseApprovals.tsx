@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { apiClient, ApiError } from '../../api/client';
+import { useAuth } from '../auth/context';
+import { TableSkeleton } from '../../components/ui/Skeleton';
 import type {
   ApprovalStatus,
   PurchaseApprovalResponse,
   ReviewPurchaseApprovalRequest,
 } from './types';
+import PurchaseWorkspace from './PurchaseWorkspace';
 
 const STATUS_BADGES: Record<ApprovalStatus, string> = {
   PENDING: 'bg-yellow-100 text-yellow-800 border-yellow-200',
@@ -33,10 +37,23 @@ interface PurchaseApprovalsProps {
   currentUserId: string;
 }
 
-type TabKey = 'queue' | 'handoff';
+type TabKey = 'workspace' | 'queue' | 'handoff';
 
 export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsProps) {
-  const [activeTab, setActiveTab] = useState<TabKey>('queue');
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
+  const hasModernFlags = user && (
+    'purchase_read' in user ||
+    'purchase_create' in user ||
+    'purchase_update' in user ||
+    'purchase_delete' in user
+  );
+  const canRead = Boolean(isSuperAdmin || (hasModernFlags ? user?.purchase_read : true));
+  const canUpdate = Boolean(isSuperAdmin || (hasModernFlags ? user?.purchase_update : true));
+  const hasActions = Boolean(isSuperAdmin || canUpdate);
+
+  const [activeTab, setActiveTab] = useState<TabKey>('workspace');
   const [items, setItems] = useState<PurchaseApprovalResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +63,10 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
   const fetchItems = useCallback(async () => {
     setLoading(true);
     setError(null);
+    if (activeTab === 'workspace') {
+      setLoading(false);
+      return;
+    }
     try {
       if (activeTab === 'queue') {
         const params = new URLSearchParams();
@@ -79,7 +100,9 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
     let reason: string | null = null;
 
     if (action === 'MODIFY') {
-      const inputQty = window.prompt('Enter overridden purchase quantity:');
+      const selected = items.find(item => item.id === id);
+      const proposed = selected?.requested_purchase_unit === selected?.uom ? selected?.requested_purchase_qty : undefined;
+      const inputQty = window.prompt('Enter overridden purchase quantity:', proposed ?? '');
       if (!inputQty || isNaN(Number(inputQty)) || Number(inputQty) <= 0) {
         setError('Valid positive override quantity is required.');
         return;
@@ -114,87 +137,149 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
     }
   };
 
+  const [showDetails, setShowDetails] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('knl_purchase_show_details');
+      return stored !== null ? JSON.parse(stored) : false; // default compact
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleDetails = () => {
+    setShowDetails(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('knl_purchase_show_details', JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  if (!canRead) {
+    return <p role="alert" className="text-red-700">You do not have permission to view purchase approvals.</p>;
+  }
+
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-xl font-bold text-gray-800 mb-1">Purchase Approvals Queue</h1>
-        <p className="text-sm text-gray-500">
-          Review, override, or approve purchase recommendations before Purchase Order creation.
-        </p>
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-hidden">
+      {/* Compact Unified Header Bar (Section 9A) */}
+      <div className="bg-white px-3 py-2 rounded-lg border border-gray-200 shadow-2xs flex-shrink-0 flex flex-col gap-1.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-3">
+            <h1 className="text-base font-bold text-gray-900 tracking-tight flex items-center gap-2">
+              <span>Purchase Planning & Approvals</span>
+              <span className="text-[11px] font-normal text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded border border-gray-300">
+                Purchasing
+              </span>
+            </h1>
+
+            {/* Navigation Tabs */}
+            <nav className="flex gap-1 ml-2 border-l border-gray-200 pl-3">
+              <button
+                type="button"
+                onClick={() => setActiveTab('workspace')}
+                className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors ${
+                  activeTab === 'workspace'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200 font-bold'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                Purchase Plan
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('queue')}
+                className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors ${
+                  activeTab === 'queue'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200 font-bold'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                Approval Queue
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('handoff')}
+                className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors ${
+                  activeTab === 'handoff'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200 font-bold'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                Approved Handoff (PO Ready)
+              </button>
+            </nav>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {activeTab === 'queue' && (
+              <div className="flex items-center gap-1.5 mr-2">
+                <label className="text-xs text-gray-600 font-medium">Status:</label>
+                <select
+                  className="border rounded px-2 py-0.5 text-xs bg-white"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as ApprovalStatus | '')}
+                >
+                  <option value="">All</option>
+                  <option value="PENDING">Pending</option>
+                  <option value="APPROVED">Approved</option>
+                  <option value="MODIFIED">Modified</option>
+                  <option value="REJECTED">Rejected</option>
+                </select>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={toggleDetails}
+              className="px-2.5 py-0.5 bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-300 rounded text-[11px] font-medium transition-colors"
+            >
+              {showDetails ? 'Hide details ▴' : 'Show details ▾'}
+            </button>
+          </div>
+        </div>
+
+        {showDetails && (
+          <p className="text-xs text-gray-500 pt-1 border-t border-gray-100">
+            Build monthly purchase recommendations based on requirement calculations, review approved demand, and hand off PO-ready quantities.
+          </p>
+        )}
       </div>
 
       {error && <AlertBox message={error} type="error" />}
       {success && <AlertBox message={success} type="success" />}
 
-      {/* Tabs & Filters */}
-      <div className="flex flex-wrap items-center justify-between border-b pb-3 gap-4">
-        <nav className="flex gap-2">
-          <button
-            onClick={() => setActiveTab('queue')}
-            className={`px-4 py-2 text-sm font-medium rounded-t-md transition-colors ${
-              activeTab === 'queue'
-                ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600 font-semibold'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            Approval Queue
-          </button>
-          <button
-            onClick={() => setActiveTab('handoff')}
-            className={`px-4 py-2 text-sm font-medium rounded-t-md transition-colors ${
-              activeTab === 'handoff'
-                ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600 font-semibold'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            Approved Handoff (PO Ready)
-          </button>
-        </nav>
-
-        {activeTab === 'queue' && (
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-gray-600 font-medium">Filter Status:</label>
-            <select
-              className="border rounded px-3 py-1.5 text-sm"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as ApprovalStatus | '')}
-            >
-              <option value="">All Statuses</option>
-              <option value="PENDING">Pending</option>
-              <option value="APPROVED">Approved</option>
-              <option value="MODIFIED">Modified</option>
-              <option value="REJECTED">Rejected</option>
-            </select>
+      {/* Content Area */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
+        {activeTab === 'workspace' ? (
+          <PurchaseWorkspace canCreate={canUpdate} onOpenRequirements={period=>navigate(`/requirements?period=${encodeURIComponent(period)}`)} />
+        ) : loading ? (
+          <TableSkeleton columns={8 + (hasActions ? 1 : 0)} rows={5} />
+        ) : items.length === 0 ? (
+          <div className="bg-white border rounded-lg p-8 text-center text-gray-500 text-sm">
+            No purchase recommendations found in this view.
           </div>
-        )}
-      </div>
-
-      {/* Approvals Table */}
-      {loading ? (
-        <p className="text-gray-500 text-sm p-4">Loading queue items…</p>
-      ) : items.length === 0 ? (
-        <div className="bg-white border rounded-lg p-8 text-center text-gray-500 text-sm">
-          No purchase recommendations found in this view.
-        </div>
-      ) : (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+        ) : (
+        <div className="bg-white border border-ink-text/10 rounded-lg overflow-hidden shadow-2xs">
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm border-collapse">
               <thead>
-                <tr className="bg-gray-50 border-b text-gray-600">
-                  <th className="px-4 py-3 text-left font-medium">Consumable</th>
-                  <th className="px-4 py-3 text-left font-medium">Supplier</th>
-                  <th className="px-4 py-3 text-right font-medium">Raw Need</th>
-                  <th className="px-4 py-3 text-right font-medium">System Recommended Qty</th>
-                  <th className="px-4 py-3 text-right font-semibold text-blue-900 bg-blue-50">Approved Qty</th>
-                  <th className="px-4 py-3 text-left font-medium">UOM</th>
-                  <th className="px-4 py-3 text-left font-medium">Status</th>
-                  <th className="px-4 py-3 text-left font-medium">Reason / Comment</th>
-                  <th className="px-4 py-3 text-left font-medium">Action</th>
+                <tr className="bg-vanilla-surface border-b border-ink-text/10 text-ink-text">
+                  <th className="px-4 py-3 text-left font-semibold">Consumable</th>
+                  <th className="px-4 py-3 text-left font-semibold">Supplier</th>
+                  <th className="px-4 py-3 text-right font-semibold">Raw Need</th>
+                  <th className="px-4 py-3 text-right font-semibold">System Recommended Qty</th>
+                  <th className="px-4 py-3 text-right font-semibold">Requested Qty</th>
+                  <th className="px-4 py-3 text-right font-semibold text-burnt-orange bg-burnt-orange/10">Approved Qty</th>
+                  <th className="px-4 py-3 text-left font-semibold">UOM</th>
+                  <th className="px-4 py-3 text-left font-semibold">Status</th>
+                  <th className="px-4 py-3 text-left font-semibold">Reason / Comment</th>
+                  {hasActions && <th className="px-4 py-3 text-left font-semibold">Action</th>}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-ink-text/10">
                 {items.map((item) => {
                   const isSelfRequest = item.requested_by === currentUserId;
                   return (
@@ -209,6 +294,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
                       </td>
                       <td className="px-4 py-3 text-right font-mono text-gray-600">{item.raw_calculated_qty}</td>
                       <td className="px-4 py-3 text-right font-mono font-medium text-gray-800">{item.system_recommended_qty}</td>
+                      <td className="px-4 py-3 text-right font-mono">{item.requested_purchase_qty == null ? '—' : `${item.requested_purchase_qty} ${item.requested_purchase_unit || item.uom}`}</td>
                       <td className="px-4 py-3 text-right font-mono font-bold text-blue-900 bg-blue-50">
                         {item.approved_qty ?? '—'}
                       </td>
@@ -218,42 +304,45 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
                       </td>
                       <td className="px-4 py-3 max-w-xs text-xs text-gray-700">
                         {item.reason ?? '—'}
+                        {item.purchase_notes && <span className="mt-1 block">Plan remarks: {item.purchase_notes}</span>}
                         {item.reviewed_by_username && (
                           <span className="block text-[11px] text-gray-400 mt-0.5">
                             Rev by {item.reviewed_by_username} at {new Date(item.reviewed_at || '').toLocaleTimeString()}
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3">
-                        {item.status === 'PENDING' && !isSelfRequest && (
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              onClick={() => handleReview(item.id, 'APPROVE')}
-                              className="text-xs bg-green-600 text-white px-2.5 py-1 rounded hover:bg-green-700 transition-colors shadow-sm"
-                            >
-                              Approve
-                            </button>
-                            <button
-                              onClick={() => handleReview(item.id, 'MODIFY')}
-                              className="text-xs bg-blue-600 text-white px-2.5 py-1 rounded hover:bg-blue-700 transition-colors shadow-sm"
-                            >
-                              Modify
-                            </button>
-                            <button
-                              onClick={() => handleReview(item.id, 'REJECT')}
-                              className="text-xs bg-red-600 text-white px-2.5 py-1 rounded hover:bg-red-700 transition-colors shadow-sm"
-                            >
-                              Reject
-                            </button>
-                          </div>
-                        )}
-                        {item.status === 'PENDING' && isSelfRequest && (
-                          <span className="text-xs text-gray-400 italic">Self-request (Approval blocked)</span>
-                        )}
-                        {item.status !== 'PENDING' && (
-                          <span className="text-xs text-gray-400 font-medium">✓ Reviewed</span>
-                        )}
-                      </td>
+                      {hasActions && (
+                        <td className="px-4 py-3">
+                          {item.status === 'PENDING' && !isSelfRequest && (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => handleReview(item.id, 'APPROVE')}
+                                className="text-xs bg-green-600 text-white px-2.5 py-1 rounded hover:bg-green-700 transition-colors shadow-sm"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                onClick={() => handleReview(item.id, 'MODIFY')}
+                                className="text-xs bg-blue-600 text-white px-2.5 py-1 rounded hover:bg-blue-700 transition-colors shadow-sm"
+                              >
+                                Modify
+                              </button>
+                              <button
+                                onClick={() => handleReview(item.id, 'REJECT')}
+                                className="text-xs bg-red-600 text-white px-2.5 py-1 rounded hover:bg-red-700 transition-colors shadow-sm"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          )}
+                          {item.status === 'PENDING' && isSelfRequest && (
+                            <span className="text-xs text-gray-400 italic">Self-request (Approval blocked)</span>
+                          )}
+                          {item.status !== 'PENDING' && (
+                            <span className="text-xs text-gray-400 font-medium">✓ Reviewed</span>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -262,6 +351,7 @@ export default function PurchaseApprovals({ currentUserId }: PurchaseApprovalsPr
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

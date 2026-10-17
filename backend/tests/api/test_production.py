@@ -8,11 +8,9 @@ from app.schemas.auth import CurrentUser
 
 mock_user = CurrentUser(
     id=uuid4(), 
-    email="test@kn.com", 
     username="testuser",
-    is_active=True, 
-    is_superuser=False,
-    roles=[],
+    is_super_admin=True,
+    roles=["ADMIN"],
     permissions=[]
 )
 

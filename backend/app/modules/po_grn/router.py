@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.db.reliability import database_unavailable
 from app.core.errors import ApplicationError
 from app.db.session import session_scope
 from app.schemas.auth import CurrentUser
@@ -20,8 +21,8 @@ def order_database(request: Request):
             if session.get_bind().dialect.name == 'postgresql':
                 session.connection(execution_options={'isolation_level': 'SERIALIZABLE'})
             yield session
-    except SQLAlchemyError:
-        raise ApplicationError('DATABASE_UNAVAILABLE', 'Database is unavailable.', 503) from None
+    except SQLAlchemyError as error:
+        raise database_unavailable(error) from None
 
 
 Database = Annotated[Session, Depends(order_database)]

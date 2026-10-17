@@ -97,12 +97,13 @@ def delete_user_plant(
 )
 def get_confirmations(
     session: Annotated[Session, Depends(get_db)],
-    _: Annotated[CurrentUser, Depends(require_permissions("plant_workflow:view"))],
+    current_user: Annotated[CurrentUser, Depends(require_permissions("plant_workflow:view"))],
     planning_version_id: Optional[UUID] = Query(None),
     plant_id: Optional[UUID] = Query(None),
 ) -> list[PlantConfirmationResponse]:
     return list_confirmations(
         session,
+        allowed_plant_ids=None if current_user.is_super_admin else current_user.plant_ids,
         planning_version_id=planning_version_id,
         plant_id=plant_id,
     )
@@ -144,13 +145,14 @@ def delete_confirmation(
 )
 def get_adjustments(
     session: Annotated[Session, Depends(get_db)],
-    _: Annotated[CurrentUser, Depends(require_permissions("plant_workflow:view"))],
+    current_user: Annotated[CurrentUser, Depends(require_permissions("plant_workflow:view"))],
     planning_version_id: Optional[UUID] = Query(None),
     plant_id: Optional[UUID] = Query(None),
     adjustment_status: Optional[str] = Query(None, alias="status"),
 ) -> list[RequirementAdjustmentResponse]:
     return list_adjustments(
         session,
+        allowed_plant_ids=None if current_user.is_super_admin else current_user.plant_ids,
         planning_version_id=planning_version_id,
         plant_id=plant_id,
         status=adjustment_status,
@@ -208,12 +210,13 @@ def patch_review_adjustment(
 def get_final_requirements_endpoint(
     planning_version_id: UUID,
     session: Annotated[Session, Depends(get_db)],
-    _: Annotated[CurrentUser, Depends(require_permissions("plant_workflow:view"))],
+    current_user: Annotated[CurrentUser, Depends(require_permissions("plant_workflow:view"))],
     plant_id: Optional[UUID] = Query(None),
     consumable_id: Optional[UUID] = Query(None),
 ) -> list[FinalRequirementItemResponse]:
     return get_final_requirements(
         session,
+        allowed_plant_ids=None if current_user.is_super_admin else current_user.plant_ids,
         planning_version_id=planning_version_id,
         plant_id=plant_id,
         consumable_id=consumable_id,

@@ -4,6 +4,7 @@ from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -36,6 +37,10 @@ class PlanningVersion(Base):
     status: Mapped[str] = mapped_column(String(32), default="DRAFT", nullable=False)  # DRAFT, VALIDATED, LOCKED, CALCULATED, RELEASED_TO_PLANTS, SUPERSEDED
     created_by: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_by: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    planning_month: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    planning_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     calculated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -56,6 +61,8 @@ class ImportBatch(Base):
     error_row_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="STAGING", index=True, nullable=False)  # STAGING, VALIDATED, FAILED, PROMOTED
     staged_data: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    file_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    validation_summary: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     uploaded_by: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -95,7 +102,7 @@ class PRDOrderHeader(Base):
 class PRDOrderItem(Base):
     __tablename__ = "prd_order_items"
     __table_args__ = (
-        CheckConstraint("planned_quantity > 0", name="ck_planned_quantity_positive"),
+        CheckConstraint("planned_quantity >= 0", name="planned_quantity_positive"),
         UniqueConstraint("planning_version_id", "product_id", "plant_code", "target_period", name="uq_prd_item_version_product_plant_period"),
     )
 
@@ -114,3 +121,34 @@ class PRDOrderItem(Base):
 
     planning_version: Mapped["PlanningVersion"] = relationship(back_populates="items")
     header: Mapped["PRDOrderHeader"] = relationship(back_populates="items")
+
+
+class PRDRecord(Base):
+    __tablename__ = "prd_records"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    row_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    plant: Mapped[str] = mapped_column(String(64), nullable=False)
+    customer: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    product_code: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    description: Mapped[str] = mapped_column(String(256), nullable=False)
+    planned_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False)
+    uom: Mapped[str] = mapped_column(String(32), default="Nos", nullable=False)
+    target_period: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    planning_version: Mapped[str] = mapped_column(String(32), default="V1", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="SAVED", nullable=False)
+    remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    customer_id: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("customers.id", ondelete="SET NULL"), nullable=True)
+    customer_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    customer_group: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    source_customer_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_row: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    revision: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    schedule_given_on: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    plan_month: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    plan_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    section_type: Mapped[str] = mapped_column(String(32), default="STANDARD", nullable=False)
+    created_by: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

@@ -1,10 +1,11 @@
 from datetime import date
 from decimal import Decimal
-from typing import Optional
-from uuid import UUID
+from typing import Optional, Any
+from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import select, update, text
 from sqlalchemy.orm import Session, joinedload
+from pydantic import ValidationError
 
 from app.core.errors import ApplicationError
 from app.domain.rules import (
@@ -21,6 +22,7 @@ from app.models.masters import Product
 from app.models.prd import PlanningVersion, PRDOrderItem
 from app.models.production import Plant, Process
 from app.models.rules import ConsumptionNorm
+from app.models.audit import AuditLog
 from app.schemas.rules import (
     ConsumableRef,
     ConsumptionNormCreate,
@@ -39,7 +41,7 @@ from app.schemas.rules import (
 )
 
 
-def _to_norm_response(norm: ConsumptionNorm) -> ConsumptionNormResponse:
+def _to_norm_response(norm: ConsumptionNorm, reference_data=None) -> ConsumptionNormResponse:
     return ConsumptionNormResponse(
         id=norm.id,
         rule_type=RuleType(norm.rule_type),
@@ -50,7 +52,7 @@ def _to_norm_response(norm: ConsumptionNorm) -> ConsumptionNormResponse:
         version=norm.version,
         parameters=norm.parameters,
         unit_id=norm.unit_id,
-        rounding_policy=RoundingPolicy(norm.rounding_policy),
+        rounding_policy=RoundingPolicy.parse(norm.rounding_policy),
         rounding_precision=norm.rounding_precision,
         effective_from=norm.effective_from,
         effective_to=norm.effective_to,
@@ -64,12 +66,86 @@ def _to_norm_response(norm: ConsumptionNorm) -> ConsumptionNormResponse:
         process_name=norm.process.name if norm.process else None,
         plant_name=norm.plant.name if norm.plant else None,
         unit_code=norm.unit.code if norm.unit else None,
+        product_part_number=norm.product.part_number if norm.product else None,
+        product_item_id=norm.product.item_id if norm.product else None,
+        reference_data=reference_data,
     )
 
 
+def norm_reference_data(db: Session, ids: list[UUID]) -> dict[UUID, dict]:
+    """Read immutable row provenance from the existing audit store in one query."""
+    if not ids:
+        return {}
+    rows = db.execute(select(AuditLog.entity_id, AuditLog.new_values).where(AuditLog.entity_type == "ConsumptionNorm",
+        AuditLog.entity_id.in_(ids)).order_by(AuditLog.created_at.desc(), AuditLog.id.desc()))
+    result = {}
+    for row in rows:
+        values = row.new_values or {}
+        if row.entity_id not in result and "reference_data" in values:
+            result[row.entity_id] = values["reference_data"]
+    return result
+
+
+def _reference_data(value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    if value is None:
+        return None
+    allowed = {"part_number", "part_name", "used_part_number", "thickness", "process_count",
+        "reference_production_qty", "reference_schedule_qty", "source_filename", "source_sha256",
+        "source_row", "sheet_name", "formula_choice", "sch", "prd_order", "is_general",
+        "sch_overridden", "flags", "import_batch_id", "warnings"}
+    if set(value) - allowed:
+        raise ApplicationError("INVALID_NORM_REFERENCE", "Unknown consumption norm reference field.", 422)
+    result = {}
+    for key, item in value.items():
+        if item is not None and (not isinstance(item, (str, int, float, bool, list, dict)) or len(str(item)) > 4000):
+            raise ApplicationError("INVALID_NORM_REFERENCE", f"{key}: use a text reference value.", 422)
+        result[key] = item
+    for key in ("process_count", "reference_production_qty", "reference_schedule_qty", "sch", "prd_order"):
+        raw = result.get(key)
+        if raw is None or str(raw).strip() == "":
+            continue
+        try:
+            number = Decimal(str(raw))
+            if not number.is_finite() or number < 0:
+                raise ValueError
+        except (ValueError, ArithmeticError):
+            raise ApplicationError("INVALID_NORM_REFERENCE", f"{key}: enter a valid nonnegative number.", 422) from None
+        result[key] = str(number)
+    raw_thickness = result.get("thickness")
+    if raw_thickness is not None and str(raw_thickness).strip() != "":
+        raw_t_str = str(raw_thickness).strip()
+        try:
+            num = Decimal(raw_t_str)
+            if num.is_finite() and num >= 0:
+                result["thickness"] = str(num)
+            else:
+                result["thickness"] = raw_t_str
+        except (ValueError, ArithmeticError):
+            result["thickness"] = raw_t_str
+    return result
+
+
+def _audit_norm(db, norm, actor_id, action, reference_data, old_values=None, reason="Reviewed consumption norm maintenance"):
+    db.add(AuditLog(actor_id=actor_id, action=action, entity_type="ConsumptionNorm", entity_id=norm.id,
+        old_values=old_values, new_values={"version": norm.version, "parameters": norm.parameters,
+            "is_active": norm.is_active, "reference_data": reference_data}, reason=reason))
+    db.flush()
+
+
+def lock_norm_catalog(db):
+    """Serialize norm version changes, including empty scopes, across API workers."""
+    if db.bind.dialect.name == "postgresql":
+        transaction = db.get_transaction()
+        if transaction is None or db.info.get("norm_catalog_locked_transaction") is not transaction:
+            db.execute(text("SELECT pg_advisory_xact_lock(734020260015)"))
+            db.info["norm_catalog_locked_transaction"] = db.get_transaction()
+
+
 def create_consumption_norm(
-    db: Session, data: ConsumptionNormCreate
+    db: Session, data: ConsumptionNormCreate, *, actor_id: Optional[UUID] = None,
+    commit: bool = True, reason: str = "Reviewed consumption norm creation"
 ) -> ConsumptionNormResponse:
+    lock_norm_catalog(db)
     # 1. Validate entity existence and active status
     consumable = db.get(Consumable, data.consumable_id)
     if not consumable:
@@ -82,13 +158,23 @@ def create_consumption_norm(
         raise ApplicationError("NOT_FOUND", f"Unit '{data.unit_id}' not found", 404)
     if not unit.is_active:
         raise ApplicationError("INACTIVE_ENTITY", f"Unit '{unit.code}' is inactive", 400)
+    if data.unit_id != consumable.unit_id:
+        raise ApplicationError("NORM_UNIT_MISMATCH", "The norm output unit must match the consumable's reviewed stock unit.", 422)
+    if data.effective_to is not None and data.effective_to < data.effective_from:
+        raise ApplicationError("INVALID_EFFECTIVE_DATES", "Effective until cannot precede effective from.", 422)
+    reference_data = _reference_data(data.reference_data)
 
     if data.product_id is not None:
-        product = db.get(Product, data.product_id)
+        product = db.scalar(select(Product).where(Product.id == data.product_id).with_for_update())
         if not product:
             raise ApplicationError("NOT_FOUND", f"Product '{data.product_id}' not found", 404)
         if not product.is_active:
             raise ApplicationError("INACTIVE_ENTITY", f"Product '{product.code}' is inactive", 400)
+        if reference_data and (reference_data.get('used_part_number') or reference_data.get('part_number')):
+            from app.services.basic_norms import match_product
+            matched, issue = match_product([product], part_number=reference_data.get('used_part_number') or reference_data.get('part_number'))
+            if issue:
+                raise ApplicationError('NORM_PRODUCT_REFERENCE_CONFLICT', 'The production part reference must match the selected Product Master. Select a different product in a new norm to change its scope.', 422)
 
     if data.process_id is not None:
         process = db.get(Process, data.process_id)
@@ -108,8 +194,24 @@ def create_consumption_norm(
     try:
         validated_params = validate_rule_parameters(data.rule_type, data.parameters)
         parameters_dict = validated_params.model_dump(mode="json")
+        if data.rule_type == RuleType.MIN_MAX and all(data.parameters.get(key) is not None for key in ("min_quantity", "max_quantity", "base_rate")) and not any(key in data.parameters for key in ("msl_days", "moq", "current_stock")):
+            # Preserve the existing bounded-consumption branch; stock defaults select a different formula.
+            parameters_dict = {key: parameters_dict[key] for key in data.parameters if key in parameters_dict}
     except RuleDomainError as e:
         raise ApplicationError(e.code, e.message, status_code=400)
+    except ValidationError:
+        raise ApplicationError("INVALID_NORM_PARAMETERS", "Enter valid parameters for the selected formula.", 422) from None
+    if reference_data and reference_data.get('formula_choice'):
+        rate_val = Decimal(str(parameters_dict.get('rate', '0')))
+        pc_val = Decimal(str(reference_data.get('process_count') or '0'))
+        ref_sch = reference_data.get('sch') if reference_data.get('sch') is not None else reference_data.get('reference_schedule_qty')
+        sch_val = Decimal(str(ref_sch)) if ref_sch is not None else pc_val
+        valid_rates = {pc_val, sch_val}
+        if (reference_data['formula_choice'] != 'PRODUCTION_RATE_FROM_PROCESS_COUNT'
+            or data.rule_type != RuleType.PRODUCTION_RATE
+            or rate_val not in valid_rates
+            or Decimal(str(parameters_dict.get('scrap_factor', '0'))) != 0):
+            raise ApplicationError('NORM_APPROVED_FORMULA_CONFLICT', 'For the reviewed production × process-count formula, rate must equal process count or Sch and no extra scrap factor may be added.', 422)
 
     # 3. Determine version and maintain historical immutability
     stmt = (
@@ -140,6 +242,7 @@ def create_consumption_norm(
         )
 
     norm = ConsumptionNorm(
+        id=uuid4(),
         rule_type=data.rule_type.value,
         consumable_id=data.consumable_id,
         product_id=data.product_id,
@@ -155,8 +258,12 @@ def create_consumption_norm(
         is_active=True,
     )
     db.add(norm)
-    db.commit()
-    db.refresh(norm)
+    db.flush()
+    _audit_norm(db, norm, actor_id, "CREATE_VERSION", reference_data,
+        old_values={"superseded_ids": [str(n.id) for n in existing_norms if n.id != norm.id]}, reason=reason)
+    if commit:
+        db.commit()
+        db.refresh(norm)
     return get_consumption_norm(db, norm.id)
 
 
@@ -175,7 +282,7 @@ def get_consumption_norm(db: Session, norm_id: UUID) -> ConsumptionNormResponse:
     norm = db.scalars(stmt).first()
     if not norm:
         raise ApplicationError("NOT_FOUND", f"Consumption norm {norm_id} not found", 404)
-    return _to_norm_response(norm)
+    return _to_norm_response(norm, norm_reference_data(db, [norm.id]).get(norm.id))
 
 
 def list_consumption_norms(
@@ -209,37 +316,89 @@ def list_consumption_norms(
         stmt = stmt.where(ConsumptionNorm.is_active == is_active)
 
     records = db.scalars(stmt).all()
-    return [_to_norm_response(r) for r in records]
+    references = norm_reference_data(db, [r.id for r in records])
+    return [_to_norm_response(r, references.get(r.id)) for r in records]
 
 
 def update_consumption_norm(
-    db: Session, norm_id: UUID, data: ConsumptionNormUpdate
+    db: Session, norm_id: UUID, data: ConsumptionNormUpdate, *, actor_id: Optional[UUID] = None,
+    commit: bool = True, reason: str = "Reviewed consumption norm update"
 ) -> ConsumptionNormResponse:
-    norm = db.get(ConsumptionNorm, norm_id)
+    lock_norm_catalog(db)
+    norm = db.scalar(select(ConsumptionNorm).where(ConsumptionNorm.id == norm_id).with_for_update())
     if not norm:
         raise ApplicationError("NOT_FOUND", f"Consumption norm {norm_id} not found", 404)
 
-    if data.parameters is not None:
-        try:
-            validated = validate_rule_parameters(RuleType(norm.rule_type), data.parameters)
-            norm.parameters = validated.model_dump(mode="json")
-        except RuleDomainError as e:
-            raise ApplicationError(e.code, e.message, status_code=400)
-
-    if data.rounding_policy is not None:
-        norm.rounding_policy = data.rounding_policy.value
-    if data.rounding_precision is not None:
-        norm.rounding_precision = data.rounding_precision
-    if data.effective_from is not None:
-        norm.effective_from = data.effective_from
-    if data.effective_to is not None:
-        norm.effective_to = data.effective_to
+    if data.expected_version is not None and data.expected_version != norm.version:
+        raise ApplicationError("STALE_NORM", "This norm changed. Reload and review the latest version.", 409)
+    latest = db.scalar(select(ConsumptionNorm).where(ConsumptionNorm.consumable_id == norm.consumable_id,
+        ConsumptionNorm.product_id == norm.product_id, ConsumptionNorm.process_id == norm.process_id,
+        ConsumptionNorm.plant_id == norm.plant_id).order_by(ConsumptionNorm.version.desc()).limit(1))
+    if latest.id != norm.id:
+        raise ApplicationError("NORM_HISTORY_PROTECTED", "Edit the latest norm version; historical versions are protected.", 409)
+    changed_fields = data.model_fields_set - {"expected_version"}
+    reference = norm_reference_data(db, [norm.id]).get(norm.id)
+    if changed_fields - {"is_active"}:
+        parameters = dict(norm.parameters) if data.parameters is None else dict(data.parameters)
+        if data.reference_data is not None:
+            for key in ("source_filename", "source_sha256", "source_row", "sheet_name", "formula_choice"):
+                if key in data.reference_data and data.reference_data[key] != (reference or {}).get(key):
+                    raise ApplicationError("NORM_PROVENANCE_PROTECTED", "Imported source and formula approval evidence cannot be edited.", 422)
+            reference = {**(reference or {}), **data.reference_data}
+            reference = _reference_data(reference)
+        if reference and reference.get("formula_choice") == "PRODUCTION_RATE_FROM_PROCESS_COUNT":
+            try:
+                count = Decimal(str(reference.get("process_count") or "0"))
+                rate = Decimal(str(parameters.get("rate", "0")))
+                if not count.is_finite() or count <= 0 or not rate.is_finite():
+                    raise ValueError
+            except (ValueError, ArithmeticError):
+                raise ApplicationError("INVALID_PROCESS_COUNT", "The approved process count must be positive.", 422) from None
+            if data.parameters is not None and rate != count:
+                raise ApplicationError("NORM_RATE_CONFLICT", "For this imported formula, rate must equal the reviewed process count.", 422)
+            parameters["rate"] = str(count)
+        replacement = ConsumptionNormCreate(rule_type=RuleType(norm.rule_type), consumable_id=norm.consumable_id,
+            product_id=norm.product_id, process_id=norm.process_id, plant_id=norm.plant_id,
+            parameters=parameters, unit_id=norm.unit_id,
+            rounding_policy=data.rounding_policy or RoundingPolicy.parse(norm.rounding_policy),
+            rounding_precision=data.rounding_precision if data.rounding_precision is not None else norm.rounding_precision,
+            effective_from=data.effective_from or norm.effective_from,
+            effective_to=data.effective_to if "effective_to" in changed_fields else norm.effective_to,
+            reference_data=reference)
+        response = create_consumption_norm(db, replacement, actor_id=actor_id, commit=False, reason=reason)
+        new_norm = db.get(ConsumptionNorm, response.id)
+        if data.is_active is not None:
+            new_norm.is_active = data.is_active
+        if commit:
+            db.commit()
+        return get_consumption_norm(db, new_norm.id)
     if data.is_active is not None:
+        old = {"is_active": norm.is_active}
         norm.is_active = data.is_active
-
-    db.commit()
-    db.refresh(norm)
+        _audit_norm(db, norm, actor_id, "SET_ACTIVE", reference, old_values=old, reason=reason)
+    if commit:
+        db.commit()
     return get_consumption_norm(db, norm.id)
+
+
+def bulk_update_consumption_norms(db, payload, actor_id):
+    identities = [item.norm_id for item in payload.updates]
+    if len(set(identities)) != len(identities):
+        raise ApplicationError("DUPLICATE_NORM_UPDATE", "Review each norm once per save.", 422)
+    try:
+        if not payload.reason.strip():
+            raise ApplicationError("REASON_REQUIRED", "Enter a reason for the norm changes.", 422)
+        lock_norm_catalog(db)
+        records = []
+        for item in sorted(payload.updates, key=lambda item: str(item.norm_id)):
+            values = item.model_dump(exclude={"norm_id"}, exclude_unset=True)
+            records.append(update_consumption_norm(db, item.norm_id, ConsumptionNormUpdate(**values),
+                actor_id=actor_id, commit=False, reason=payload.reason))
+        db.commit()
+        return {"updated_count": len(records), "records": records}
+    except Exception:
+        db.rollback()
+        raise
 
 
 def evaluate_consumption_norm(
@@ -305,7 +464,7 @@ def evaluate_consumption_norm(
         rule_version=selected_norm.version,
         parameters=selected_norm.parameters,
         production_quantity=req.production_quantity,
-        rounding_policy=RoundingPolicy(selected_norm.rounding_policy),
+        rounding_policy=RoundingPolicy.parse(selected_norm.rounding_policy),
         rounding_precision=selected_norm.rounding_precision,
         unit=selected_norm.unit.code if selected_norm.unit else "PCS",
         requested_quantity=req.requested_quantity,
@@ -345,6 +504,8 @@ def calculate_single_item_requirement(
     consumable = db.get(Consumable, req.consumable_id)
     if not consumable:
         raise ApplicationError("NOT_FOUND", f"Consumable '{req.consumable_id}' not found", 404)
+    if consumable.unit_id is None:
+        raise ApplicationError("STOCK_UNIT_REQUIRED", "Add the consumable stock unit in Product Master before calculating requirements.", 422)
     consumable_unit = db.get(Unit, consumable.unit_id)
     consumable_unit_code = consumable_unit.code if consumable_unit else "PCS"
 
@@ -448,7 +609,7 @@ def calculate_single_item_requirement(
         rule_version=selected_norm.version,
         parameters=selected_norm.parameters,
         production_quantity=prd_item.planned_quantity,
-        rounding_policy=RoundingPolicy(selected_norm.rounding_policy),
+        rounding_policy=RoundingPolicy.parse(selected_norm.rounding_policy),
         rounding_precision=selected_norm.rounding_precision,
         unit=unit_code,
     )

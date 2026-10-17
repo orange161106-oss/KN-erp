@@ -3,6 +3,13 @@
 Owner: Munees. Reviewer: Yathish. Company: KNL.
 Rule version: `M5.1_V1`. Branch: `feature/munees/m5.1-purchase-recommendation`.
 
+2026-10-17: the owner supplied a separate company monthly Purchase Plan formula,
+implemented as read-only `KNL_MONTHLY_V1` previews; see
+[company monthly purchase contract](25_COMPANY_MONTHLY_PURCHASE.md). It uses prior
+month closing and selected-month uploaded MSL/MOQ, without pending-PO deduction or
+pack rounding. It does not change this timed assessment engine or its saved evidence,
+submission/approval or PO contracts. Each Purchase Plan row identifies its basis.
+
 ## Approval and scope
 
 Munees explicitly authorized implementation using the proposed answers/assumptions
