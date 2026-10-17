@@ -322,7 +322,7 @@ def export_requirements_issues(
     return Response(
         content=csv_bytes,
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="requirement_issues_{period_label}.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="Requirement_Issues_{period_label}.csv"'},
     )
 
 

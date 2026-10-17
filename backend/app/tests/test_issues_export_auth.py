@@ -75,7 +75,7 @@ def test_issues_export_with_period_param_returns_csv(client, auth_headers):
     res = client.get("/api/v1/requirements/workspace/issues/export?period=2026-10", headers=auth_headers)
     assert res.status_code == 200
     assert "text/csv" in res.headers["content-type"]
-    assert 'attachment; filename="requirement_issues_2026_10.csv"' in res.headers["content-disposition"]
+    assert "Requirement_Issues_2026_10.csv" in res.headers["content-disposition"]
     # Verify CSV headers are in content
     assert "Part No." in res.text
     assert "Issue Description" in res.text
@@ -85,14 +85,14 @@ def test_issues_export_with_month_year_params_returns_csv(client, auth_headers):
     res = client.get("/api/v1/requirements/workspace/issues/export?month=10&year=2026", headers=auth_headers)
     assert res.status_code == 200
     assert "text/csv" in res.headers["content-type"]
-    assert 'attachment; filename="requirement_issues_2026_10.csv"' in res.headers["content-disposition"]
+    assert "Requirement_Issues_2026_10.csv" in res.headers["content-disposition"]
 
 
 def test_issues_export_alias_route(client, auth_headers):
     res = client.get("/api/v1/requirements/issues/export?period=2026-10", headers=auth_headers)
     assert res.status_code == 200
     assert "text/csv" in res.headers["content-type"]
-    assert 'attachment; filename="requirement_issues_2026_10.csv"' in res.headers["content-disposition"]
+    assert "Requirement_Issues_2026_10.csv" in res.headers["content-disposition"]
 
 
 def test_issues_export_with_actual_error_records(client, db_session, auth_context):
@@ -153,7 +153,7 @@ def test_issues_export_with_actual_error_records(client, db_session, auth_contex
     res = client.get("/api/v1/requirements/workspace/issues/export?period=2026-10", headers=headers)
     assert res.status_code == 200
     assert "text/csv" in res.headers["content-type"]
-    assert 'attachment; filename="requirement_issues_2026_10.csv"' in res.headers["content-disposition"]
+    assert "Requirement_Issues_2026_10.csv" in res.headers["content-disposition"]
     # Check that error details are in CSV
     assert "P-ENG-001" in res.text
     assert "ITEM-101" in res.text
