@@ -8,7 +8,26 @@ import ReferenceSelect from '../features/masters/ReferenceSelect';
 
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const product = { id: 'product-1', code: 'P1', name: 'Product' };
-afterEach(() => { setAccessToken(null); setUnauthorizedHandler(null); vi.unstubAllGlobals(); });
+afterEach(() => { vi.useRealTimers(); setAccessToken(null); setUnauthorizedHandler(null); vi.unstubAllGlobals(); });
+
+test('requirement reads allow the explicit remote-read budget while ordinary reads still expire at 30 seconds',async()=>{
+  vi.useFakeTimers();
+  const fetchMock=vi.fn<typeof fetch>().mockImplementation((_input,init)=>new Promise((_resolve,reject)=>{
+    init?.signal?.addEventListener('abort',()=>reject(new Error('aborted')));
+  }));
+  vi.stubGlobal('fetch',fetchMock);
+  const ordinary=apiClient.get('/api/v1/probe').catch(error=>error);
+  const requirements=apiClient.get('/api/v1/probe',60000).catch(error=>error);
+  const shared=apiClient.get('/api/v1/probe',60000).catch(error=>error);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(30000);
+  expect(await ordinary).toMatchObject({code:'REQUEST_TIMEOUT'});
+  expect(fetchMock.mock.calls[1][1]?.signal?.aborted).toBe(false);
+  await vi.advanceTimersByTimeAsync(30000);
+  expect(await requirements).toMatchObject({code:'REQUEST_TIMEOUT'});
+  expect(await shared).toMatchObject({code:'REQUEST_TIMEOUT'});
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
 
 test('simultaneous reads share a request, but completed results are read fresh', async () => {
   let complete!: (value: Response) => void;

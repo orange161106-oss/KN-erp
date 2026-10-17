@@ -4,6 +4,7 @@ from time import perf_counter
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.pool import NullPool
 
 import app.models  # Register the shared metadata without starting the server.
 from app.core.config import load_settings
@@ -15,7 +16,9 @@ from app.db.session import create_db_engine
 def run() -> dict:
     settings = load_settings()
     engine = create_db_engine(settings)
-    report = {"pool_connection_limit_per_worker": settings.db_pool_size + settings.db_max_overflow}
+    report = {"pool_type": type(engine.pool).__name__,
+        "pool_connection_limit_per_worker": None if isinstance(engine.pool, NullPool)
+        else settings.db_pool_size + settings.db_max_overflow}
     try:
         timings = []
         for _ in range(3):

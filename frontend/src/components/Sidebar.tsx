@@ -14,7 +14,6 @@ import {
   Sliders,
   Workflow,
   ClipboardList,
-  Building2,
   Warehouse,
   ShoppingCart,
   Receipt,
@@ -120,7 +119,6 @@ export default function Sidebar({
   const showNorms = canOpen(user, '/rules');
   const showMappings = canOpen(user, '/mappings');
   const showRequirements = canOpen(user, '/requirements');
-  const showPlantWorkflow = canOpen(user, '/plant-workflow');
   const showStockHistory = canOpen(user, '/inventory');
   const showStockStatement = canOpen(user, '/inventory/statement');
   const showStockManagement = canOpen(user, '/inventory/management');
@@ -328,20 +326,7 @@ export default function Sidebar({
           </Link>
         )}
 
-        {/* 5. Plant review */}
-        {showPlantWorkflow && (
-          <Link
-            to="/plant-workflow"
-            className={navItemClass('/plant-workflow')}
-            {...tooltipProps('Plant review')}
-            aria-label="Plant review"
-          >
-            <Building2 className={iconClass(isActive('/plant-workflow'))} />
-            <span className={isCollapsed ? 'sr-only' : 'truncate'}>Plant review</span>
-          </Link>
-        )}
-
-        {/* 6. Inventory */}
+        {/* 5. Inventory */}
         {showInventory && (
           <div className="flex flex-col space-y-0.5">
             <button

@@ -7,11 +7,14 @@ import CentralPurchaseAssessment from '../purchasing/CentralPurchaseAssessment';
 
 export interface CentralVersion { id: string; planning_period: string; revision_label: string; status: string; is_latest: boolean; source_filename: string; }
 export interface BasicTotal { consumable_id: string; consumable_code: string; consumable_name: string; uom: string; final_required_qty: string; is_fully_confirmed: boolean; }
-interface Calculation { id: string; product_code: string; process_name: string; consumable_code: string; consumable_name: string; source_production_qty: string;
+interface Calculation { id: string; product_code: string; product_name?: string; product_part_number?: string; product_item_id?: string;
+  consumable_id?: string; process_name: string; consumable_code: string; consumable_name: string; source_production_qty: string;
   raw_requirement: string; calculated_qty: string; uom: string; rule_version: number; parameters: Record<string, unknown>;
   calculation_steps: {step_number: number; description: string; formula: string; result: string}[]; }
-interface Results { calculations: Calculation[]; errors: {id:string; product_code:string; error_code:string; error_message:string}[]; summary: BasicTotal[]; }
-interface MissingPartItem { part_no?: string; product_code?: string; item_id?: string; part_name?: string; planned_quantity?: number | string; production_quantity?: number | string; error_message?: string; }
+interface Results { calculations: Calculation[]; errors: {id:string; product_code:string; error_code:string; error_message:string;
+  context_data?: {part_number?:string; item_id?:string; part_description?:string; planned_quantity?:string}}[]; summary: BasicTotal[]; }
+interface Workspace { versions: CentralVersion[]; selected_version_id: string | null; results: Results | null; }
+interface MissingPartItem { part_no?: string; part_number?: string; product_code?: string; item_id?: string; part_name?: string; part_description?: string; planned_quantity?: number | string; production_quantity?: number | string; error_message?: string; }
 interface Preview {
   complete: boolean;
   sources: {id:string; source_row_number:number; product_code:string; production_quantity:string; unit:string; norm_count:number; matched:boolean}[];
@@ -37,7 +40,7 @@ interface CalculationRunResponse {
 const endpoint = '/api/v1/requirements/basic';
 const button = 'rounded border px-3 py-2 text-sm disabled:opacity-40';
 
-export default function CentralRequirements({ purchaseOnly = false }: {purchaseOnly?: boolean}) {
+export default function CentralRequirements({ purchaseOnly = false, initialVersionId = '' }: {purchaseOnly?: boolean; initialVersionId?: string}) {
   const {user} = useAuth(); const superAdmin = Boolean(user?.is_super_admin);
   const canCalculate = superAdmin || Boolean(user?.requirements_update);
   const [versions,setVersions] = useState<CentralVersion[]>([]); const [identity,setIdentity] = useState('');
@@ -52,69 +55,102 @@ export default function CentralRequirements({ purchaseOnly = false }: {purchaseO
   const [showApprovalModal, setShowApprovalModal] = useState(false);
   const [acknowledgeMissingNorms, setAcknowledgeMissingNorms] = useState(false);
   const [expandedConsumables, setExpandedConsumables] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
 
   const pending = useRef(false); const generation = useRef(0);
+  const preloadedIdentity = useRef('');
   const version = versions.find(row=>row.id===identity);
   const calculationOriginals = useMemo(()=>new Map((results?.calculations||[]).map(row=>[row.id,row])),[results]);
   const sourceOriginals = useMemo(()=>new Map((preview?.sources||[]).map(row=>[row.id,row])),[preview]);
   
-  const refresh = useCallback(async()=>{
-    const values = await apiClient.get<CentralVersion[]>(`${endpoint}/versions`); setVersions(values);
-    setIdentity(previous=>values.some(row=>row.id===previous)?previous:values.find(row=>row.is_latest)?.id||values[0]?.id||'');
-  },[]);
+  const acceptResults = useCallback((value: Results) => {
+    setResults(value);
+    setMissingParts((value.errors || []).filter(row => row.error_code === 'NO_CONSUMPTION_NORM').map(row => ({
+      part_no: row.context_data?.part_number || row.product_code,
+      item_id: row.context_data?.item_id,
+      part_name: row.context_data?.part_description,
+      planned_quantity: row.context_data?.planned_quantity,
+    })));
+  }, []);
 
-  useEffect(()=>{setLoading(true);void refresh().catch(failure=>setError(failure.message)).finally(()=>setLoading(false));},[refresh]);
+  const acceptWorkspace = useCallback((value: Workspace) => {
+    setVersions(value.versions);
+    preloadedIdentity.current=value.selected_version_id||'';
+    setIdentity(value.selected_version_id||'');
+    if(value.results)acceptResults(value.results);
+    else {setResults(null);setMissingParts([]);}
+  },[acceptResults]);
+
+  const readWorkspace = useCallback((versionId='')=>apiClient.get<Workspace>(
+    `${endpoint}/workspace${versionId?`?planning_version_id=${encodeURIComponent(versionId)}`:''}`,60000),[]);
 
   useEffect(()=>{
-    const current = ++generation.current; setResults(null);setPreview(null);setDetail(null);setMaterial('');setError('');setMessage('');
+    let current=true;setLoading(true);
+    void readWorkspace(initialVersionId).then(value=>{if(current)acceptWorkspace(value);})
+      .catch(failure=>{if(current)setError(failure.message);})
+      .finally(()=>{if(current)setLoading(false);});
+    return ()=>{current=false;};
+  },[readWorkspace,acceptWorkspace,initialVersionId]);
+
+  useEffect(()=>{
+    const current = ++generation.current;
+    if(identity&&preloadedIdentity.current===identity){preloadedIdentity.current='';return;}
+    preloadedIdentity.current='';
+    setResults(null);setPreview(null);setDetail(null);setMaterial('');setError('');setMessage('');
     setDuplicateWarning(null); setMissingParts([]); setShowApprovalModal(false); setAcknowledgeMissingNorms(false);
     if(!identity) return;
     setLoading(true);
-    void apiClient.get<Results>(`${endpoint}/${identity}/results`).then(value=>{
+    void apiClient.get<Results>(`${endpoint}/${identity}/results`,60000).then(value=>{
       if(current===generation.current) {
-        setResults(value);
-        const missingErrors = (value.errors || []).filter(e => e.error_code === 'NO_CONSUMPTION_NORM');
-        if (missingErrors.length > 0) {
-          setMissingParts(prev => prev.length > 0 ? prev : missingErrors.map(e => ({
-            part_no: e.product_code,
-            item_id: '',
-            part_name: e.error_message,
-            planned_quantity: 0,
-          })));
-        }
+        acceptResults(value);
       }
     })
       .catch(failure=>{if(current===generation.current)setError(failure.message);})
       .finally(()=>{if(current===generation.current)setLoading(false);});
     return ()=>{++generation.current;};
-  },[identity]);
+  },[identity,acceptResults]);
+
+  async function reloadResults() {
+    if(pending.current)return;
+    pending.current=true;setLoading(true);setError('');
+    try {
+      acceptWorkspace(await readWorkspace(identity || initialVersionId));
+    } catch(failure) {
+      setError(failure instanceof Error?failure.message:'The saved results could not be loaded.');
+    } finally {pending.current=false;setLoading(false);}
+  }
 
   async function run(action:'preview'|'calculate'|'approve', ackMissing = false) {
     if(pending.current||!identity) return;
     const targetDate = asOf || new Date().toISOString().slice(0, 10);
     pending.current=true;setBusy(true);setError('');setMessage('');
+    let saved = false;
     try{
       if(action==='preview') {
         const prev = await apiClient.post<Preview>(`${endpoint}/preview`,{planning_version_id:identity,as_of_date:targetDate});
         setPreview(prev);
-        if (prev.duplicate_groups_warning) setDuplicateWarning(prev.duplicate_groups_warning);
-        if (prev.no_consumption_norms?.length) setMissingParts(prev.no_consumption_norms);
+        setDuplicateWarning(prev.duplicate_groups_warning || null);
+        setMissingParts(prev.no_consumption_norms || []);
       }
       else {
         if(action==='calculate') {
           const calcRes = await apiClient.post<CalculationRunResponse>(`${endpoint}/calculate`,{planning_version_id:identity,as_of_date:targetDate});
-          if (calcRes.duplicate_groups_warning) setDuplicateWarning(calcRes.duplicate_groups_warning);
-          if (calcRes.no_consumption_norms?.length) setMissingParts(calcRes.no_consumption_norms);
+          setDuplicateWarning(calcRes.duplicate_groups_warning || null);
+          setMissingParts(calcRes.no_consumption_norms || []);
         }
         else {
           await apiClient.post(`/api/v1/requirements/planning-versions/${identity}/approve`, ackMissing ? { acknowledge_missing_norms: true } : {});
           setShowApprovalModal(false);
           setAcknowledgeMissingNorms(false);
         }
-        setResults(await apiClient.get<Results>(`${endpoint}/${identity}/results`));await refresh();setPreview(null);
-        setMessage(action==='approve'?'Central plan approved by Super Admin. Consolidated demand is available to inventory and purchase assessment.':'Basic requirements saved.');
+        saved = true;
+        // The write has committed. A later read failure must not display the old
+        // zero-row calculation or tell the operator to repeat the write.
+        setResults(null);setPreview(null);
+        setMessage(action==='approve'?'Central plan approved by Super Admin. Consolidated demand is available to inventory and purchase assessment.':'Product-wise requirements saved. The Consumable Planning Module shows the same saved results. Review any remaining configuration issues below.');
+        acceptWorkspace(await readWorkspace(identity));
       }
-    }catch(failure){setError(failure instanceof Error?failure.message:'The operation failed.');}
+    }catch(failure){setError(saved?'The changes were saved, but the latest results could not be loaded. Use Reload results to view them.':failure instanceof Error?failure.message:'The operation failed.');}
     finally{pending.current=false;setBusy(false);}
   }
 
@@ -122,9 +158,9 @@ export default function CentralRequirements({ purchaseOnly = false }: {purchaseO
     if (!missingParts.length) return;
     const headers = ['Part No', 'Item ID', 'Part Description', 'Planned Qty'];
     const dataRows = missingParts.map(p => [
-      p.part_no || p.product_code || '',
+      p.part_no || p.part_number || p.product_code || '',
       p.item_id || '',
-      p.part_name || p.error_message || '',
+      p.part_name || p.part_description || p.error_message || '',
       String(p.planned_quantity ?? p.production_quantity ?? '0'),
     ]);
     const csvString = [headers.join(','), ...dataRows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))].join('\r\n');
@@ -158,10 +194,17 @@ export default function CentralRequirements({ purchaseOnly = false }: {purchaseO
   const hasHardErrors = Boolean(results?.errors?.some(e => e.error_code !== 'NO_CONSUMPTION_NORM'));
   const hasMissingNorms = missingParts.length > 0 || Boolean(results?.errors?.some(e => e.error_code === 'NO_CONSUMPTION_NORM'));
 
-  const columns:ColumnDef<Calculation>[]=[{key:'product_code',label:'Product',width:190},{key:'process_name',label:'Process',width:160},
+  const visibleCalculations = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return (results?.calculations || []).filter(row => !term || [row.product_code, row.product_part_number, row.product_item_id,
+      row.product_name, row.consumable_code, row.consumable_name].some(value => value?.toLowerCase().includes(term)));
+  }, [results, search]);
+  const columns:ColumnDef<Calculation>[]=[{key:'product_code',label:'Product',width:190},
+    {key:'product_part_number',label:'Part No.',width:160},{key:'product_item_id',label:'Product Item ID',width:160},
+    {key:'product_name',label:'Product Description',width:240},{key:'process_name',label:'Process',width:160},
     {key:'consumable_code',label:'Consumable Item ID',width:180},{key:'consumable_name',label:'Consumable',width:260},
     {key:'source_production_qty',label:'Production Quantity',width:170},{key:'raw_requirement',label:'Raw Basic Requirement',width:170},
-    {key:'calculated_qty',label:'Basic Requirement',width:160},{key:'uom',label:'Stock Unit',width:100},{key:'rule_version',label:'Norm Version',width:110},
+    {key:'calculated_qty',label:'Required Consumable Quantity',width:210},{key:'uom',label:'Stock Unit',width:100},{key:'rule_version',label:'Norm Version',width:110},
     {key:'id',label:'Calculation Details',width:140,render:(_value,row)=><button className="underline" onClick={()=>setDetail(row)}>View formula</button>}];
 
   return <div className="space-y-4 min-w-0">
@@ -171,17 +214,27 @@ export default function CentralRequirements({ purchaseOnly = false }: {purchaseO
         {!purchaseOnly&&<><label>Norm effective date<input type="date" value={asOf} onChange={event=>{setAsOf(event.target.value);setPreview(null);}} className="block rounded border p-2"/></label>
           <button className={button} disabled={busy||loading||!identity} onClick={()=>void run('preview')}>Preview matching</button>
           {canCalculate&&<button className={`${button} bg-burnt-orange text-white`} disabled={busy||loading||!version?.is_latest||version.status==='APPROVED'} onClick={()=>void run('calculate')}>Calculate and save</button>}
-          {superAdmin&&<button className={`${button} bg-emerald-700 text-white`} disabled={busy||loading||!version?.is_latest||version.status!=='CALCULATED'||hasHardErrors} onClick={()=>{
+          {superAdmin&&<button className={`${button} bg-emerald-700 text-white`} disabled={busy||loading||!results||!version?.is_latest||!['CALCULATED','CALCULATED_WITH_ERRORS'].includes(version.status)||hasHardErrors} onClick={()=>{
             if (hasMissingNorms) setShowApprovalModal(true);
             else void run('approve', false);
           }}>Approve central plan</button>}</>}
         <button className={button} disabled={busy||!results} onClick={()=>void download('xlsx')}>Export Excel</button><button className={button} disabled={busy||!results} onClick={()=>void download('csv')}>Export CSV</button>
+        <button className={button} disabled={busy||loading} onClick={()=>void reloadResults()}>Reload results</button>
       </div>
       {version&&<p className="text-sm">Source: {version.source_filename} · Status: <strong>{version.status}</strong>{!version.is_latest&&' · Historical revision; calculation and approval are protected.'}</p>}
-      {!identity&&!loading&&<p>Upload a production workbook in Production for sale to start central planning.</p>}
+      {!identity&&!loading&&!error&&<p>Upload a production workbook in Production for sale to start central planning.</p>}
       {loading&&<p role="status">Loading central plan…</p>}{busy&&<p role="status">Processing…</p>}
       {error&&<p role="alert" className="rounded bg-red-50 p-3 text-red-700">{error}</p>}{message&&<p role="status" className="rounded bg-green-50 p-3 text-green-800">{message}</p>}
     </section>
+
+    {!purchaseOnly&&results&&<section className="min-w-0 rounded-xl border bg-white">
+      <div className="flex flex-wrap items-center gap-3 p-4">
+        <div><h3 className="font-semibold">Consumables required per product</h3>
+          <p className="text-sm">{results.calculations.length} saved requirement lines. Quantities use the selected production revision and saved consumption formulas.</p></div>
+        <input aria-label="Search product requirements" placeholder="Search part number, item ID or consumable" className="ml-auto rounded border p-2 text-sm min-w-64" value={search} onChange={event=>setSearch(event.target.value)}/>
+      </div>
+      <div className="h-[420px] min-h-0 flex flex-col overflow-hidden"><DataTable virtualize columns={columns} data={visibleCalculations} originalData={calculationOriginals} selectedIds={selected} onSelectionChange={setSelected} canUpdate={false} canCreate={false} canDelete={false} storageKey="central-basic-results" emptyMessage={search?'No product requirements match this search.':'No saved calculation yet. Preview matching, then calculate and save.'}/></div>
+    </section>}
 
     {duplicateWarning && (
       <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 flex items-start gap-2 shadow-sm">
@@ -234,9 +287,9 @@ export default function CentralRequirements({ purchaseOnly = false }: {purchaseO
             <tbody>
               {missingParts.map((p, idx) => (
                 <tr key={idx} className="border-b last:border-b-0 hover:bg-amber-50/30">
-                  <td className="p-2 font-mono font-medium">{p.part_no || p.product_code || '—'}</td>
+                  <td className="p-2 font-mono font-medium">{p.part_no || p.part_number || p.product_code || '—'}</td>
                   <td className="p-2 font-mono text-gray-600">{p.item_id || '—'}</td>
-                  <td className="p-2">{p.part_name || p.error_message || '—'}</td>
+                  <td className="p-2">{p.part_name || p.part_description || p.error_message || '—'}</td>
                   <td className="p-2 text-right font-mono font-medium">{String(p.planned_quantity ?? p.production_quantity ?? '—')}</td>
                 </tr>
               ))}
@@ -253,15 +306,14 @@ export default function CentralRequirements({ purchaseOnly = false }: {purchaseO
     </section>}
 
     {results?.errors.length ? (
-      <section className={`rounded border p-4 space-y-1 ${hasHardErrors ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50'}`}>
-        <h3 className={`font-semibold ${hasHardErrors ? 'text-red-900' : 'text-amber-900'}`}>
-          {hasHardErrors ? 'Approval blocked — resolve calculation errors' : 'Notice — parts without consumption norms'}
-        </h3>
-        {results.errors.map(row=><p key={row.id} className={`text-sm ${hasHardErrors ? 'text-red-700' : 'text-amber-800'}`}>{row.product_code}: {row.error_message}</p>)}
-      </section>
+      <details className={`rounded border p-4 space-y-1 ${hasHardErrors ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50'}`}>
+        <summary className="font-semibold cursor-pointer">{results.errors.length} configuration issues — {hasHardErrors ? 'resolve before approval' : 'parts without consumption norms'}</summary>
+        <p className="text-sm">Review the listed products in Consumption Norms, then Calculate and save again. Valid requirement lines remain visible above.</p>
+        <a href="/rules" className="text-sm underline">Open Consumption Norms</a>
+        <div className="max-h-64 overflow-auto">{results.errors.map(row=><p key={row.id} className={`text-sm ${hasHardErrors ? 'text-red-700' : 'text-amber-800'}`}>{row.product_code}: {row.error_message}</p>)}</div>
+      </details>
     ) : null}
 
-    {!purchaseOnly&&results&&<section className="h-[420px] min-h-0 flex flex-col overflow-hidden rounded-xl border bg-white"><DataTable virtualize columns={columns} data={results.calculations} originalData={calculationOriginals} selectedIds={selected} onSelectionChange={setSelected} canUpdate={false} canCreate={false} canDelete={false} storageKey="central-basic-results" emptyMessage="No saved calculation yet. Preview matching, then calculate and save."/></section>}
     {detail&&!purchaseOnly&&<section className="rounded-xl border bg-white p-4"><button className="float-right underline" onClick={()=>setDetail(null)}>Close details</button><h3 className="font-semibold">{detail.product_code} → {detail.consumable_code}, norm v{detail.rule_version}</h3><p className="text-sm">Approved parameters: {JSON.stringify(detail.parameters)}</p><ol>{detail.calculation_steps.map(step=><li key={step.step_number} className="mt-2"><strong>{step.description}</strong><p>{step.formula} = {step.result}</p></li>)}</ol></section>}
     
     {results&&<section className="rounded-xl border bg-white p-4 space-y-3"><h3 className="font-semibold">Consolidated consumable requirements</h3><p className="text-sm">Each material is consolidated across products before usable stock or incoming supply is applied. Basic demand remains separate from purchase quantity.</p>
@@ -279,7 +331,7 @@ export default function CentralRequirements({ purchaseOnly = false }: {purchaseO
           </thead>
           <tbody>
             {results.summary.map(row => {
-              const breakdown = (results.calculations || []).filter(c => c.consumable_code === row.consumable_code || c.consumable_name === row.consumable_name);
+              const breakdown = (results.calculations || []).filter(c => c.consumable_id ? c.consumable_id === row.consumable_id : c.consumable_code === row.consumable_code);
               const isExpanded = expandedConsumables.has(row.consumable_id);
               return (
                 <tr key={row.consumable_id} className="border-t">

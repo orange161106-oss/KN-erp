@@ -20,6 +20,9 @@ export interface ReviewPurchaseApprovalRequest {
 }
 
 export interface PurchaseApprovalResponse {
+  requested_purchase_qty?: string | null;
+  requested_purchase_unit?: string | null;
+  purchase_notes?: string | null;
   id: string;
   consumable_id: string;
   consumable_code: string | null;

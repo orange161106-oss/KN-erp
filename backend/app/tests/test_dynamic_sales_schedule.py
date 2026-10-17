@@ -18,10 +18,11 @@ from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+from app.core.errors import ApplicationError
 from app.db.base import Base
 from app.models.auth import Permission, Role, User
 from app.models.masters import Customer, CustomerAlias, Product
-from app.models.prd import ImportBatch, PRDRecord
+from app.models.prd import ImportBatch, PlanningVersion, PRDRecord
 from app.models.rules import ConsumptionNorm
 from app.models.inventory_masters import Consumable, Unit
 from app.models.production import Process
@@ -226,6 +227,63 @@ def test_month_mismatch_blocking_error(db_session):
 
     assert res["can_confirm"] is False
     assert any("Month mismatch" in e for e in res["errors"])
+
+
+def period_workbook(month_label, quantity=100, revised_quantity=None):
+    rows = [
+        ["S.No.", "Part No.", "Item ID", "Description", f"{month_label} (R0)"],
+        ["ASHOK LEYLAND - CHILD PARTS", None, None, None, None],
+        [1, "PERIOD-PART", "PERIOD-ITEM", "Period bracket", quantity],
+        ["ASHOK LEYLAND - TOTAL", None, None, None, quantity],
+        ["GRAND TOTAL", None, None, None, quantity],
+    ]
+    if revised_quantity is not None:
+        for row, value in zip(rows, [f"{month_label} (R1)", None, revised_quantity, revised_quantity, revised_quantity]):
+            row.append(value)
+    return build_excel_bytes(rows)
+
+
+def test_confirmation_enforces_selected_month_without_writing_records(db_session, test_actor):
+    inspected = preview_sales_schedule_upload(
+        db_session, period_workbook("Nov'26"), "synthetic.xlsx", target_period="2026-10",
+    )
+    assert not inspected.can_confirm
+    with pytest.raises(ApplicationError, match="Month mismatch"):
+        confirm_sales_schedule_import(
+            db_session, inspected.file_token, inspected.sheet_name, "2026-10", "R0", "Plant 1", test_actor.id,
+        )
+    assert not db_session.scalars(select(PRDRecord)).all()
+    assert not db_session.scalars(select(PlanningVersion)).all()
+
+
+def test_uploads_for_different_months_and_years_preserve_existing_periods(db_session, test_actor):
+    for period, label, quantity in [("2026-10", "Oct'26", 100), ("2026-11", "Nov'26", 200), ("2027-10", "Oct'27", 300)]:
+        inspected = preview_sales_schedule_upload(
+            db_session, period_workbook(label, quantity), "synthetic.xlsx", target_period=period, revision_label="R0",
+        )
+        assert inspected.can_confirm
+        confirm_sales_schedule_import(
+            db_session, inspected.file_token, inspected.sheet_name, period, "R0", "Plant 1", test_actor.id,
+        )
+    saved = db_session.scalars(select(PRDRecord).order_by(PRDRecord.target_period)).all()
+    assert [(row.target_period, row.revision, row.planned_quantity) for row in saved] == [
+        ("2026-10", "R0", Decimal("100")), ("2026-11", "R0", Decimal("200")), ("2027-10", "R0", Decimal("300")),
+    ]
+    assert len(db_session.scalars(select(PlanningVersion)).all()) == 3
+
+
+def test_confirmation_requires_one_revision_in_the_selected_month(db_session, test_actor):
+    inspected = preview_sales_schedule_upload(
+        db_session, period_workbook("Oct'26", revised_quantity=150), "synthetic.xlsx", target_period="2026-10",
+    )
+    assert inspected.can_confirm
+    assert len(inspected.active_revisions) == 2
+    with pytest.raises(ApplicationError, match="Choose one planning month and revision"):
+        confirm_sales_schedule_import(
+            db_session, inspected.file_token, inspected.sheet_name, "2026-10", None, "Plant 1", test_actor.id,
+        )
+    assert not db_session.scalars(select(PRDRecord)).all()
+    assert not db_session.scalars(select(PlanningVersion)).all()
 
 
 # ---------------------------------------------------------------------------

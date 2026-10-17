@@ -1,12 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { apiClient } from '../../api/client';
 import { useAuth } from '../auth/context';
 import { canPerform } from '../../core/rbac';
 import DataTable, { type ColumnDef, type HeaderGroupDef } from '../../components/DataTable';
 import Toolbar from '../../components/Toolbar';
 import MonthlyExcelUploadModal from './MonthlyExcelUploadModal';
-import RequirementWorkspace from './RequirementWorkspace';
-import CentralRequirements from './CentralRequirements';
 import {
   FileSpreadsheet,
   UploadCloud,
@@ -82,6 +81,8 @@ export interface MonthlyPlanMetadata {
   updated_by?: string | null;
   updated_by_name?: string | null;
   record_count: number;
+  source_workflow?: string | null;
+  issue_count?: number;
   grn_reconciled?: boolean;
   last_grn_synced_at?: string | null;
 }
@@ -108,25 +109,8 @@ function formatDisplayDate(dateStr?: string | null): string {
   }
 }
 
-export default function Requirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' } = {}) {
-  const {user} = useAuth();
-  const [central,setCentral] = useState(!defaultTab && Boolean(user?.is_super_admin || !user?.plant_ids?.length));
-  return <div className="min-w-0 space-y-3"><div className="flex gap-2"><button className="rounded border bg-white px-4 py-2" onClick={()=>setCentral(true)}>Central requirement plan</button><button className="rounded border bg-white px-4 py-2" onClick={()=>setCentral(false)}>Existing monthly plans</button></div>{central?<CentralRequirements/>:<LegacyRequirements defaultTab={defaultTab}/>}</div>;
-}
-
-function LegacyRequirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' } = {}) {
+export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' } = {}) {
   const { user } = useAuth();
-
-  const [activeTab, setActiveTab] = useState<'workspace' | 'mrp'>(() => {
-    if (defaultTab) return defaultTab;
-    const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-    if (params?.get('tab') === 'workspace') return 'workspace';
-    if (params?.get('tab') === 'mrp') return 'mrp';
-    if (typeof (globalThis as any).vi !== 'undefined' || typeof (window as any).vi !== 'undefined') {
-      return 'mrp';
-    }
-    return 'workspace';
-  });
 
   // RBAC checks
   const isSuperAdmin = Boolean(user?.is_super_admin || user?.is_superuser);
@@ -141,6 +125,8 @@ function LegacyRequirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' }
 
   // Plan Metadata State
   const [planMetadata, setPlanMetadata] = useState<MonthlyPlanMetadata | null>(null);
+  const productionBased = planMetadata?.source_workflow === 'BASIC_CENTRAL_V1';
+  const canEditPlan = canUpdate && !productionBased;
 
   // Data records & inline editing state
   const [records, setRecords] = useState<RequirementRecord[]>([]);
@@ -168,45 +154,31 @@ function LegacyRequirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' }
 
   // Filter state
   const [searchQuery, setSearchQuery] = useState('');
+  const settledSearch = useDebouncedValue(searchQuery);
+  const loadGeneration = useRef(0);
   const [plantFilter, setPlantFilter] = useState('');
   const [consumableFilter, setConsumableFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
 
-  // 1. Load Plan Metadata
-  const loadPlanMetadata = useCallback(async () => {
-    try {
-      const meta = await apiClient.get<MonthlyPlanMetadata>(
-        `/api/v1/requirements/workspace/plan-metadata?month=${selectedMonth}&year=${selectedYear}`
-      );
-      setPlanMetadata(meta);
-    } catch {
-      setPlanMetadata({
-        has_plan: false,
-        planning_month: selectedMonth,
-        planning_year: selectedYear,
-        planning_period: `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`,
-        status: 'DRAFT',
-        revision_label: 'R0',
-        record_count: 0,
-      });
-    }
-  }, [selectedMonth, selectedYear]);
-
   // 2. Load Records for Period
   const loadRecords = useCallback(async () => {
+    const generation=++loadGeneration.current;
     setIsLoading(true);
+    setStatusMessage(null);
     try {
       const params = new URLSearchParams();
       params.append('month', String(selectedMonth));
       params.append('year', String(selectedYear));
-      if (searchQuery) params.append('search', searchQuery);
+      if (settledSearch) params.append('search', settledSearch);
       if (plantFilter) params.append('plant', plantFilter);
       if (consumableFilter) params.append('consumable', consumableFilter);
       if (statusFilter) params.append('status', statusFilter);
 
-      const data = await apiClient.get<RequirementRecord[]>(
-        `/api/v1/requirements/workspace/records?${params.toString()}`
-      );
+      const view = await apiClient.get<{records:RequirementRecord[];plan_metadata:MonthlyPlanMetadata}>(
+        `/api/v1/requirements/workspace/view?${params.toString()}`,60000);
+      if(generation!==loadGeneration.current)return;
+      const data=view.records;
+      setPlanMetadata(view.plan_metadata);
 
       setRecords(data);
       const orig = new Map<string, RequirementRecord>();
@@ -214,24 +186,28 @@ function LegacyRequirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' }
       setOriginalMap(orig);
       setModifiedRecords(new Map());
       setSelectedRowIds(new Set());
-      await loadPlanMetadata();
       setStatusMessage(null);
     } catch (err) {
+      if(generation!==loadGeneration.current)return;
       setStatusMessage({
         type: 'error',
         text: err instanceof Error ? err.message : 'Failed to fetch requirements data.',
       });
     } finally {
-      setIsLoading(false);
+      if(generation===loadGeneration.current)setIsLoading(false);
     }
-  }, [selectedMonth, selectedYear, searchQuery, plantFilter, consumableFilter, statusFilter, loadPlanMetadata]);
+  }, [selectedMonth, selectedYear, settledSearch, plantFilter, consumableFilter, statusFilter]);
 
   useEffect(() => {
     void loadRecords();
+    return () => {
+      ++loadGeneration.current;
+    };
   }, [loadRecords]);
 
   // Handle inline cell changes for permitted fields
   const handleCellChange = (rowId: string, colKey: keyof RequirementRecord & string, value: string) => {
+    if (!canEditPlan) return;
     // Permitted fields: production_order_qty, part_thickness, process_count, remarks
     const permittedKeys = ['production_order_qty', 'part_thickness', 'process_count', 'remarks'];
     if (!permittedKeys.includes(colKey)) return;
@@ -759,37 +735,12 @@ function LegacyRequirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' }
   );
 
   return (
-    <div className="flex flex-col h-full space-y-4 font-['Plus_Jakarta_Sans',sans-serif] bg-slate-50 p-4 rounded-xl min-h-screen">
-      {/* Sub-navigation Tabs */}
-      <div className="flex items-center gap-2 border-b border-slate-200 bg-white px-4 pt-2.5 rounded-xl shadow-sm">
-        <button
-          type="button"
-          onClick={() => setActiveTab('workspace')}
-          className={`pb-2.5 px-3 text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer border-b-2 flex items-center gap-2 ${
-            activeTab === 'workspace'
-              ? 'border-slate-900 text-slate-900'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <span>Monthly Requirement Planner</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('mrp')}
-          className={`pb-2.5 px-3 text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer border-b-2 flex items-center gap-2 ${
-            activeTab === 'mrp'
-              ? 'border-slate-900 text-slate-900'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <span>Consumable Planning Module (MRP)</span>
-        </button>
-      </div>
-
-      {activeTab === 'workspace' ? (
-        <RequirementWorkspace />
-      ) : (
-        <div className="flex flex-col h-full space-y-4">
+    <div className="flex flex-col h-full space-y-3 font-['Plus_Jakarta_Sans',sans-serif]">
+      {productionBased && (
+        <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+          Production-based requirements calculated deterministically from Production order quantities (R0) and Consumption Norms (Sch).
+        </div>
+      )}
           {/* Top Banner: Module Purpose & Saved Plan Metadata Card */}
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <div>
@@ -954,7 +905,7 @@ function LegacyRequirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' }
         {/* Primary Action Buttons */}
         <div className="flex items-center gap-2">
           {/* Upload Plan Button */}
-          {canUpdate && (
+          {canEditPlan && (
             <button
               type="button"
               onClick={() => setShowUploadModal(true)}
@@ -982,7 +933,7 @@ function LegacyRequirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' }
           )}
 
           {/* Save Changes Button (Active when permitted cells are edited) */}
-          {canUpdate && (
+          {canEditPlan && (
             <button
               type="button"
               onClick={() => void handleSaveChanges()}
@@ -1012,8 +963,8 @@ function LegacyRequirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' }
             <button
               type="button"
               onClick={() => void handleRecalculate()}
-              disabled={isRecalculating || records.length === 0}
-              className="bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-lg px-3.5 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5"
+              disabled={isRecalculating || isLoading || (!productionBased && records.length === 0) || (productionBased && planMetadata?.status === 'APPROVED')}
+              className="border border-slate-300 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-lg px-3.5 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5"
             >
               {isRecalculating ? (
                 <>
@@ -1070,6 +1021,24 @@ function LegacyRequirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' }
         </div>
       </div>
 
+      {/* Issues Alert Line */}
+      {Boolean(planMetadata?.issue_count && planMetadata.issue_count > 0) && (
+        <div className="flex items-center justify-between px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-900 shadow-2xs">
+          <div className="flex items-center gap-2">
+            <span className="font-bold">⚠️ {planMetadata.issue_count} issue{planMetadata.issue_count === 1 ? '' : 's'}:</span>
+            <span>missing norms or unmapped processes for planned parts in this period.</span>
+          </div>
+          <a
+            href={`/api/v1/requirements/workspace/issues/export?month=${selectedMonth}&year=${selectedYear}`}
+            download={`requirement_issues_${selectedYear}_${String(selectedMonth).padStart(2, '0')}.csv`}
+            className="px-2.5 py-1 bg-white hover:bg-amber-100 border border-amber-300 rounded font-semibold text-xs text-amber-900 transition-colors shadow-2xs flex items-center gap-1"
+          >
+            <span>📥</span>
+            <span>Download issues list (CSV)</span>
+          </a>
+        </div>
+      )}
+
       {/* Main Spreadsheet Grid Container */}
       <div className="flex-1 min-h-0 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden">
         {/* Toolbar for search and column filters */}
@@ -1124,6 +1093,7 @@ function LegacyRequirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' }
         {/* Section 7 & 7A: Spreadsheet Table Grid with ALWAYS VISIBLE HEADERS */}
         <div className="flex-1 min-h-0">
           <DataTable
+            virtualize
             columns={columns}
             headerGroups={headerGroups}
             data={filteredRecords}
@@ -1137,8 +1107,8 @@ function LegacyRequirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' }
             isLoading={isLoading}
             emptyMessage={`No consumable requirements found for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Click 'Upload Excel' to import a plan.`}
             canCreate={false}
-            canUpdate={canUpdate}
-            canDelete={canUpdate}
+            canUpdate={canEditPlan}
+            canDelete={canEditPlan}
             selectedCell={selectedCell}
             onSelectCell={setSelectedCell}
             storageKey="knl_requirements_grid"
@@ -1460,8 +1430,6 @@ function LegacyRequirements({ defaultTab }: { defaultTab?: 'workspace' | 'mrp' }
               </button>
             </div>
           </div>
-        </div>
-      )}
         </div>
       )}
     </div>

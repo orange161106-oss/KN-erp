@@ -10,6 +10,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from sqlalchemy import select, and_, or_, func
+from sqlalchemy.orm import aliased, joinedload
 
 from app.core.errors import ApplicationError
 from app.domain.rules import (
@@ -23,7 +24,7 @@ from app.models.audit import AuditLog
 from app.models.auth import User
 from app.models.inventory_masters import Consumable, Unit
 from app.models.masters import Product
-from app.models.prd import PlanningVersion
+from app.models.prd import ImportBatch, PlanningVersion
 from app.models.production import Plant, Process
 from app.models.requirements import (
     CalculatedRequirement,
@@ -47,12 +48,18 @@ def get_monthly_plan_metadata(
     session, month: int, year: int
 ) -> MonthlyPlanMetadata:
     planning_period = f"{year:04d}-{month:02d}"
-    version = session.scalar(
-        select(PlanningVersion)
+    creator, updater = aliased(User), aliased(User)
+    batch_metadata = select(ImportBatch.validation_summary).where(
+        ImportBatch.planning_version_id == PlanningVersion.id).limit(1).scalar_subquery()
+    row = session.execute(
+        select(PlanningVersion, batch_metadata, creator.full_name, creator.username,
+            updater.full_name, updater.username)
+        .outerjoin(creator, creator.id == PlanningVersion.created_by)
+        .outerjoin(updater, updater.id == PlanningVersion.updated_by)
         .where(PlanningVersion.planning_period == planning_period)
         .order_by(PlanningVersion.version_number.desc())
         .limit(1)
-    )
+    ).first()
 
     # Check GRN reconciliation status
     grn_stats = session.execute(
@@ -72,7 +79,7 @@ def get_monthly_plan_metadata(
     reconciled_count = grn_stats[0] or 0
     last_synced = grn_stats[1]
 
-    if not version:
+    if not row:
         rec_count = session.scalar(
             select(func.count(MonthlyRequirementRecord.id)).where(
                 MonthlyRequirementRecord.planning_period == planning_period,
@@ -85,20 +92,27 @@ def get_monthly_plan_metadata(
             planning_year=year,
             planning_period=planning_period,
             record_count=rec_count,
+            issue_count=0,
+            source_workflow=None,
             grn_reconciled=bool(reconciled_count > 0),
             last_grn_synced_at=last_synced,
         )
 
-    creator = session.get(User, version.created_by) if version.created_by else None
-    updater = session.get(User, version.updated_by) if version.updated_by else None
-
-    # Count records
-    rec_count = session.scalar(
-        select(func.count(MonthlyRequirementRecord.id)).where(
+    version, metadata, creator_name, creator_username, updater_name, updater_username = row
+    from app.services import basic_planning
+    central = (metadata or {}).get('workflow') == basic_planning.WORKFLOW
+    # A production-based monthly view reads the same saved rows as Central.
+    issues_cnt = 0
+    if central:
+        counts = [select(func.count(model.id)).where(model.planning_version_id == version.id).scalar_subquery()
+            for model in (CalculatedRequirement, RequirementCalculationError)]
+        calc_cnt = session.scalar(select(counts[0])) or 0
+        issues_cnt = session.scalar(select(counts[1])) or 0
+        rec_count = calc_cnt
+    else:
+        rec_count = session.scalar(select(func.count(MonthlyRequirementRecord.id)).where(
             MonthlyRequirementRecord.planning_version_id == version.id,
-            MonthlyRequirementRecord.is_deleted == False,  # noqa: E712
-        )
-    ) or 0
+            MonthlyRequirementRecord.is_deleted == False)) or 0  # noqa: E712
 
     return MonthlyPlanMetadata(
         has_plan=True,
@@ -111,11 +125,13 @@ def get_monthly_plan_metadata(
         source_filename=version.source_filename,
         created_at=version.created_at,
         created_by=str(version.created_by) if version.created_by else None,
-        created_by_name=creator.full_name or creator.username if creator else None,
+        created_by_name=creator_name or creator_username,
         updated_at=version.updated_at,
         updated_by=str(version.updated_by) if version.updated_by else None,
-        updated_by_name=updater.full_name or updater.username if updater else None,
+        updated_by_name=updater_name or updater_username,
         record_count=rec_count,
+        issue_count=issues_cnt,
+        source_workflow=basic_planning.WORKFLOW if central else None,
         grn_reconciled=bool(reconciled_count > 0),
         last_grn_synced_at=last_synced,
     )
@@ -133,19 +149,27 @@ def calculate_workspace_requirements(
 ) -> list[RequirementWorkspaceRecord]:
     """Retrieve requirements for the given planning month and year.
 
-    First checks the dedicated monthly_requirement_records for spreadsheet planning.
-    Falls back gracefully to existing calculated_requirements if present.
+    Production-based periods share Central's saved calculated_requirements.
+    Other periods retain the manual spreadsheet plan and its existing fallback.
     """
     target_period = planning_period
     if month and year:
         target_period = f"{year:04d}-{month:02d}"
 
     # 1. Query dedicated monthly planning records
-    query = select(MonthlyRequirementRecord).where(MonthlyRequirementRecord.is_deleted == False)  # noqa: E712
+    query = select(MonthlyRequirementRecord).options(joinedload(MonthlyRequirementRecord.planning_version)).where(MonthlyRequirementRecord.is_deleted == False)  # noqa: E712
     if target_period:
         query = query.where(MonthlyRequirementRecord.planning_period == target_period)
 
-    monthly_rows = session.scalars(query.order_by(MonthlyRequirementRecord.row_index, MonthlyRequirementRecord.created_at)).all()
+    from app.services import basic_planning
+    batch_metadata = select(ImportBatch.validation_summary).where(
+        ImportBatch.planning_version_id == PlanningVersion.id).limit(1).scalar_subquery()
+    period_row = session.execute(select(PlanningVersion, batch_metadata)
+        .where(PlanningVersion.planning_period == target_period)
+        .order_by(PlanningVersion.version_number.desc()).limit(1)).first() if target_period else None
+    period_version = period_row[0] if period_row else None
+    central = bool(period_row and (period_row[1] or {}).get('workflow') == basic_planning.WORKFLOW)
+    monthly_rows = [] if central else session.scalars(query.order_by(MonthlyRequirementRecord.row_index, MonthlyRequirementRecord.created_at)).all()
 
     results: list[RequirementWorkspaceRecord] = []
 
@@ -203,41 +227,36 @@ def calculate_workspace_requirements(
         versions_query = select(PlanningVersion).order_by(PlanningVersion.planning_period, PlanningVersion.version_number.desc())
         if target_period:
             versions_query = versions_query.where(PlanningVersion.planning_period == target_period)
-        versions = session.scalars(versions_query).all()
+        versions = [period_version] if central else session.scalars(versions_query).all()
         latest: dict[str, PlanningVersion] = {}
         for version in versions:
             latest.setdefault(version.planning_period, version)
 
         for version in latest.values():
             requirements = session.scalars(
-                select(CalculatedRequirement).where(CalculatedRequirement.planning_version_id == version.id)
+                select(CalculatedRequirement).options(joinedload(CalculatedRequirement.consumable),
+                    joinedload(CalculatedRequirement.plant), joinedload(CalculatedRequirement.process),
+                    joinedload(CalculatedRequirement.product))
+                .where(CalculatedRequirement.planning_version_id == version.id)
             ).all()
             errors = session.scalars(
-                select(RequirementCalculationError).where(RequirementCalculationError.planning_version_id == version.id)
+                select(RequirementCalculationError).options(joinedload(RequirementCalculationError.plant),
+                    joinedload(RequirementCalculationError.product), joinedload(RequirementCalculationError.consumable),
+                    joinedload(RequirementCalculationError.prd_order_item))
+                .where(RequirementCalculationError.planning_version_id == version.id)
             ).all()
 
-            # Batch fetch related entities to prevent N+1 queries across remote pooler
-            consumable_ids = {r.consumable_id for r in requirements if r.consumable_id} | {e.consumable_id for e in errors if e.consumable_id}
-            plant_ids = {r.plant_id for r in requirements if r.plant_id} | {e.plant_id for e in errors if e.plant_id}
-            process_ids = {r.process_id for r in requirements if r.process_id}
-            product_ids = {r.product_id for r in requirements if r.product_id} | {e.product_id for e in errors if e.product_id}
-
-            materials_map = {c.id: c for c in session.scalars(select(Consumable).where(Consumable.id.in_(consumable_ids))).all()} if consumable_ids else {}
-            plants_map = {p.id: p for p in session.scalars(select(Plant).where(Plant.id.in_(plant_ids))).all()} if plant_ids else {}
-            processes_map = {p.id: p for p in session.scalars(select(Process).where(Process.id.in_(process_ids))).all()} if process_ids else {}
-            products_map = {p.id: p for p in session.scalars(select(Product).where(Product.id.in_(product_ids))).all()} if product_ids else {}
-
+            from app.services.rules import norm_reference_data
+            references = norm_reference_data(session, list({row.rule_id for row in requirements}))
             for row in requirements:
-                material = materials_map.get(row.consumable_id)
-                plant = plants_map.get(row.plant_id) if row.plant_id else None
-                process = processes_map.get(row.process_id)
-                product = products_map.get(row.product_id)
+                material, plant, process, product = row.consumable, row.plant, row.process, row.product
 
                 p_thick = "0.0000"
                 p_count = 1
                 if isinstance(row.parameters, dict):
-                    p_thick = str(row.parameters.get("thickness", "0.0000"))
-                    p_count = int(row.parameters.get("processes", 1))
+                    reference = references.get(row.rule_id) or {}
+                    p_thick = str(reference.get("thickness") or row.parameters.get("thickness", "0.0000"))
+                    p_count = int(Decimal(str(reference.get("process_count") or row.parameters.get("process_count", row.parameters.get("processes", 1)))))
 
                 results.append(
                     RequirementWorkspaceRecord(
@@ -246,7 +265,7 @@ def calculate_workspace_requirements(
                         planning_period=version.planning_period,
                         revision=version.revision_label,
                         part_name=product.name if product else "Component",
-                        part_number=product.code if product else "PROD-ITEM",
+                        part_number=(product.part_number or product.code) if product else "PROD-ITEM",
                         consumable_code=material.code if material else "",
                         consumable_name=material.name if material else "",
                         process_name=process.name if process else "",
@@ -271,9 +290,7 @@ def calculate_workspace_requirements(
                 )
 
             for error in errors:
-                plant = plants_map.get(error.plant_id) if error.plant_id else None
-                product = products_map.get(error.product_id) if error.product_id else None
-                material = materials_map.get(error.consumable_id) if error.consumable_id else None
+                plant, product, material = error.plant, error.product, error.consumable
                 results.append(
                     RequirementWorkspaceRecord(
                         id=str(error.id),
@@ -281,13 +298,13 @@ def calculate_workspace_requirements(
                         planning_period=version.planning_period,
                         revision=version.revision_label,
                         part_name=product.name if product else "Unresolved",
-                        part_number=product.code if product else "Unresolved",
+                        part_number=(product.part_number or product.code) if product else "Unresolved",
                         consumable_code=material.code if material else "",
                         consumable_name=material.name if material else error.error_message,
                         process_name="Unresolved",
                         part_thickness="0.0000",
                         process_count=1,
-                        production_order_qty="0.0000",
+                        production_order_qty=format(error.prd_order_item.planned_quantity, '.4f') if error.prd_order_item else "Unavailable",
                         scheduled_consumable_qty="Unavailable",
                         plant=plant.name if plant else "Unresolved",
                         process="Unresolved",
@@ -333,6 +350,13 @@ def calculate_workspace_requirements(
         return True
 
     return [r for r in results if matches(r)]
+
+
+def load_workspace_view(session, month, year, *, plant=None, consumable=None, status=None, search=None):
+    """Use one authenticated request/connection for a period's metadata and rows."""
+    return {'plan_metadata': get_monthly_plan_metadata(session, month, year),
+        'records': calculate_workspace_requirements(session, month=month, year=year,
+            plant_filter=plant, consumable_filter=consumable, status_filter=status, search=search)}
 
 
 def _normalize_header(hdr: Any) -> str:
@@ -718,6 +742,11 @@ def import_monthly_requirements(
         .with_for_update()
     )
 
+    from app.services import basic_planning
+    if existing_version and basic_planning.is_central_version(session, existing_version.id):
+        raise ApplicationError('CENTRAL_PRODUCTION_PLAN',
+            'This month uses production-based requirements. Update Production for sale or Consumption Norms, then recalculate; do not replace it with a separate requirement upload.', 409)
+
     if existing_version and not req.overwrite:
         raise ApplicationError(
             "PLAN_ALREADY_EXISTS",
@@ -1019,6 +1048,17 @@ def recalculate_monthly_requirements(
             f"No monthly requirement plan exists for {planning_period}. Please upload an Excel sheet first.",
             404,
         )
+
+    from app.services import basic_planning
+    if basic_planning.is_central_version(session, version.id):
+        from datetime import date
+        from app.schemas.requirements import CalculationRunRequest
+        result = basic_planning.calculate(session, CalculationRunRequest(planning_version_id=version.id, as_of_date=date(year, month, 1)), current_user_id)
+        records = calculate_workspace_requirements(session, month=month, year=year)
+        return RequirementRecalculateResponse(
+            message=f"Production-based requirements updated: {result.successful_requirements_count} lines; {result.error_count} configuration issues.",
+            record_count=len(records), critical_shortages=0, low_stock=0, records=records,
+            plan_metadata=get_monthly_plan_metadata(session, month, year))
 
     records = session.scalars(
         select(MonthlyRequirementRecord).where(
@@ -1688,3 +1728,56 @@ def ingest_mrp_grn(
         "period": planning_period,
     }
 
+
+def get_period_calculation_issues(session, *, month: int, year: int) -> list[dict[str, Any]]:
+    planning_period = f"{year:04d}-{month:02d}"
+    version = session.scalar(
+        select(PlanningVersion)
+        .where(PlanningVersion.planning_period == planning_period)
+        .order_by(PlanningVersion.version_number.desc())
+        .limit(1)
+    )
+    if not version:
+        return []
+    errors = session.scalars(
+        select(RequirementCalculationError)
+        .options(
+            joinedload(RequirementCalculationError.product),
+            joinedload(RequirementCalculationError.prd_order_item),
+            joinedload(RequirementCalculationError.consumable),
+        )
+        .where(RequirementCalculationError.planning_version_id == version.id)
+        .order_by(RequirementCalculationError.id)
+    ).all()
+    results = []
+    for err in errors:
+        prod = err.product
+        results.append({
+            "id": str(err.id),
+            "product_code": err.product_code or (prod.code if prod else ""),
+            "part_number": (prod.part_number if prod else "") or err.product_code or "",
+            "item_id": (prod.item_id if prod else "") or "",
+            "product_name": (prod.name if prod else "") or "",
+            "consumable_code": err.consumable.code if err.consumable else "",
+            "error_code": err.error_code,
+            "error_message": err.error_message,
+        })
+    return results
+
+
+def export_period_calculation_issues_csv(session, *, month: int, year: int) -> bytes:
+    issues = get_period_calculation_issues(session, month=month, year=year)
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["Part No.", "Item ID", "Product Code", "Description", "Consumable Item ID", "Issue Code", "Issue Description"])
+    for row in issues:
+        writer.writerow([
+            row["part_number"],
+            row["item_id"],
+            row["product_code"],
+            row["product_name"],
+            row["consumable_code"],
+            row["error_code"],
+            row["error_message"],
+        ])
+    return out.getvalue().encode("utf-8-sig")

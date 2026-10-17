@@ -9,8 +9,9 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from app.core.errors import ApplicationError
 from app.domain.rules import RuleCalculationInput, RuleDomainError, RuleType, RoundingPolicy, evaluate_rule
@@ -44,16 +45,48 @@ def is_central_version(db, version_id):
     return bool(batch and (batch.validation_summary or {}).get('workflow') == WORKFLOW)
 
 
+def _production_unit(item, product, batch):
+    """Recover only the proven old schedule parser's fabricated 'Nos' default.
+
+    No unit conversion or PCS/NOS equivalence is assumed. Other import formats
+    retain explicit unit checks and original production evidence.
+    """
+    metadata = (batch.validation_summary or {}) if batch else {}
+    old_schedule = (metadata.get('workflow') == WORKFLOW
+        and {'blocks_count', 'grand_total', 'planning_period', 'revision'} <= metadata.keys()
+        and 'production_unit_source' not in metadata
+        and 'as_of_date' not in metadata)
+    if product and old_schedule and item.uom.strip().casefold() == 'nos':
+        return product.uom, 'LEGACY_SCHEDULE_PRODUCT_MASTER'
+    return item.uom, metadata.get('production_unit_source', 'REVIEWED_SOURCE')
+
+
 def versions(db):
-    records = list(db.execute(select(PlanningVersion, ImportBatch).join(ImportBatch,
-        ImportBatch.planning_version_id == PlanningVersion.id).order_by(PlanningVersion.planning_period.desc(), PlanningVersion.version_number.desc())))
-    latest = {}
-    for version in db.scalars(select(PlanningVersion)):
-        latest[version.planning_period] = max(latest.get(version.planning_period, -1), version.version_number)
+    other = aliased(PlanningVersion)
+    latest = select(func.max(other.version_number)).where(
+        other.planning_period == PlanningVersion.planning_period).scalar_subquery()
+    central = select(ImportBatch.id).where(ImportBatch.planning_version_id == PlanningVersion.id,
+        ImportBatch.validation_summary['workflow'].as_string() == WORKFLOW).exists()
+    records = db.execute(select(PlanningVersion, latest).where(central)
+        .order_by(PlanningVersion.planning_period.desc(), PlanningVersion.version_number.desc()))
     return [{'id': v.id, 'planning_period': v.planning_period, 'revision_label': v.revision_label,
         'status': v.status, 'source_filename': v.source_filename, 'approved_at': v.approved_at,
-        'is_latest': v.version_number == latest[v.planning_period]} for v, b in records
-        if (b.validation_summary or {}).get('workflow') == WORKFLOW]
+        'is_latest': v.version_number == latest_number} for v, latest_number in records]
+
+
+def workspace(db, version_id=None):
+    """Load available revisions and their selected saved results in one request."""
+    from app.services.requirements import get_calculated_requirements, get_calculation_errors
+    from app.services.plant_workflow import get_final_requirements
+    available = versions(db)
+    selected = next((row for row in available if row['id'] == version_id), None) if version_id else (
+        next((row for row in available if row['is_latest']), available[0] if available else None))
+    if version_id and selected is None:
+        raise ApplicationError('CENTRAL_VERSION_REQUIRED', 'Choose a central production revision.', 404)
+    return {'versions': available, 'selected_version_id': selected['id'] if selected else None,
+        'results': {'calculations': get_calculated_requirements(db, selected['id']),
+            'errors': get_calculation_errors(db, selected['id']),
+            'summary': get_final_requirements(db, planning_version_id=selected['id'])} if selected else None}
 
 
 def _source(content, filename, sheet_name):
@@ -187,7 +220,8 @@ def production_confirm(db, content, filename, sheet, period, revision, as_of, re
 
 def preview(db, version_id, as_of):
     version = db.get(PlanningVersion, version_id)
-    if not version or not is_central_version(db, version_id):
+    batch = db.scalar(select(ImportBatch).where(ImportBatch.planning_version_id == version_id))
+    if not version or not batch or (batch.validation_summary or {}).get('workflow') != WORKFLOW:
         raise ApplicationError('CENTRAL_VERSION_REQUIRED', 'Choose a central production revision.', 404)
     items = list(db.scalars(select(PRDOrderItem).where(PRDOrderItem.planning_version_id == version_id).order_by(PRDOrderItem.source_row_number)))
     products = list(db.scalars(select(Product).where(Product.id.in_({row.product_id for row in items if row.product_id}))))
@@ -212,6 +246,7 @@ def preview(db, version_id, as_of):
             continue
 
         product, issue = match_product(products, product_id=item.product_id, code=item.product_code)
+        production_unit, unit_source = _production_unit(item, product, batch)
         if issue:
             selected, issues = [], [{'code': issue, 'message': 'The source product is missing, inactive or its code changed.'}]
         else:
@@ -228,13 +263,13 @@ def preview(db, version_id, as_of):
                     'planned_quantity': item.planned_quantity,
                     'unit': item.uom,
                 })
-        if product and item.uom.casefold() != product.uom.casefold():
+        if product and production_unit.strip().casefold() != product.uom.strip().casefold():
             issues.append({'code': 'PRODUCTION_UNIT_CHANGED', 'message': 'Production unit differs from the reviewed master. Reconcile a new production revision.'})
         for issue in issues:
             errors.append({'prd_order_item_id': item.id, 'source_row_number': item.source_row_number, 'product_id': item.product_id,
                 'product_code': item.product_code, **issue})
         sources.append({'id': item.id, 'source_row_number': item.source_row_number, 'product_code': item.product_code,
-            'production_quantity': item.planned_quantity, 'unit': item.uom, 'norm_count': len(selected), 'matched': not issues and bool(selected)})
+            'production_quantity': item.planned_quantity, 'unit': production_unit, 'norm_count': len(selected), 'matched': not issues and bool(selected)})
         for norm in selected:
             sch_val = Decimal(str(norm.parameters.get('sch') if norm.parameters.get('sch') is not None else norm.parameters.get('rate', '0')))
             params = {**norm.parameters, 'rate': str(sch_val)}
@@ -263,6 +298,9 @@ def preview(db, version_id, as_of):
                 'rounding_policy': result.rounding_policy.value, 'rounding_precision': result.rounding_precision,
                 'calculated_qty': result.final_calculated_requirement, 'unit_id': norm.unit_id, 'uom': norm.unit.code,
                 'calculation_steps': [step.model_dump(mode='json') for step in result.calculation_steps]})
+            calculations[-1]['production_unit_source'] = unit_source
+            calculations[-1]['source_production_unit'] = item.uom
+            calculations[-1]['production_unit'] = production_unit
     totals = {}
     for row in calculations:
         key = row['consumable_id']
@@ -330,7 +368,8 @@ def calculate(db, req, actor):
         if version.status not in {'VALIDATED', 'CALCULATED', 'CALCULATED_WITH_ERRORS'} or version.approved_at:
             raise ApplicationError('CALCULATION_HISTORY_PROTECTED', 'Approved calculations cannot be replaced. Import a new production revision.', 409)
         batch = db.scalar(select(ImportBatch).where(ImportBatch.planning_version_id == version.id))
-        effective_date = req.as_of_date or date.fromisoformat(batch.validation_summary['as_of_date'])
+        recorded_date = (batch.validation_summary or {}).get('as_of_date')
+        effective_date = req.as_of_date or (date.fromisoformat(recorded_date) if recorded_date else date.today())
         data = preview(db, version.id, effective_date)
         db.execute(delete(CalculatedRequirement).where(CalculatedRequirement.planning_version_id == version.id))
         db.execute(delete(RequirementCalculationError).where(RequirementCalculationError.planning_version_id == version.id))
@@ -364,7 +403,10 @@ def calculate(db, req, actor):
                         'calculated_qty': str(row['calculated_qty']),
                         'steps': row['calculation_steps']
                     }],
-                    'source_row_number': row['source_row_number']
+                    'source_row_number': row['source_row_number'],
+                    'production_unit_source': row['production_unit_source'],
+                    'source_production_unit': row['source_production_unit'],
+                    'production_unit': row['production_unit'],
                 }
             else:
                 existing = consolidated[key]
@@ -405,7 +447,10 @@ def calculate(db, req, actor):
                     'production_source': {
                         'prd_order_item_id': str(row['prd_order_item_id']),
                         'source_row_number': row['source_row_number'],
-                        'planned_quantity': str(row['source_production_qty'])
+                        'planned_quantity': str(row['source_production_qty']),
+                        'unit': row['production_unit'],
+                        'source_unit': row['source_production_unit'],
+                        'unit_source': row['production_unit_source'],
                     },
                     'rule_id': str(row['rule_id']),
                     'rule_version': row['rule_version'],
@@ -439,7 +484,7 @@ def calculate(db, req, actor):
                 consumable_id=UUID(str(issue['consumable_id'])) if issue.get('consumable_id') else None,
                 error_code=issue['code'],
                 error_message=issue['message'],
-                context_data={'source_row_number': issue['source_row_number']}
+                context_data={name: str(issue[name]) for name in ('source_row_number', 'norm_id', 'process_id') if issue.get(name) is not None}
             ))
         version.status = 'CALCULATED' if data['complete'] else 'CALCULATED_WITH_ERRORS'
         version.calculated_at = datetime.now(timezone.utc)

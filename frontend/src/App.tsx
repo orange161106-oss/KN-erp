@@ -8,7 +8,6 @@ const SystemStatus = lazy(() => import('./pages/SystemStatus'));
 const Masters = lazy(() => import('./features/masters/Masters'));
 const ProductionMappings = lazy(() => import('./features/mappings/ProductionMappings'));
 const ConsumptionNorms = lazy(() => import('./features/rules/ConsumptionNorms'));
-const PlantWorkflow = lazy(() => import('./features/plant_workflow/PlantWorkflow'));
 const Inventory = lazy(() => import('./features/inventory/Inventory'));
 const StockStatementWorkspace = lazy(() => import('./features/inventory/StockStatementWorkspace'));
 const StockManagementWorkspace = lazy(() => import('./features/inventory/StockManagementWorkspace'));
@@ -49,7 +48,6 @@ function Application() {
   const canNorms = canOpen(user, '/rules');
   const canPrd = canOpen(user, '/prd');
   const canRequirements = canOpen(user, '/requirements');
-  const canPlantWorkflow = canOpen(user, '/plant-workflow');
   const canInventory = canOpen(user, '/inventory');
   const canPurchase = canOpen(user, '/purchase');
   const canPurchaseOrders = canOpen(user, '/purchase-orders');
@@ -91,15 +89,10 @@ function Application() {
             <ProtectedRoute isAllowed={canRequirements}><Requirements /></ProtectedRoute>
           } />
           
-          <Route path="/plant-workflow/*" element={
-            <ProtectedRoute isAllowed={canPlantWorkflow}><PlantWorkflow currentUserId={user.id} /></ProtectedRoute>
-          } />
-          <Route path="/plant-review/*" element={
-            <ProtectedRoute isAllowed={canPlantWorkflow}><PlantWorkflow currentUserId={user.id} /></ProtectedRoute>
-          } />
-          <Route path="/plant-review" element={
-            <ProtectedRoute isAllowed={canPlantWorkflow}><PlantWorkflow currentUserId={user.id} /></ProtectedRoute>
-          } />
+          <Route path="/plant-workflow" element={<Navigate to="/requirements" replace />} />
+          <Route path="/plant-workflow/*" element={<Navigate to="/requirements" replace />} />
+          <Route path="/plant-review" element={<Navigate to="/requirements" replace />} />
+          <Route path="/plant-review/*" element={<Navigate to="/requirements" replace />} />
           
           <Route path="/inventory" element={
             <ProtectedRoute isAllowed={canInventory}><Inventory /></ProtectedRoute>

@@ -1014,6 +1014,20 @@ def confirm_sales_schedule_import(
         if not all_flat_rows:
             raise ApplicationError("EMPTY_DATA", "No valid parts found to import.", 422)
 
+        if not parse_result["can_confirm"]:
+            raise ApplicationError(
+                "INVALID_SALES_SCHEDULE",
+                "Cannot import this sales schedule: " + " ".join(parse_result["errors"]),
+                422,
+            )
+
+        if len({(row["target_period"], row["revision"]) for row in all_flat_rows}) != 1:
+            raise ApplicationError(
+                "PRD_REVISION_REQUIRED",
+                "Choose one planning month and revision before confirming the upload. Import other revisions separately.",
+                422,
+            )
+
         # 3. Determine target period & revision
         period = all_flat_rows[0]["target_period"]
         rev_label = all_flat_rows[0]["revision"]
@@ -1208,6 +1222,8 @@ def confirm_sales_schedule_import(
                 "planning_period": period,
                 "revision": rev_label,
                 "workflow": "BASIC_CENTRAL_V1",
+                "source_format": "SALES_SCHEDULE_V1",
+                "production_unit_source": "PRODUCT_MASTER",
             },
             staged_data=staged_items,
         )

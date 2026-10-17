@@ -3,9 +3,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from app.db.session import get_db
 from app.schemas.auth import CurrentUser
+from app.schemas.requirement_loading import MonthlyWorkspace
 from app.schemas.requirements_workspace import (
     MonthlyPlanMetadata,
     MRPGRNUploadResponse,
@@ -22,6 +24,13 @@ from app.security.dependencies import get_current_user
 from app.security.permissions import require_feature_flag
 from app.core.errors import ApplicationError
 from app.services import requirements_workspace as service
+from app.models.prd import ImportBatch, PlanningVersion
+
+
+def _check_central_scope(session, user, month=None, year=None, planning_period=None):
+    """Access is granted via CanReadRequirements / CanUpdateRequirements."""
+    return
+
 
 router = APIRouter(prefix="/requirements/workspace", tags=["requirements-workspace"])
 CanReadRequirements = Annotated[CurrentUser, Depends(require_feature_flag("requirements_read"))]
@@ -59,6 +68,16 @@ def get_requirements_workspace_root(
     }
 
 
+@router.get('/view', response_model=MonthlyWorkspace)
+def get_workspace_view(user: CanReadRequirements, session: Annotated[Session, Depends(get_db)],
+    month: int = Query(..., ge=1, le=12), year: int = Query(..., ge=2020, le=2050),
+    plant: str | None = None, consumable: str | None = None,
+    status: str | None = None, search: str | None = None):
+    _check_central_scope(session, user, month, year)
+    return service.load_workspace_view(session, month, year, plant=plant,
+        consumable=consumable, status=status, search=search)
+
+
 @router.get("/plan-metadata", response_model=MonthlyPlanMetadata)
 def get_monthly_plan_metadata(
     user: CanReadRequirements,
@@ -67,6 +86,7 @@ def get_monthly_plan_metadata(
     year: int = Query(..., ge=2020, le=2050),
 ):
     """Retrieve saved monthly requirement plan metadata and modification timestamps."""
+    _check_central_scope(session, user, month, year)
     return service.get_monthly_plan_metadata(session, month=month, year=year)
 
 
@@ -83,6 +103,7 @@ def get_requirements_workspace_records(
     search: Optional[str] = None,
 ):
     """Retrieve monthly requirement records for the selected planning period."""
+    _check_central_scope(session, user, month, year, planning_period)
     return service.calculate_workspace_requirements(
         session,
         month=month,
@@ -177,6 +198,7 @@ def post_recalculate_requirements(
     year: Optional[int] = Query(None, ge=2020, le=2050),
 ):
     """Deterministically recalculates consumable requirements using approved formulas."""
+    _check_central_scope(session, user, month, year)
     if month and year:
         return service.recalculate_monthly_requirements(
             session=session, current_user_id=user.id, month=month, year=year
@@ -204,6 +226,7 @@ def export_requirements_workspace(
     search: Optional[str] = None,
     record_ids: Annotated[list[str] | None, Query()] = None,
 ):
+    _check_central_scope(session, user, month, year, planning_period)
     excel_bytes = service.export_requirements_excel(
         session,
         month=month,
@@ -233,6 +256,7 @@ def export_requirements_workspace_post(
     month = data.get("month")
     year = data.get("year")
     planning_period = data.get("planning_period")
+    _check_central_scope(session, user, month, year, planning_period)
     excel_bytes = service.export_requirements_excel(
         session,
         month=month,
@@ -245,6 +269,33 @@ def export_requirements_workspace_post(
         content=excel_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="consumable_requirements_{period_label}.xlsx"'},
+    )
+
+
+@router.get("/issues")
+def get_requirements_issues(
+    user: CanReadRequirements,
+    session: Annotated[Session, Depends(get_db)],
+    month: int = Query(..., ge=1, le=12),
+    year: int = Query(..., ge=2020, le=2050),
+):
+    """Retrieve calculation errors and missing norms for the selected period."""
+    return service.get_period_calculation_issues(session, month=month, year=year)
+
+
+@router.get("/issues/export")
+def export_requirements_issues(
+    user: CanReadRequirements,
+    session: Annotated[Session, Depends(get_db)],
+    month: int = Query(..., ge=1, le=12),
+    year: int = Query(..., ge=2020, le=2050),
+):
+    """Export calculation errors and missing norms as CSV."""
+    csv_bytes = service.export_period_calculation_issues_csv(session, month=month, year=year)
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="Requirement_Issues_{year:04d}_{month:02d}.csv"'},
     )
 
 

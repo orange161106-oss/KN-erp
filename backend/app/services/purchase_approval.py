@@ -21,6 +21,8 @@ from app.core.errors import ApplicationError
 from app.models.audit import AuditLog
 from app.models.inventory_masters import Consumable, Supplier
 from app.models.purchase_approval import PurchaseApproval
+from app.models.purchase_plan import PurchasePlanDraft
+from app.models.inventory_masters import Unit
 from app.schemas.auth import CurrentUser
 from app.schemas.purchase_approval import (
     PurchaseApprovalResponse,
@@ -97,7 +99,19 @@ def list_purchase_approvals(
         desc(PurchaseApproval.created_at),
     )
     rows = session.execute(stmt).scalars().all()
-    return [_approval_to_response(r) for r in rows]
+    keys = {(row.planning_version_id, row.consumable_id) for row in rows if row.planning_version_id}
+    drafts = {(draft.planning_version_id, draft.consumable_id): (draft, code)
+        for draft, code in session.execute(select(PurchasePlanDraft, Unit.code)
+            .join(Unit, Unit.id == PurchasePlanDraft.unit_id)
+            .where(PurchasePlanDraft.planning_version_id.in_({key[0] for key in keys})))} if keys else {}
+    results = []
+    for row in rows:
+        value = _approval_to_response(row)
+        draft = drafts.get((row.planning_version_id, row.consumable_id))
+        if draft:
+            value.requested_purchase_qty, value.requested_purchase_unit, value.purchase_notes = draft[0].requested_qty, draft[1], draft[0].notes
+        results.append(value)
+    return results
 
 
 def submit_purchase_approval(

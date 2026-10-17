@@ -40,6 +40,7 @@ URL but do not require a signing key.
 | `LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; default `INFO` |
 | `DATABASE_URL` | Required PostgreSQL URL; no default |
 | `DB_CONNECT_TIMEOUT_SECONDS` | New connection timeout; integer 1–60, default 5 |
+| `DB_POOL_MODE` | `auto` (default), `session`, or `transaction`; auto uses transaction mode only on port 6543 |
 | `DB_POOL_SIZE` | Retained connections per backend worker; default 5 |
 | `DB_MAX_OVERFLOW` | Extra connections per worker under load; default 5 |
 | `DB_POOL_TIMEOUT_SECONDS` | Maximum wait for a pooled connection; default 10 |
@@ -85,7 +86,7 @@ employee/business rows, or connection URLs, and does not migrate or change data.
 Schema comparison checks column presence; it does not certify constraints, indexes,
 Alembic ancestry, or business correctness. A failed result exits nonzero.
 
-The default pool retains five connections and allows five overflow connections,
+Direct and session-mode connections use a pool retaining five connections and allowing five overflow connections,
 uses the most recently returned connection first, checks for stale connections,
 and keeps TCP keepalives enabled. A remote startup warm-up prepares just one
 connection; a temporary failure is logged without preventing later reconnection.
@@ -93,6 +94,12 @@ Size the total across **all workers, teammates, jobs and replicas** within your
 database/provider budget. Separate order/projection sessions can need multiple
 connections per request. Increasing worker count also multiplies the pool budget.
 Defaults are a conservative starting point, not a measured production capacity.
+
+Supabase's session and transaction URLs share a hostname. Port 5432 uses bounded
+application reuse; port 6543 uses NullPool and delegates pooling to the provider.
+For a nonstandard proxy port, set `DB_POOL_MODE` explicitly to match its configured
+mode. Transaction mode does not retain an application connection or claim a local
+pool-size budget. Prepared statements stay disabled for pooler compatibility.
 
 Database diagnostics distinguish connection, schema, credentials and capacity
 failures without raw SQL/DSNs. Transient authentication/health/PRD preview reads

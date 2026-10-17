@@ -72,6 +72,8 @@ class MonthlyPlanMetadata(BaseModel):
     updated_by: Optional[str] = None
     updated_by_name: Optional[str] = None
     record_count: int = 0
+    issue_count: int = 0
+    source_workflow: Optional[str] = None
     grn_reconciled: bool = False
     last_grn_synced_at: Optional[datetime] = None
 

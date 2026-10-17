@@ -61,6 +61,8 @@ def _to_requirement_response(req: CalculatedRequirement) -> CalculatedRequiremen
         product_id=req.product_id,
         product_code=req.product.code if req.product else None,
         product_name=req.product.name if req.product else None,
+        product_part_number=req.product.part_number if req.product else None,
+        product_item_id=req.product.item_id if req.product else None,
         plant_id=req.plant_id,
         plant_name=req.plant.name if req.plant else None,
         process_id=req.process_id,
@@ -99,7 +101,13 @@ def _to_error_response(err: RequirementCalculationError) -> RequirementCalculati
         consumable_code=err.consumable.code if err.consumable else None,
         error_code=err.error_code,
         error_message=err.error_message,
-        context_data=err.context_data,
+        context_data={
+            'part_number': err.product.part_number if err.product else None,
+            'item_id': err.product.item_id if err.product else None,
+            'part_description': err.product.name if err.product else None,
+            'planned_quantity': str(err.prd_order_item.planned_quantity) if err.prd_order_item else None,
+            **(err.context_data or {}),
+        },
         created_at=err.created_at,
     )
 
@@ -500,6 +508,7 @@ def get_calculation_error_by_id(db: Session, error_id: UUID) -> RequirementCalcu
             joinedload(RequirementCalculationError.product),
             joinedload(RequirementCalculationError.plant),
             joinedload(RequirementCalculationError.consumable),
+            joinedload(RequirementCalculationError.prd_order_item),
         )
         .where(RequirementCalculationError.id == error_id)
     )
@@ -545,6 +554,7 @@ def get_calculation_errors(
             joinedload(RequirementCalculationError.product),
             joinedload(RequirementCalculationError.plant),
             joinedload(RequirementCalculationError.consumable),
+            joinedload(RequirementCalculationError.prd_order_item),
         )
         .where(RequirementCalculationError.planning_version_id == planning_version_id)
         .order_by(RequirementCalculationError.created_at.asc())

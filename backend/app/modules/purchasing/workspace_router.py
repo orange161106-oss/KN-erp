@@ -9,6 +9,7 @@ from app.schemas.purchase_workspace import (
     PurchaseSubmitRequest,
     PurchaseSubmitResponse,
     PurchaseWorkspaceResponse,
+    PurchasePlanSave,
 )
 from app.security.permissions import require_permissions
 from app.services import purchase_workspace as service
@@ -16,10 +17,18 @@ from app.services import purchase_workspace as service
 router = APIRouter(prefix="/purchasing/workspace", tags=["purchasing-workspace"])
 
 
+@router.post('/save', response_model=PurchaseWorkspaceResponse)
+def save_purchase_workspace(req: PurchasePlanSave,
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(require_permissions('purchasing:view'))],
+    month: int = Query(..., ge=1, le=12), year: int = Query(..., ge=2020, le=2050)):
+    return service.save_purchase_plan(session, month=month, year=year, request=req, current_user=current_user)
+
+
 @router.get("", response_model=PurchaseWorkspaceResponse)
 def get_purchase_workspace(
     session: Annotated[Session, Depends(get_db)],
-    _: Annotated[CurrentUser, Depends(require_permissions("purchasing:view"))],
+    current_user: Annotated[CurrentUser, Depends(require_permissions("purchasing:view"))],
     month: int = Query(..., ge=1, le=12),
     year: int = Query(..., ge=2020, le=2050),
     search: Optional[str] = None,
@@ -31,6 +40,7 @@ def get_purchase_workspace(
         year=year,
         search=search,
         status_filter=status,
+        current_user=current_user,
     )
 
 
@@ -55,7 +65,7 @@ def post_submit_purchase_workspace(
 @router.get("/export")
 def export_purchase_workspace(
     session: Annotated[Session, Depends(get_db)],
-    _: Annotated[CurrentUser, Depends(require_permissions("purchasing:view"))],
+    current_user: Annotated[CurrentUser, Depends(require_permissions("purchasing:view"))],
     month: int = Query(..., ge=1, le=12),
     year: int = Query(..., ge=2020, le=2050),
     search: Optional[str] = None,
@@ -69,6 +79,7 @@ def export_purchase_workspace(
         search=search,
         status_filter=status,
         record_ids=record_ids,
+        current_user=current_user,
     )
     return Response(
         content=excel_bytes,

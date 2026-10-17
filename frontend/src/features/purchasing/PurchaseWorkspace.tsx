@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { apiClient, ApiError } from '../../api/client';
 import DataTable, { type ColumnDef, type HeaderGroupDef } from '../../components/DataTable';
 import Toolbar from '../../components/Toolbar';
 import type { MonthlyPlanMetadata } from '../requirements/Requirements';
+import { useAuth } from '../auth/context';
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -23,11 +25,16 @@ export interface PurchaseWorkspaceRecord {
   supplier_code: string | null;
   supplier_name: string | null;
   unit: string;
+  master_unit?: string | null;
+  requested_purchase_qty?: string | null;
+  requested_purchase_unit?: string | null;
+  purchase_notes?: string | null;
+  draft_version?: number;
   required_qty: string;
-  stock_qty: string;
-  po_pending_qty: string;
-  shortage_qty: string;
-  system_recommended_qty: string;
+  stock_qty: string | null;
+  po_pending_qty: string | null;
+  shortage_qty: string | null;
+  system_recommended_qty: string | null;
   approval_status: string | null;
   approval_id: string | null;
   status: string;
@@ -40,6 +47,7 @@ export interface PurchaseWorkspaceRecord {
 interface PurchaseWorkspaceResponse {
   plan_metadata: MonthlyPlanMetadata;
   records: PurchaseWorkspaceRecord[];
+  notice?: string | null;
 }
 
 function formatDisplayDate(dateStr?: string | null): string {
@@ -62,45 +70,109 @@ function statusClass(status: string): string {
   return 'bg-amber-50 text-amber-800 border-amber-200';
 }
 
-export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean }) {
+export default function PurchaseWorkspace({ canCreate, onOpenCentral }: {
+  canCreate: boolean;
+  onOpenCentral?: (versionId: string, reviewRequired: boolean) => void;
+}) {
+  const { user } = useAuth();
+  const canEditMaster = Boolean(user?.is_super_admin || user?.is_superuser || user?.roles.includes('ADMIN') || user?.masters_update || user?.permissions.includes('masters.consumables.write'));
   const [selectedMonth, setSelectedMonth] = useState(10);
   const [selectedYear, setSelectedYear] = useState(2026);
   const [records, setRecords] = useState<PurchaseWorkspaceRecord[]>([]);
+  const recordsRef = useRef<PurchaseWorkspaceRecord[]>([]);
+  const originalsRef = useRef(new Map<string, PurchaseWorkspaceRecord>());
+  const dirtyRef = useRef(false);
+  const [originalRecords, setOriginalRecords] = useState(new Map<string, PurchaseWorkspaceRecord>());
+  const [isSaving, setIsSaving] = useState(false);
+  const pendingSave = useRef(false);
   const [planMetadata, setPlanMetadata] = useState<MonthlyPlanMetadata | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const isCentralPlan = planMetadata?.source_workflow === 'BASIC_CENTRAL_V1';
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [selectedCell, setSelectedCell] = useState<{ rowId: string; colKey: keyof PurchaseWorkspaceRecord & string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const settledSearch = useDebouncedValue(searchQuery);
+  const loadGeneration = useRef(0);
   const [statusFilter, setStatusFilter] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const editableKeys = ['consumable_name', 'master_unit', 'requested_purchase_qty', 'purchase_notes'] as const;
+  const acceptRecords = useCallback((rows: PurchaseWorkspaceRecord[]) => {
+    const baseline = new Map(rows.map(row => [row.id, { ...row }]));
+    recordsRef.current = rows;
+    originalsRef.current = baseline;
+    dirtyRef.current = false;
+    setRecords(rows);
+    setOriginalRecords(baseline);
+  }, []);
+  const unsavedCount = records.filter(row => editableKeys.some(key => String(row[key] ?? '').trim() !== String(originalRecords.get(row.id)?.[key] ?? '').trim())).length;
+  const handleCellChange = (id: string, key: keyof PurchaseWorkspaceRecord & string, value: string) => {
+    if (!canCreate || isSaving || !editableKeys.some(item => item === key) || (['consumable_name', 'master_unit'].includes(key) && !canEditMaster)) return;
+    ++loadGeneration.current;
+    const next = recordsRef.current.map(row => row.id === id ? { ...row, [key]: value,
+      ...(key === 'requested_purchase_qty' ? { requested_purchase_unit: row.unit } : {}) } : row);
+    recordsRef.current = next;
+    dirtyRef.current = next.some(row => editableKeys.some(field => String(row[field] ?? '').trim() !== String(originalsRef.current.get(row.id)?.[field] ?? '').trim()));
+    setIsLoading(false);
+    setRecords(next);
+  };
+  const saveEdits = async () => {
+    if (!canCreate || pendingSave.current) return;
+    const edits = recordsRef.current.flatMap(row => {
+      const before = originalsRef.current.get(row.id);
+      const changes = Object.fromEntries(editableKeys.filter(key => String(row[key] ?? '').trim() !== String(before?.[key] ?? '').trim())
+        .map(key => [key, row[key] === '' ? null : row[key]]));
+      return Object.keys(changes).length ? [{ record_id: row.id, expected_draft_version: before?.draft_version ?? 0,
+        expected_name: before?.consumable_name ?? '', expected_master_unit: before?.master_unit ?? '', ...changes }] : [];
+    });
+    if (!edits.length) return;
+    pendingSave.current = true;
+    setIsSaving(true); setMessage(null);
+    try {
+      const response = await apiClient.post<PurchaseWorkspaceResponse>(`/api/v1/purchasing/workspace/save?month=${selectedMonth}&year=${selectedYear}`,
+        { edits, reason: 'Reviewed cell/row edits in Purchase Plan.' });
+      acceptRecords(response.records); setPlanMetadata(response.plan_metadata); setNotice(response.notice ?? null);
+      setMessage({ type: 'success', text: 'Purchase Plan changes saved. Requested quantities remain proposals for review.' });
+    } catch (error) {
+      setMessage({ type: 'error', text: error instanceof Error ? error.message : 'Could not save Purchase Plan changes.' });
+      throw error;
+    } finally { pendingSave.current = false; setIsSaving(false); }
+  };
+  const saveQuietly = async () => { try { await saveEdits(); } catch { /* The error is displayed above the grid. */ } };
 
   const loadWorkspace = useCallback(async () => {
+    if (dirtyRef.current) return;
+    const generation=++loadGeneration.current;
     setIsLoading(true);
     try {
       const params = new URLSearchParams({
         month: String(selectedMonth),
         year: String(selectedYear),
       });
-      if (searchQuery) params.set('search', searchQuery);
+      if (settledSearch) params.set('search', settledSearch);
       if (statusFilter) params.set('status', statusFilter);
       const data = await apiClient.get<PurchaseWorkspaceResponse>(`/api/v1/purchasing/workspace?${params}`);
-      setRecords(data.records);
+      if(generation!==loadGeneration.current)return;
+      acceptRecords(data.records);
       setPlanMetadata(data.plan_metadata);
+      setNotice(data.notice ?? null);
       setSelectedRowIds(new Set());
       setMessage(null);
     } catch (error) {
+      if(generation!==loadGeneration.current)return;
       setMessage({
         type: 'error',
         text: error instanceof ApiError ? error.message : 'Failed to load purchase workspace.',
       });
     } finally {
-      setIsLoading(false);
+      if(generation===loadGeneration.current)setIsLoading(false);
     }
-  }, [selectedMonth, selectedYear, searchQuery, statusFilter]);
+  }, [selectedMonth, selectedYear, settledSearch, statusFilter, acceptRecords]);
 
   useEffect(() => {
     void loadWorkspace();
+    return ()=>{++loadGeneration.current;};
   }, [loadWorkspace]);
 
   const readySelectedIds = useMemo(
@@ -125,7 +197,7 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
         record_ids: readySelectedIds,
         reason: reason.trim() || null,
       });
-      setRecords(res.records);
+      acceptRecords(res.records);
       setPlanMetadata(res.plan_metadata);
       setSelectedRowIds(new Set());
       setMessage({ type: 'success', text: res.message });
@@ -163,22 +235,22 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
   const headerGroups: HeaderGroupDef[] = [
     {
       label: 'CONSUMABLE',
-      colSpan: 3,
+      colSpan: 4,
       className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-ink-text/20 bg-brand-navy select-none',
     },
     {
       label: 'PURCHASE QUANTITY',
-      colSpan: 5,
+      colSpan: 6,
       className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-ink-text/20 bg-brand-steel select-none',
     },
     {
       label: 'APPROVAL STATUS & REFERENCES',
-      colSpan: 6,
+      colSpan: 7,
       className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-ink-text/20 bg-brand-navy select-none',
     },
   ];
 
-  const columns: ColumnDef<PurchaseWorkspaceRecord>[] = [
+  const baseColumns: ColumnDef<PurchaseWorkspaceRecord>[] = [
     {
       key: 'consumable_code',
       label: 'Consumable Item ID',
@@ -195,17 +267,18 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
       isSticky: true,
       render: value => <span className="font-semibold text-gray-900 truncate block">{value}</span>,
     },
-    { key: 'unit', label: 'Unit', width: 80, minWidth: 60, align: 'center' },
+    { key: 'unit', label: 'Calculation Unit', width: 110, minWidth: 60, align: 'center' },
+    { key: 'master_unit', label: 'Stock Unit (Master)', width: 130, minWidth: 90 },
     { key: 'required_qty', label: 'Requirement Qty', width: 140, minWidth: 100, align: 'right' },
-    { key: 'stock_qty', label: 'Stock Qty', width: 120, minWidth: 80, align: 'right' },
-    { key: 'po_pending_qty', label: 'PO Pending Qty', width: 130, minWidth: 90, align: 'right' },
+    { key: 'stock_qty', label: isCentralPlan ? 'Usable Stock (Assessment)' : 'Stock Qty', width: 160, minWidth: 80, align: 'right', render: value => value ?? 'Unavailable' },
+    { key: 'po_pending_qty', label: isCentralPlan ? 'Confirmed Incoming' : 'PO Pending Qty', width: 150, minWidth: 90, align: 'right', render: value => value ?? 'Unavailable' },
     {
       key: 'shortage_qty',
-      label: 'Net Shortage',
+      label: isCentralPlan ? 'Stock-adjusted Raw Need' : 'Net Shortage',
       width: 130,
       minWidth: 90,
       align: 'right',
-      render: value => <span className="font-mono font-bold text-red-700">{value}</span>,
+      render: value => <span className="font-mono font-bold text-red-700">{value ?? 'Unavailable'}</span>,
     },
     {
       key: 'system_recommended_qty',
@@ -213,8 +286,10 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
       width: 180,
       minWidth: 120,
       align: 'right',
-      render: value => <span className="font-mono font-bold text-indigo-950">{value}</span>,
+      render: value => <span className="font-mono font-bold text-indigo-950">{value ?? 'Unavailable'}</span>,
     },
+    { key: 'requested_purchase_qty', label: 'Requested Purchase Qty', type: 'number', width: 180, minWidth: 140,
+      render: (value, row) => value == null || value === '' ? '—' : `${value} ${row.requested_purchase_unit || row.unit}` },
     { key: 'supplier_code', label: 'Supplier Code', width: 130, minWidth: 90 },
     { key: 'supplier_name', label: 'Supplier Name', width: 180, minWidth: 120 },
     {
@@ -238,11 +313,14 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
       render: value => <span className="font-mono text-xs text-gray-700">{value || '-'}</span>,
     },
     { key: 'source_row_count', label: 'Requirement Rows', width: 130, minWidth: 90, align: 'center' },
-    { key: 'remarks', label: 'Remarks', width: 220, minWidth: 140 },
+    { key: 'remarks', label: 'Planning Details', width: 220, minWidth: 140 },
+    { key: 'purchase_notes', label: 'Remarks', width: 220, minWidth: 140 },
   ];
+  const columns = baseColumns.map(col => ({ ...col, isEditable: editableKeys.some(key => key === col.key)
+    && (!['consumable_name', 'master_unit'].includes(col.key) || canEditMaster) }));
 
   return (
-    <div className="flex flex-col h-full space-y-2">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden">
       {/* Compact Controls & Summary Bar (Section 9A) */}
       <div className="bg-white border border-gray-200 rounded-lg p-2 flex flex-wrap items-center justify-between gap-2 shadow-2xs flex-shrink-0">
         <div className="flex flex-wrap items-center gap-2">
@@ -251,7 +329,8 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
             <select
               aria-label="Planning Month"
               value={selectedMonth}
-              onChange={e => setSelectedMonth(Number(e.target.value))}
+              disabled={isSubmitting || isSaving || unsavedCount > 0}
+              onChange={e => { setRecords([]); setPlanMetadata(null); setNotice(null); setSelectedRowIds(new Set()); setSelectedMonth(Number(e.target.value)); }}
               className="ml-1.5 px-2 py-1 text-xs border border-gray-300 rounded bg-white text-gray-800 font-medium"
             >
               {MONTH_NAMES.map((month, idx) => <option key={month} value={idx + 1}>{month}</option>)}
@@ -262,7 +341,8 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
             <select
               aria-label="Planning Year"
               value={selectedYear}
-              onChange={e => setSelectedYear(Number(e.target.value))}
+              disabled={isSubmitting || isSaving || unsavedCount > 0}
+              onChange={e => { setRecords([]); setPlanMetadata(null); setNotice(null); setSelectedRowIds(new Set()); setSelectedYear(Number(e.target.value)); }}
               className="ml-1.5 px-2 py-1 text-xs border border-gray-300 rounded bg-white text-gray-800 font-medium"
             >
               {[2024, 2025, 2026, 2027, 2028, 2029, 2030].map(year => <option key={year}>{year}</option>)}
@@ -271,7 +351,7 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
           <button
             type="button"
             onClick={() => void loadWorkspace()}
-            disabled={isLoading}
+            disabled={isLoading || isSaving || unsavedCount > 0}
             className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-800 border border-gray-300 rounded font-semibold text-xs transition-colors"
           >
             {isLoading ? 'Loading…' : 'Load Plan'}
@@ -291,7 +371,7 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
             <button
               type="button"
               onClick={() => void submitSelected()}
-              disabled={isSubmitting || readySelectedIds.length === 0}
+              disabled={isSubmitting || isSaving || unsavedCount > 0 || readySelectedIds.length === 0}
               className="px-3 py-1 bg-brand-navy hover:bg-opacity-90 disabled:opacity-50 text-white rounded font-semibold text-xs shadow-2xs transition-colors"
             >
               {isSubmitting ? 'Submitting...' : `Submit to Approval${readySelectedIds.length ? ` (${readySelectedIds.length})` : ''}`}
@@ -333,11 +413,34 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
         </div>
       )}
 
-      <div className="flex-1 min-h-0 bg-white border border-gray-300 rounded shadow-xs flex flex-col overflow-hidden">
+      {notice && (
+        <div role="status" className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <p className="min-w-0 flex-1">{notice}</p>
+          {onOpenCentral && planMetadata?.plan_id && (
+            <button type="button" className="rounded border border-amber-300 bg-white px-3 py-1.5 font-semibold"
+              onClick={() => onOpenCentral(planMetadata.plan_id!, planMetadata.status !== 'APPROVED')}>
+              {planMetadata.status === 'APPROVED' ? 'Open central purchase assessment' : 'Review central requirements'}
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded border border-gray-300 bg-white shadow-xs">
+        {canCreate && <p className="shrink-0 border-b bg-white px-3 py-1.5 text-xs text-gray-600">Edit requested purchase quantities and remarks here. Name and stock-unit edits update Product Master; existing stock-history unit restrictions apply. Calculation and approval quantities stay protected.</p>}
+        {unsavedCount > 0 && <div className="shrink-0 border-b px-3 py-1 text-xs text-amber-900">
+          Save changes before loading another period.{' '}
+          <button type="button" disabled={isSaving} className="underline" onClick={() => {
+            acceptRecords(Array.from(originalsRef.current.values()));
+            void loadWorkspace();
+          }}>Discard changes and reload</button>
+        </div>}
         <Toolbar
           canImport={false}
           canCreate={false}
-          canUpdate={false}
+          canUpdate={canCreate}
+          onSave={saveQuietly}
+          isSaving={isSaving}
+          unsavedCount={unsavedCount}
           canDelete={false}
           canExport={false}
           selectedCount={selectedRowIds.size}
@@ -356,27 +459,34 @@ export default function PurchaseWorkspace({ canCreate }: { canCreate: boolean })
                 { value: 'SUBMITTED', label: 'Submitted' },
                 { value: 'SUPPLIER_REQUIRED', label: 'Supplier Required' },
                 { value: 'MASTER_REQUIRED', label: 'Master Required' },
+                { value: 'REQUIREMENT_REVIEW_REQUIRED', label: 'Requirement Review Required' },
+                { value: 'ASSESSMENT_REQUIRED', label: 'Inventory / Supplier Assessment Required' },
                 { value: 'NO_PURCHASE_REQUIRED', label: 'No Purchase Required' },
               ],
             },
           ]}
         />
-        <div className="flex-1 min-h-0">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <DataTable
+            virtualize
             columns={columns}
             headerGroups={headerGroups}
             data={records}
+            originalData={originalRecords}
+            onCellChange={handleCellChange}
+            onSave={saveQuietly}
+            onSaveRow={async (id, changes) => { Object.entries(changes).forEach(([key,value]) => handleCellChange(id, key as keyof PurchaseWorkspaceRecord & string, String(value ?? ''))); await saveEdits(); }}
             selectedIds={selectedRowIds}
             onSelectionChange={setSelectedRowIds}
             selectedCell={selectedCell}
             onSelectCell={setSelectedCell}
             isLoading={isLoading}
             canCreate={false}
-            canUpdate={false}
+            canUpdate={canCreate && !isSaving && !isSubmitting}
             canDelete={false}
             storageKey="knl_purchase_workspace_grid"
             onExport={exportRows}
-            emptyMessage={`No purchase recommendations found for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Recalculate or import requirements first.`}
+            emptyMessage={notice ? (searchQuery || statusFilter ? 'No consumables match the current filters. Clear the search or status filter to see this plan.' : notice) : `No purchase recommendations found for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Recalculate or import requirements first.`}
             getRowClassName={row => {
               if (row.status === 'READY_FOR_APPROVAL') return 'bg-emerald-50/60 hover:bg-emerald-100/60';
               if (row.status.endsWith('REQUIRED')) return 'bg-amber-50/60 hover:bg-amber-100/60';

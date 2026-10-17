@@ -32,10 +32,10 @@ def create_db_engine(settings: Settings, url: URL | None = None) -> Engine:
         "prepare_threshold": None,  # Prevents psycopg from using prepared statements on transaction poolers
     }
 
-    # For transaction pooling (port 6543) or Supabase pooler, use NullPool
-    # NullPool delegates connection management to Supabase's transaction pooler
-    # and prevents local workers from exhausting connection limits.
-    is_transaction_pooler = target_url.port == 6543 or "pooler.supabase.com" in (target_url.host or "")
+    # The same Supabase hostname serves session (5432) and transaction (6543)
+    # pooling. Hostname alone must not discard every session-mode connection.
+    is_transaction_pooler = settings.db_pool_mode == 'transaction' or (
+        settings.db_pool_mode == 'auto' and target_url.port == 6543)
     if is_transaction_pooler:
         return create_engine(
             target_url,
@@ -47,10 +47,11 @@ def create_db_engine(settings: Settings, url: URL | None = None) -> Engine:
     return create_engine(
         target_url,
         pool_pre_ping=True,
-        pool_recycle=60,
-        pool_size=2,
-        max_overflow=2,
-        pool_timeout=15,
+        pool_use_lifo=True,
+        pool_recycle=settings.db_pool_recycle_seconds,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_timeout=settings.db_pool_timeout_seconds,
         connect_args=connect_args,
         hide_parameters=True,
     )

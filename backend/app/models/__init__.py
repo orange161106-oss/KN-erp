@@ -3,6 +3,7 @@
 from app.models.alerts import InventoryAlert
 from app.models.grn import GRN, GRNItem, GoodsReceiptRecord, GRNLineItem, GRNRecord
 from app.models.purchase_approval import PurchaseApproval
+from app.models.purchase_plan import PurchasePlanDraft
 from app.models.purchase_order import PurchaseDemandEvidence, PurchaseOrder, PurchaseOrderItem
  
  

@@ -103,11 +103,8 @@ function renderRequirements(defaultTab: 'workspace' | 'mrp' = 'mrp') {
 test('renders Requirements table with Section 7A headers, metadata card, and records', async () => {
   fetchMock.mockImplementation(async input => {
     const urlStr = String(input);
-    if (urlStr.includes('/plan-metadata')) {
-      return jsonResponse(mockMetadata);
-    }
-    if (urlStr.includes('/records')) {
-      return jsonResponse(mockRequirements);
+    if (urlStr.includes('/workspace/view')) {
+      return jsonResponse({records:mockRequirements,plan_metadata:mockMetadata});
     }
     return jsonResponse([]);
   });
@@ -132,6 +129,7 @@ test('renders Requirements table with Section 7A headers, metadata card, and rec
   // Identifying columns rendered
   expect(screen.getByText('Excavator Bucket Arm')).toBeInTheDocument();
   expect(screen.getByText('P-10023')).toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
 test('user can trigger recalculation', async () => {
@@ -147,8 +145,8 @@ test('user can trigger recalculation', async () => {
         plan_metadata: mockMetadata,
       });
     }
-    if (urlStr.includes('/plan-metadata')) {
-      return jsonResponse(mockMetadata);
+    if (urlStr.includes('/workspace/view')) {
+      return jsonResponse({records:mockRequirements,plan_metadata:mockMetadata});
     }
     return jsonResponse(mockRequirements);
   });
@@ -167,14 +165,14 @@ test('user can trigger recalculation', async () => {
 test('MRP toolbar renders Upload GRN button and opens modal with reconciliation badge', async () => {
   fetchMock.mockImplementation(async input => {
     const urlStr = String(input);
-    if (urlStr.includes('/plan-metadata')) {
+    if (urlStr.includes('/workspace/view')) {
       return jsonResponse({
-        ...mockMetadata,
-        grn_reconciled: false,
+        records: mockRequirements,
+        plan_metadata: {
+          ...mockMetadata,
+          grn_reconciled: false,
+        },
       });
-    }
-    if (urlStr.includes('/records')) {
-      return jsonResponse(mockRequirements);
     }
     return jsonResponse([]);
   });
@@ -197,3 +195,22 @@ test('MRP toolbar renders Upload GRN button and opens modal with reconciliation 
   expect(screen.getByLabelText(/Target Plant/i)).toBeInTheDocument();
 });
 
+test('renders directly without tabs and displays compact issues banner when issues exist', async () => {
+  fetchMock.mockImplementation(async input => {
+    const path = String(input);
+    if (path.includes('/workspace/view')) {
+      return jsonResponse({
+        records: mockRequirements,
+        plan_metadata: { ...mockMetadata, issue_count: 3 },
+      });
+    }
+    return jsonResponse([]);
+  });
+
+  renderRequirements();
+  await screen.findByText('MIG Welding Wire 1.2mm');
+  expect(screen.getByText(/3 issues:/)).toBeInTheDocument();
+  expect(screen.getByText('Download issues list (CSV)')).toBeInTheDocument();
+  expect(screen.queryByText('Central requirement plan')).not.toBeInTheDocument();
+  expect(screen.queryByText('Monthly Requirement Planner')).not.toBeInTheDocument();
+});
