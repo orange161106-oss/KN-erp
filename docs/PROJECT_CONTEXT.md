@@ -827,3 +827,28 @@ passed. A sandboxed run stalled at the TestClient export check after38 checks; i
 was stopped and the same focused suite passed outside the sandbox. No full-suite
 claim, migration, commit or push. The supplied workbook remains unchanged.
 
+## Tool life engine, zero-stock policy, supplier resolution & October 2026 reconciliation — 2026-10-17
+
+Owner requested fixing purchase recommendations and requirement numbers for October 2026 data across 8 identified discrepancies.
+Alembic migration c004_tool_life_and_output_per_unit added output_per_unit, rule_type and purchasing_unit to Consumable and
+ConsumptionNorm models and tables. 374 consumables and 662 norms were populated with tool-life and rule-type master data.
+
+Deterministic KNL calculation engines in requirements_workspace.py and purchase_workspace.py now apply tool life:
+for TOOL_LIFE, Req Qty = ceil(Gross Scheduled Qty / output_per_unit). Missing tool life flags OUTPUT_PER_UNIT_MISSING and suppresses
+order recommendations; PRODUCTION_RATE uses gross quantity directly. Supplier lookup falls back to primary Consumable.supplier_id
+when junction mappings are absent, restoring suppliers and master 'Nos' purchasing units for all 31 target items.
+Exported Excel columns for Output / Unit now write numeric cells (data_type == 'n').
+
+Configurable treat_missing_stock_as_zero (default True) added to core/config.py, MonthlyPurchaseInputs and workspace services,
+matching Excel SUMIF behavior and unblocking AAC100002QC, AAC100003QC, AAC100159QC and BAA110159QC with zero stock and explicit audit notes.
+Order quantities enforce max(Raw Need, MOQ) rounded up to MOQ multiples when raw need is positive.
+
+Reconciliation workbook Purchase_Reconciliation_2026_10.xlsx was generated at root and artifact directory. 15 of 31 items match KNL's
+plan 100%. The remaining 16 items have scheduled quantity differences traced component-by-component to manual typed overrides in
+oct plan og.xlsx versus master norms in Basic_Consumable_Plan_Sheet.xlsx; ERP calculations strictly preserve master norm traceability.
+Total purchase value for the 31 target items is Rs 1,98,909 (~Rs 1.99 Lakhs) versus Plan R1 Rs 87,030 (~Rs 0.87 Lakhs), reduced from
+Rs 4.5+ Crores previously.
+
+Validation: 68 backend pytest tests (tool life math, monthly purchase formula, central workspace, norm imports, requirement consistency)
+and frontend Vite production build passed with zero errors. All changes committed (e2e3d53) and pushed to branch feature/mrp-view-consolidation.
+Protected files stock_management_service.py and DataTable.tsx remain untouched.
