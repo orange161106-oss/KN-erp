@@ -20,6 +20,8 @@ interface ConsumableRow {
   category: string;
   type_of_material: string;
   description: string;
+  output_per_unit?: number | null;
+  rule_type?: string | null;
   output_unit: string;
   rate: number | null;
   is_active: boolean;
@@ -55,6 +57,7 @@ const INLINE_COLUMNS = {
   consumables: [
     ['supplier_id', 'Supplier ID', false], ['supplier_name', 'Supplier name', true], ['item_id', 'Item ID', false],
     ['category', 'Category', true], ['type_of_material', 'Type of material', true], ['description', 'Description', true],
+    ['output_per_unit', 'Output / Unit', true], ['rule_type', 'Rule Type', true],
     ['output_unit', 'Stock Unit', true], ['rate', 'Rate', true],
   ],
   assemble: [

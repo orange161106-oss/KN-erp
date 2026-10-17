@@ -73,7 +73,7 @@ def _with_plan_edits(session, workspace):
     return workspace
 
 
-def _central_workspace(session, version, meta, *, month, year, search, status_filter, current_user, view='normal'):
+def _central_workspace(session, version, meta, *, month, year, search, status_filter, current_user, view='normal', treat_missing_as_zero: bool = True):
     """Company monthly preview alongside immutable, previously submitted evidence."""
     if current_user and not current_user.is_super_admin and current_user.plant_ids:
         raise ApplicationError('CENTRAL_REVIEW_REQUIRED', 'Central plans are reviewed by Super Admin.', 403)
@@ -106,7 +106,7 @@ def _central_workspace(session, version, meta, *, month, year, search, status_fi
         notice += 'Monthly preview uses MSL and MOQ from this month\'s Stock Management and previous month\'s closing stock. Pending POs are not deducted. Review the requirements and approve the central plan using the menu beside Recalculate in Requirement before purchase submission.'
     else:
         notice = 'Central requirements are approved. Monthly quantities are a company-formula preview. Purchase submission still requires Stock and purchase assessment in Requirement. Previously submitted assessments keep their saved quantities and calculation basis.'
-    inputs = MonthlyPurchaseInputs(session, month=month, year=year, material_ids={row[0] for row in totals}) if totals else None
+    inputs = MonthlyPurchaseInputs(session, month=month, year=year, material_ids={row[0] for row in totals}, treat_missing_as_zero=treat_missing_as_zero) if totals else None
     # Only an explicit Product Master supplier selection is displayed; never pick
     # the first supplier alphabetically or treat supplier absence as zero demand.
     master_suppliers = {(mapping.consumable_id, supplier.id): supplier for mapping, supplier in session.execute(
@@ -114,20 +114,61 @@ def _central_workspace(session, version, meta, *, month, year, search, status_fi
         .where(SupplierConsumable.consumable_id.in_({row[0] for row in totals}),
                SupplierConsumable.is_active == True, Supplier.is_active == True))} if totals else {}
     records = []
+    import math
     for material_id, code, name, unit_id, uom, required, count, created_at, updated_at in totals:
         previous = submitted.get((material_id, uom))
         approval, report, supplier = previous if previous else (None, {}, None)
         status = 'REQUIREMENT_REVIEW_REQUIRED' if not approved else 'ASSESSMENT_REQUIRED'
         remarks = 'Requirement: review issues, then use the Recalculate menu to approve the plan.' if not approved else 'Requirement: Recalculate menu, Stock and purchase assessment. Select verified stock and supplier rules.'
+        
+        gross_sch = _q4(required)
+        material = inputs.masters.get(material_id, (None, None))[0] if inputs else None
+        tool_life = material.output_per_unit if material else None
+        rule_type = material.rule_type if material and material.rule_type else ('TOOL_LIFE' if (tool_life and tool_life > 1) else 'PRODUCTION_RATE')
+        
+        is_tool_life = rule_type == 'TOOL_LIFE' or (tool_life is not None and tool_life > 1)
+        is_output_missing = False
+        if is_tool_life:
+            if tool_life is None or tool_life <= Decimal('0'):
+                is_output_missing = True
+                effective_required = None
+            else:
+                effective_required = _q4(math.ceil(gross_sch / tool_life))
+        elif rule_type == 'AREA_COVERAGE':
+            if tool_life is None or tool_life <= Decimal('0'):
+                is_output_missing = True
+                effective_required = None
+            else:
+                effective_required = _q4(round(gross_sch / tool_life))
+        else:
+            effective_required = gross_sch
+
         if approval:
             status = 'SUBMITTED'
             remarks = f'Latest traced purchase assessment is {approval.status}. Stock and incoming quantities are the saved assessment evidence.'
             calculated = dict(calculation_basis=approval.rule_version,
                 calculation_details='Saved submitted assessment; original quantities and stock sources are retained.')
+        elif is_output_missing:
+            status = 'OUTPUT_PER_UNIT_MISSING'
+            remarks = 'Output per Unit missing'
+            calculated = dict(
+                calculation_basis='TOOL_LIFE',
+                calculation_details='Output per Unit is missing on TOOL_LIFE consumable.',
+                raw_quantity=None,
+                recommended_quantity=None,
+                purchase_value=None,
+                stock_qty=None,
+                minimum_stock_level=None,
+                minimum_order_qty=None,
+                category=material.category if material else None,
+                type_of_material=material.type_of_material if material else None,
+                output_unit=None,
+            )
         else:
-            calculated = inputs.calculate(material_id=material_id, unit_id=unit_id, uom=uom, required=_q4(required))
-            material = inputs.masters.get(material_id, (None, None))[0]
+            calculated = inputs.calculate(material_id=material_id, unit_id=unit_id, uom=uom, required=effective_required)
             supplier = master_suppliers.get((material_id, material.supplier_id)) if material else None
+            if not supplier and material and material.supplier_id:
+                supplier = session.get(Supplier, material.supplier_id)
             remarks = calculated['calculation_details']
             if approved and calculated['recommended_quantity'] is None:
                 status = 'MONTHLY_INPUTS_REQUIRED'
@@ -136,13 +177,32 @@ def _central_workspace(session, version, meta, *, month, year, search, status_fi
         stock_qty = calculated.pop('stock_qty', None)
         raw_qty = calculated.pop('raw_quantity', None)
         monthly_qty = calculated.pop('recommended_quantity', None)
+        calc_out_unit = calculated.pop('output_unit', None)
+
+        out_display = None
+        if tool_life is not None:
+            out_display = str(int(tool_life) if tool_life == int(tool_life) else tool_life)
+        elif calc_out_unit:
+            out_display = calc_out_unit
+        elif material and material.output_unit:
+            out_display = material.output_unit
+
+        supplier_name_val = supplier.name if supplier else (material.supplier_name if material else None)
+        supplier_code_val = supplier.code if supplier else None
+
+        unit_val = material.purchasing_unit if material and material.purchasing_unit else uom
+
         records.append(PurchaseWorkspaceRecord(
             id=f'{version.id}:{material_id}:{unit_id}', planning_period=version.planning_period,
             planning_month=month, planning_year=year, plan_id=str(version.id), revision=version.revision_label,
-            consumable_id=material_id, consumable_code=code, consumable_name=name, unit=uom,
-            required_qty=_q4(required), source_row_count=count, created_at=created_at, updated_at=updated_at,
-            supplier_id=supplier.id if supplier else None, supplier_code=supplier.code if supplier else None,
-            supplier_name=supplier.name if supplier else None,
+            consumable_id=material_id, consumable_code=code, consumable_name=name, unit=unit_val,
+            required_qty=effective_required if effective_required is not None else Decimal('0'),
+            gross_sch=gross_sch,
+            output_unit=out_display,
+            output_per_unit=tool_life,
+            source_row_count=count, created_at=created_at, updated_at=updated_at,
+            supplier_id=supplier.id if supplier else None, supplier_code=supplier_code_val,
+            supplier_name=supplier_name_val,
             stock_qty=(_q4(report['current_stock']) if report.get('current_stock') is not None else None) if approval else stock_qty,
             po_pending_qty=_q4(report['confirmed_incoming_before_receipt']) if report.get('confirmed_incoming_before_receipt') is not None else None,
             shortage_qty=approval.raw_calculated_qty if approval else raw_qty,
@@ -247,6 +307,7 @@ def list_purchase_workspace(
     category: Optional[str] = None,
     current_user: CurrentUser | None = None,
     view: str = 'normal',
+    treat_missing_as_zero: bool = True,
 ) -> PurchaseWorkspaceResponse:
     planning_period = f"{year:04d}-{month:02d}"
     meta = get_monthly_plan_metadata(session, month, year)
@@ -257,7 +318,8 @@ def list_purchase_workspace(
 
     if meta.source_workflow == 'BASIC_CENTRAL_V1':
         return _with_plan_edits(session, _central_workspace(session, version, meta, month=month, year=year,
-            search=search, status_filter=status_filter, current_user=current_user, view=view))
+            search=search, status_filter=status_filter, current_user=current_user, view=view,
+            treat_missing_as_zero=treat_missing_as_zero))
 
     rows = session.scalars(
         select(MonthlyRequirementRecord).where(
@@ -598,7 +660,8 @@ def export_purchase_workspace_excel(
     status_filter: Optional[str] = None,
     record_ids: Optional[list[str]] = None,
     current_user: CurrentUser | None = None,
-    view: str = 'normal',
+    view: Optional[str] = None,
+    treat_missing_as_zero: bool = True,
 ) -> bytes:
     workspace = list_purchase_workspace(
         session,
@@ -607,7 +670,8 @@ def export_purchase_workspace_excel(
         search=search,
         status_filter=status_filter,
         current_user=current_user,
-        view=view,
+        view=view or 'normal',
+        treat_missing_as_zero=treat_missing_as_zero,
     )
     records = workspace.records
     if record_ids:
@@ -759,7 +823,7 @@ def _export_purchase_view(records, *, month: int, year: int, view: str) -> bytes
         ('Max. Stock Level', 'max_stock_level'), ('Rate', 'unit_rate'),
         (f'O/s. {prev_label}', 'opening_qty'), (f'Receipt {prev_label}', 'receipt_qty'),
         (f'Issues {prev_label}', 'issue_qty'), (f'C/s. {prev_label}', 'stock_qty'),
-        (f'Prd. Qty. {prev_label}', None), (f'Sch. {month_label}', None),
+        (f'Prd. Qty. {prev_label}', None), (f'Sch. {month_label}', 'gross_sch'),
         (f'Req. Qty. {month_label}', 'required_qty'), ('Order Qty.', 'system_recommended_qty'),
         ('Order Value', 'purchase_value'), ('Pur. Qty.', None), ('Pur. Value', None),
         ('Bal. Pur. Qty', None), ('Bal. Pur. Value', None),
@@ -821,6 +885,22 @@ def _export_purchase_view(records, *, month: int, year: int, view: str) -> bytes
                     value = index
                 elif key and key.startswith('@'):
                     value = source.get(key[1:]) if source else None
+                elif key in ('output_unit', 'output_per_unit'):
+                    raw_val = getattr(record, 'output_per_unit', None)
+                    if raw_val is None:
+                        raw_val = getattr(record, 'output_unit', None)
+                    if raw_val is not None:
+                        try:
+                            s = str(raw_val).strip()
+                            if s:
+                                f = float(s)
+                                value = int(f) if f.is_integer() else f
+                            else:
+                                value = None
+                        except (ValueError, TypeError):
+                            value = raw_val
+                    else:
+                        value = None
                 else:
                     value = getattr(record, key, None) if key else None
                 values.append(value)

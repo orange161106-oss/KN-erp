@@ -10,7 +10,7 @@ import { NORM_ENDPOINT } from './types';
 import type { ConsumptionNorm, NormReferenceData } from './types';
 
 const RULE_TYPES = ['PRODUCTION_RATE', 'AREA_COVERAGE', 'PACKING_RATIO', 'TOOL_LIFE', 'FIXED_QUANTITY', 'PLANT_REQUEST', 'MAINTENANCE', 'MIN_MAX'];
-const REFERENCE_FIELDS = ['part_number', 'part_name', 'used_part_number', 'thickness', 'process_count', 'reference_production_qty', 'reference_schedule_qty', 'sch', 'prd_order', 'is_general', 'sch_overridden'] as const;
+const REFERENCE_FIELDS = ['part_number', 'part_name', 'used_part_number', 'thickness', 'process_count', 'reference_production_qty', 'reference_schedule_qty', 'sch', 'prd_order', 'is_general', 'sch_overridden', 'output_per_unit'] as const;
 
 type NormRow = ConsumptionNorm & Record<typeof REFERENCE_FIELDS[number], any> & {
   s_no: number;
@@ -26,6 +26,7 @@ function gridRow(norm: ConsumptionNorm, index: number, allNorms: ConsumptionNorm
   const procCount = String(reference.process_count ?? params.process_count ?? '');
   const prdOrder = String(reference.reference_production_qty ?? params.prd_order ?? '1');
   const sch = String(reference.reference_schedule_qty ?? reference.sch ?? params.sch ?? params.rate ?? '');
+  const outputPerUnit = String(norm.output_per_unit ?? reference.output_per_unit ?? '');
 
   const flagList: string[] = [];
   if (isGeneral) flagList.push('General');
@@ -55,6 +56,7 @@ function gridRow(norm: ConsumptionNorm, index: number, allNorms: ConsumptionNorm
     process_count: procCount,
     reference_production_qty: prdOrder,
     reference_schedule_qty: sch,
+    output_per_unit: outputPerUnit,
     sch: sch,
     prd_order: prdOrder,
     parameters_json: JSON.stringify(norm.parameters),
@@ -233,6 +235,8 @@ export default function ConsumptionNorms() {
         </span>
       ),
     },
+    { key: 'output_per_unit', label: 'Output / Unit', width: 130, type: 'number', isEditable: true },
+    { key: 'rule_type', label: 'Rule Type', width: 150, isEditable: false },
     { key: 'is_active', label: 'Status', width: 100, isEditable: false, render: value => value ? 'Active' : 'Historical' },
     {
       key: 'flags',
