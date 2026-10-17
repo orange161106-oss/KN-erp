@@ -827,6 +827,17 @@ passed. A sandboxed run stalled at the TestClient export check after38 checks; i
 was stopped and the same focused suite passed outside the sandbox. No full-suite
 claim, migration, commit or push. The supplied workbook remains unchanged.
 
+## Purchase Plan view recovery — 2026-10-17
+
+Repository history and the preserved merge-review patch had no committed MD/Normal switch to restore. The supplied MD-VIew and
+Normal-View workbooks are layout templates (76 and 23 headings respectively), not populated purchase plans. Purchase Plan now
+offers Normal and MD views for the selected month/year. Normal retains the existing editable purchase grid and can show the 23
+template columns; MD shows saved per-product/process requirement details against the 76-column management layout. Export Excel uses
+the selected layout. The previous month's active Stock Statement and current month's active Stock Management upload supply stock
+movements, MSL, MOQ, max level and lead time; Product Master supplies item details and rate. Fields without verified source data
+remain blank rather than assuming zero or inventing R2/actual purchases. MD item totals are printed once across expanded source rows
+to prevent double counting. The KNL monthly purchase calculation, plan edits, review restrictions and approval routes were not changed.
+
 ## Tool life engine, zero-stock policy, supplier resolution & October 2026 reconciliation — 2026-10-17
 
 Owner requested fixing purchase recommendations and requirement numbers for October 2026 data across 8 identified discrepancies.
@@ -850,5 +861,6 @@ Total purchase value for the 31 target items is Rs 1,98,909 (~Rs 1.99 Lakhs) ver
 Rs 4.5+ Crores previously.
 
 Validation: 68 backend pytest tests (tool life math, monthly purchase formula, central workspace, norm imports, requirement consistency)
-and frontend Vite production build passed with zero errors. All changes committed (e2e3d53) and pushed to branch feature/mrp-view-consolidation.
+and frontend Vite production build passed with zero errors. All changes committed and pushed to branch feature/mrp-view-consolidation.
 Protected files stock_management_service.py and DataTable.tsx remain untouched.
+

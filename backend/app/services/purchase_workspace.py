@@ -218,7 +218,8 @@ def _central_workspace(session, version, meta, *, month, year, search, status_fi
             .join(PRDOrderItem, PRDOrderItem.id == CalculatedRequirement.prd_order_item_id)
             .join(Product, Product.id == CalculatedRequirement.product_id)
             .join(Process, Process.id == CalculatedRequirement.process_id)
-            .where(CalculatedRequirement.planning_version_id == version.id)
+            .where(CalculatedRequirement.planning_version_id == version.id,
+                   CalculatedRequirement.consumable_id.in_({record.consumable_id for record in records}))
             .order_by(CalculatedRequirement.consumable_id, PRDOrderItem.source_row_number)
         ):
             params = requirement.parameters or {}
@@ -430,6 +431,8 @@ def list_purchase_workspace(
 
         item_key = code.strip().upper()
         flags: list[str] = []
+        stmt_line = stmt_lines_map.get(item_key)
+        resolved_param = None
         if prev_statement_batch:
             if item_key in stmt_lines_map:
                 stmt_line = stmt_lines_map[item_key]
@@ -486,6 +489,20 @@ def list_purchase_workspace(
             supplier_code=supplier.code if supplier else None,
             supplier_name=supplier.name if supplier else None,
             unit=stock_unit.code if stock_unit else str(bucket["unit"]),
+            category=consumable.category if consumable else None,
+            type_of_material=consumable.type_of_material if consumable else None,
+            output_unit=consumable.output_unit if consumable else None,
+            unit_rate=consumable.rate if consumable else None,
+            minimum_stock_level=resolved_param.min_stock_level if resolved_param else None,
+            max_stock_level=resolved_param.max_stock_level if resolved_param else None,
+            minimum_order_qty=resolved_param.min_order_qty if resolved_param else None,
+            lead_time_days=resolved_param.lead_time_days if resolved_param else None,
+            opening_qty=stmt_line.opening_qty if stmt_line else None,
+            opening_value=stmt_line.opening_value if stmt_line else None,
+            receipt_qty=stmt_line.receipt_qty if stmt_line else None,
+            receipt_value=stmt_line.receipt_value if stmt_line else None,
+            issue_qty=stmt_line.issue_qty if stmt_line else None,
+            closing_value=stmt_line.closing_value if stmt_line else None,
             required_qty=_q4(bucket["required"]),  # type: ignore[arg-type]
             stock_qty=_q4(effective_stock),
             po_pending_qty=_q4(bucket["po_pending"]),  # type: ignore[arg-type]
@@ -679,7 +696,8 @@ def export_purchase_workspace_excel(
         records = [r for r in records if r.id in ids]
 
     if view in ('normal', 'md'):
-        return _export_purchase_view(records, month=month, year=year, view=view)
+        return _export_purchase_view(records, month=month, year=year, view=view,
+                                     revision=workspace.plan_metadata.revision_label)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -811,7 +829,7 @@ def export_purchase_workspace_excel(
     return buf.getvalue()
 
 
-def _export_purchase_view(records, *, month: int, year: int, view: str) -> bytes:
+def _export_purchase_view(records, *, month: int, year: int, view: str, revision: str = 'R1') -> bytes:
     """Export the selected customer layout using saved sources only; blanks are not zeroes."""
     prev_month, prev_year = (12, year - 1) if month == 1 else (month - 1, year)
     prev_label = f"{calendar.month_abbr[prev_month]}-{str(prev_year)[-2:]}"
@@ -846,11 +864,11 @@ def _export_purchase_view(records, *, month: int, year: int, view: str) -> bytes
         ('Rate', 'unit_rate'), ('Min stock level', 'minimum_stock_level'),
         ('Max stock level', 'max_stock_level'), ('Minimum order qty.', 'minimum_order_qty'),
         ('Lead time to supply in days', 'lead_time_days'),
-        ('Sch. Qty. as per assy R1', '@production_qty'), ('Purchasing Unit', 'unit'),
-        ('Sch. Qty. Cons. Itemwise R1', '@required_qty'),
+        (f'Sch. Qty. as per assy {revision}', '@production_qty'), ('Purchasing Unit', 'unit'),
+        (f'Sch. Qty. Cons. Itemwise {revision}', '@required_qty'),
         (f"Opening stock {calendar.month_abbr[month]}'{str(year)[-2:]}", 'stock_qty'),
-        ('Req. Qty.', 'required_qty'), ('Order Qty R1', 'system_recommended_qty'),
-        ('Order Value R1', 'purchase_value'),
+        ('Req. Qty.', 'required_qty'), (f'Order Qty {revision}', 'system_recommended_qty'),
+        (f'Order Value {revision}', 'purchase_value'),
     ]
     trailing = [
         'Receipt qty. R1', 'Receipt value R1', 'Sch. Qty. as per assy R2',
@@ -876,13 +894,18 @@ def _export_purchase_view(records, *, month: int, year: int, view: str) -> bytes
     ws.append([f'KNL PURCHASE PLAN — {view.upper()} VIEW — {calendar.month_name[month]} {year}'])
     ws.append(['Blank cells indicate that no verified value is available; R1/R2 and purchase actuals are not inferred.'])
     ws.append([label for label, _ in columns])
-    for index, record in enumerate(records, 1):
+    serial = 0
+    for record in records:
         sources = record.md_sources if view == 'md' and record.md_sources else [None]
-        for source in sources:
+        for source_index, source in enumerate(sources):
+            serial += 1
             values = []
-            for _label, key in columns:
+            for col_index, (_label, key) in enumerate(columns):
+                if view == 'md' and source_index > 0 and col_index >= 29:
+                    values.append(None)
+                    continue
                 if key == '#':
-                    value = index
+                    value = serial
                 elif key and key.startswith('@'):
                     value = source.get(key[1:]) if source else None
                 elif key in ('output_unit', 'output_per_unit'):
