@@ -159,7 +159,7 @@ def post_upload_mrp_grn(
     user: CanUpdateRequirements,
     session: Annotated[Session, Depends(get_db)],
     file: UploadFile = File(...),
-    plant_id: str = Form(...),
+    plant_id: Optional[str] = Form(None),
     planning_month: int = Form(...),
     planning_year: int = Form(...),
 ):

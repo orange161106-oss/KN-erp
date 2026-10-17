@@ -191,8 +191,8 @@ test('MRP toolbar renders Upload GRN button and opens modal with reconciliation 
   await userEvent.click(grnBtn);
 
   expect(await screen.findByText(/Upload Store GRN \(Goods Receipt Note\)/i)).toBeInTheDocument();
-  expect(screen.getByText(/Month-End Overwrite Upsert Engine/i)).toBeInTheDocument();
-  expect(screen.getByLabelText(/Target Plant/i)).toBeInTheDocument();
+  expect(screen.queryByLabelText(/Target Plant/i)).not.toBeInTheDocument();
+  expect(screen.getByText(/Planning Period/i)).toBeInTheDocument();
 });
 
 test('renders directly without tabs and displays compact issues banner when issues exist', async () => {

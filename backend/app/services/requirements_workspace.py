@@ -1422,9 +1422,9 @@ def ingest_mrp_grn(
     session,
     file_bytes: bytes,
     filename: str,
-    plant_id: str,
-    planning_month: int,
-    planning_year: int,
+    plant_id: Optional[str] = None,
+    planning_month: int = 1,
+    planning_year: int = 2026,
     current_user_id: Optional[UUID] = None,
 ) -> dict[str, Any]:
     """Ingests store GRN file and performs month-end overwrite upsert for MRP consumable records."""
@@ -1484,7 +1484,7 @@ def ingest_mrp_grn(
     if not raw_rows:
         raise ApplicationError("EMPTY_DATA", "No data rows found in uploaded GRN file.", 400)
 
-    # 2. Extract and validate consumable items and quantities
+    # 2. Extract and validate consumable items, plants, and quantities
     item_keys = (
         "item_id", "consumable_id", "item_code", "consumable_code", "material_code",
         "code", "item_no", "part_no", "part_number", "item", "consumable"
@@ -1496,9 +1496,12 @@ def ingest_mrp_grn(
     invoice_keys = ("invoice_no", "invoice_num", "invoice_number", "bill_no", "grn_no", "grn_number", "challan_no")
     date_keys = ("grn_date", "receipt_date", "date", "invoice_date")
     rate_keys = ("rate", "unit_rate", "grn_rate", "price")
+    plant_keys = (
+        "plant", "plant_id", "facility", "plant_name", "location", "unit_location", "works", "unit"
+    )
 
-    # Aggregate incoming quantities per consumable within this file
-    aggregated_incoming: dict[str, dict[str, Any]] = {}
+    # Aggregate incoming quantities per consumable and plant within this file
+    aggregated_incoming: dict[tuple[str, Optional[str]], dict[str, Any]] = {}
 
     for row_idx, r in enumerate(raw_rows, start=1):
         item_val = None
@@ -1542,23 +1545,37 @@ def ingest_mrp_grn(
                     pass
                 break
 
+        plant_val = None
+        for k in plant_keys:
+            if k in r and r[k] is not None and str(r[k]).strip():
+                plant_val = str(r[k]).strip()
+                break
+
+        if not plant_val and plant_id and str(plant_id).strip():
+            plant_val = str(plant_id).strip()
+
+        row_plant_key = _normalize_plant_identifier(plant_val) if plant_val else None
+
         item_key = item_val.strip().upper()
-        if item_key not in aggregated_incoming:
-            aggregated_incoming[item_key] = {
+        agg_key = (item_key, row_plant_key)
+        if agg_key not in aggregated_incoming:
+            aggregated_incoming[agg_key] = {
                 "raw_item": item_val.strip(),
                 "qty": qty_clean,
                 "invoice_no": inv_val,
                 "grn_date": date_val,
                 "rate": rate_val,
+                "row_plant_key": row_plant_key,
+                "raw_plant": plant_val,
             }
         else:
-            aggregated_incoming[item_key]["qty"] += qty_clean
+            aggregated_incoming[agg_key]["qty"] += qty_clean
             if inv_val:
-                aggregated_incoming[item_key]["invoice_no"] = inv_val
+                aggregated_incoming[agg_key]["invoice_no"] = inv_val
             if date_val:
-                aggregated_incoming[item_key]["grn_date"] = date_val
+                aggregated_incoming[agg_key]["grn_date"] = date_val
             if rate_val is not None:
-                aggregated_incoming[item_key]["rate"] = rate_val
+                aggregated_incoming[agg_key]["rate"] = rate_val
 
     if not aggregated_incoming:
         raise ApplicationError(
@@ -1567,10 +1584,7 @@ def ingest_mrp_grn(
             400,
         )
 
-    # 3. Target plant normalization and existing record index
-    target_plant_key = _normalize_plant_identifier(plant_id)
-
-    # Fetch existing records for this month and year
+    # 3. Existing record index across month and year
     existing_records = session.scalars(
         select(MonthlyRequirementRecord).where(
             MonthlyRequirementRecord.planning_month == planning_month,
@@ -1579,13 +1593,15 @@ def ingest_mrp_grn(
         )
     ).all()
 
-    # Index by normalized plant and consumable code
+    # Index by (consumable_code, plant_key) and globally by consumable_code
+    existing_by_plant_and_code: dict[tuple[str, str], list[MonthlyRequirementRecord]] = {}
     existing_by_code: dict[str, list[MonthlyRequirementRecord]] = {}
     for rec in existing_records:
-        rec_plant_key = _normalize_plant_identifier(rec.plant_id or rec.plant)
-        if not rec_plant_key or rec_plant_key == target_plant_key:
-            code_key = rec.consumable_code.strip().upper()
-            existing_by_code.setdefault(code_key, []).append(rec)
+        rec_code = rec.consumable_code.strip().upper()
+        rec_plant_k = _normalize_plant_identifier(rec.plant_id or rec.plant)
+        if rec_plant_k:
+            existing_by_plant_and_code.setdefault((rec_code, rec_plant_k), []).append(rec)
+        existing_by_code.setdefault(rec_code, []).append(rec)
 
     # Find active PlanningVersion if any
     version = session.scalar(
@@ -1599,12 +1615,14 @@ def ingest_mrp_grn(
     inserted_count = 0
 
     # 4. Perform month-end overwrite upsert
-    for item_key, entry in aggregated_incoming.items():
+    for entry in aggregated_incoming.values():
         raw_item = entry["raw_item"]
         incoming_qty = entry["qty"]
         inv_no = entry["invoice_no"]
         grn_dt = entry["grn_date"]
         rate = entry["rate"]
+        row_plant_key = entry["row_plant_key"]
+        raw_plant = entry["raw_plant"]
 
         # Resolve consumable master
         consumable = None
@@ -1629,9 +1647,20 @@ def ingest_mrp_grn(
             consumable_name = raw_item
             consumable_uom = "NOS"
 
-        matched_recs = existing_by_code.get(consumable_code.strip().upper(), [])
-        if not matched_recs and consumable:
-            matched_recs = existing_by_code.get(raw_item.strip().upper(), [])
+        code_upper = consumable_code.strip().upper()
+        raw_upper = raw_item.strip().upper()
+
+        matched_recs: list[MonthlyRequirementRecord] = []
+        if row_plant_key:
+            # Row has specific plant
+            matched_recs = existing_by_plant_and_code.get((code_upper, row_plant_key), [])
+            if not matched_recs and raw_upper != code_upper:
+                matched_recs = existing_by_plant_and_code.get((raw_upper, row_plant_key), [])
+        else:
+            # Global store intake: match across all plants
+            matched_recs = existing_by_code.get(code_upper, [])
+            if not matched_recs and raw_upper != code_upper:
+                matched_recs = existing_by_code.get(raw_upper, [])
 
         if matched_recs:
             # Overwrite existing record's grn_received_qty (month-end overwrite, not additive summing)
@@ -1667,6 +1696,8 @@ def ingest_mrp_grn(
         else:
             # Insert a new record initialized with the uploaded GRN quantity
             closing = incoming_qty
+            assigned_plant = raw_plant or plant_id or "Plant 1"
+            assigned_plant_id = raw_plant or plant_id or "PLANT_1"
             new_rec = MonthlyRequirementRecord(
                 planning_period=planning_period,
                 planning_month=planning_month,
@@ -1682,8 +1713,8 @@ def ingest_mrp_grn(
                 production_order_qty=Decimal("0.0000"),
                 scheduled_consumable_qty=Decimal("0.0000"),
                 unit=consumable_uom,
-                plant=plant_id,
-                plant_id=plant_id,
+                plant=assigned_plant,
+                plant_id=assigned_plant_id,
                 opening_stock=Decimal("0.0000"),
                 grn_received_qty=incoming_qty,
                 consumed_qty=Decimal("0.0000"),
@@ -1704,7 +1735,10 @@ def ingest_mrp_grn(
                 updated_at=now,
             )
             session.add(new_rec)
-            existing_by_code.setdefault(consumable_code.strip().upper(), []).append(new_rec)
+            rec_p_k = _normalize_plant_identifier(assigned_plant_id)
+            if rec_p_k:
+                existing_by_plant_and_code.setdefault((code_upper, rec_p_k), []).append(new_rec)
+            existing_by_code.setdefault(code_upper, []).append(new_rec)
             inserted_count += 1
 
     # Update version timestamp if available
@@ -1722,12 +1756,12 @@ def ingest_mrp_grn(
             entity_id=version.id if version else uuid4(),
             new_values={
                 "period": planning_period,
-                "plant_id": plant_id,
+                "plant_id": plant_id or "ALL",
                 "filename": filename,
                 "updated_count": updated_count,
                 "inserted_count": inserted_count,
             },
-            reason=f"Ingested GRN month-end overwrite file {filename} for {plant_id} ({planning_period})",
+            reason=f"Ingested GRN month-end overwrite file {filename} for {plant_id or 'all plants'} ({planning_period})",
         )
     )
 

@@ -148,7 +148,6 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
   // MRP GRN Upload Modal State
   const [isGrnModalOpen, setIsGrnModalOpen] = useState(false);
   const [grnFile, setGrnFile] = useState<File | null>(null);
-  const [grnTargetPlant, setGrnTargetPlant] = useState('Plant 1');
   const [isGrnUploading, setIsGrnUploading] = useState(false);
   const [grnError, setGrnError] = useState<string | null>(null);
   const grnFileInputRef = useRef<HTMLInputElement>(null);
@@ -409,7 +408,6 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
     try {
       const formData = new FormData();
       formData.append('file', grnFile);
-      formData.append('plant_id', grnTargetPlant);
       formData.append('planning_month', String(selectedMonth));
       formData.append('planning_year', String(selectedYear));
 
@@ -422,7 +420,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
       setStatusMessage({
         type: 'success',
-        text: `GRN uploaded successfully for ${grnTargetPlant} (${res.period}): ${res.updated_count} record(s) updated, ${res.inserted_count} inserted.`,
+        text: `GRN uploaded successfully for ${res.period}: ${res.updated_count} record(s) updated, ${res.inserted_count} inserted.`,
       });
 
       setIsGrnModalOpen(false);
@@ -1234,36 +1232,17 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
                   <span>Month-End Overwrite Upsert Engine</span>
                 </div>
                 <p className="text-emerald-800">
-                  Matches records by composite key <code className="font-mono font-semibold bg-emerald-100/70 px-1 py-0.5 rounded text-[10px]">(Plant, Month, Year, Consumable Code)</code>. Re-uploading overwrites existing GRN quantities deterministically, updating closing stock and net order requirements.
+                  Matches records by composite key <code className="font-mono font-semibold bg-emerald-100/70 px-1 py-0.5 rounded text-[10px]">(Plant, Month, Year, Consumable Code)</code> (or globally if plant column is omitted). Re-uploading overwrites existing GRN quantities deterministically, updating closing stock and net order requirements.
                 </p>
               </div>
 
-              {/* Target Plant & Period */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="mrp-grn-plant-select" className="block text-[11px] font-bold text-slate-700 mb-1">
-                    Target Plant
-                  </label>
-                  <select
-                    id="mrp-grn-plant-select"
-                    value={grnTargetPlant}
-                    onChange={e => setGrnTargetPlant(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white text-slate-800 font-medium focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
-                  >
-                    <option value="Plant 1">Plant 1</option>
-                    <option value="Plant 2">Plant 2</option>
-                    <option value="Plant 3">Plant 3</option>
-                    <option value="Plant 4">Plant 4</option>
-                    <option value="Plant 5">Plant 5</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                    Planning Period
-                  </label>
-                  <div className="px-2.5 py-1.5 text-xs bg-slate-100 border border-slate-200 rounded-lg text-slate-700 font-semibold">
-                    {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
-                  </div>
+              {/* Planning Period */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                  Planning Period
+                </label>
+                <div className="px-3 py-2 text-xs bg-slate-100 border border-slate-200 rounded-lg text-slate-700 font-semibold">
+                  {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
                 </div>
               </div>
 

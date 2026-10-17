@@ -261,3 +261,148 @@ def test_mrp_grn_inserts_new_record_if_not_present(client, db_session, test_setu
     assert rec.net_order_requirement == Decimal("0.0000")
     assert rec.shortage_qty == Decimal("0.0000")
     assert rec.invoice_no == "INV-999"
+
+
+def test_mrp_grn_upload_without_plant_id_reconciles_globally(client, db_session, test_setup):
+    headers = test_setup["auth_headers"]
+    version = test_setup["version"]
+
+    # Add a second record for Plant 2 for the same consumable WLD-WIRE-01
+    rec_p2 = MonthlyRequirementRecord(
+        id=uuid4(),
+        planning_version_id=version.id,
+        planning_period="2026-10",
+        planning_month=10,
+        planning_year=2026,
+        part_name="Side Panel",
+        part_number="SP-200",
+        consumable_code="WLD-WIRE-01",
+        consumable_name="MIG Welding Wire 1.2mm",
+        process_name="Welding",
+        unit="NOS",
+        plant="Plant 2",
+        plant_id="PLANT_2",
+        scheduled_consumable_qty=Decimal("500.0000"),
+        gross_requirement=Decimal("500.0000"),
+        opening_stock=Decimal("50.0000"),
+        grn_received_qty=Decimal("0.0000"),
+        consumed_qty=Decimal("10.0000"),
+        closing_stock=Decimal("40.0000"),
+        net_order_requirement=Decimal("460.0000"),
+        stock_qty=Decimal("40.0000"),
+        shortage_qty=Decimal("460.0000"),
+    )
+    db_session.add(rec_p2)
+    db_session.commit()
+
+    # Upload GRN without plant_id form field
+    csv_content = (
+        "item_code,grn_qty,unit_rate\n"
+        "WLD-WIRE-01,300.00,480.00\n"
+    )
+    csv_file = io.BytesIO(csv_content.encode("utf-8"))
+
+    res = client.post(
+        "/api/v1/mrp/upload-grn",
+        headers=headers,
+        data={
+            "planning_month": 10,
+            "planning_year": 2026,
+        },
+        files={"file": ("global_store_grn.csv", csv_file, "text/csv")},
+    )
+
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["status"] == "success"
+    # Both Plant 1 and Plant 2 records should be updated
+    assert data["updated_count"] == 2
+
+    # Verify Plant 1 record was updated
+    r1 = db_session.get(MonthlyRequirementRecord, test_setup["rec1"].id)
+    assert r1.grn_received_qty == Decimal("300.0000")
+    # closing = (200 + 300) - 50 = 450
+    assert r1.closing_stock == Decimal("450.0000")
+    # net_order = max(0, 1000 - 450) = 550
+    assert r1.net_order_requirement == Decimal("550.0000")
+
+    # Verify Plant 2 record was updated
+    r2 = db_session.get(MonthlyRequirementRecord, rec_p2.id)
+    assert r2.grn_received_qty == Decimal("300.0000")
+    # closing = (50 + 300) - 10 = 340
+    assert r2.closing_stock == Decimal("340.0000")
+    # net_order = max(0, 500 - 340) = 160
+    assert r2.net_order_requirement == Decimal("160.0000")
+
+    # Verify consumable latest rate updated globally
+    c1 = db_session.get(Consumable, test_setup["consumable_1"].id)
+    assert c1.latest_grn_rate == Decimal("480.00")
+
+
+def test_mrp_grn_upload_with_plant_column_updates_only_matching_plant(client, db_session, test_setup):
+    headers = test_setup["auth_headers"]
+    version = test_setup["version"]
+
+    # Add Plant 2 record
+    rec_p2 = MonthlyRequirementRecord(
+        id=uuid4(),
+        planning_version_id=version.id,
+        planning_period="2026-10",
+        planning_month=10,
+        planning_year=2026,
+        part_name="Rear Panel",
+        part_number="RP-300",
+        consumable_code="WLD-WIRE-01",
+        consumable_name="MIG Welding Wire 1.2mm",
+        process_name="Welding",
+        unit="NOS",
+        plant="Plant 2",
+        plant_id="PLANT_2",
+        scheduled_consumable_qty=Decimal("800.0000"),
+        gross_requirement=Decimal("800.0000"),
+        opening_stock=Decimal("100.0000"),
+        grn_received_qty=Decimal("50.0000"),
+        consumed_qty=Decimal("20.0000"),
+        closing_stock=Decimal("130.0000"),
+        net_order_requirement=Decimal("670.0000"),
+        stock_qty=Decimal("130.0000"),
+        shortage_qty=Decimal("670.0000"),
+    )
+    db_session.add(rec_p2)
+    db_session.commit()
+
+    # Upload CSV specifying Plant 2 in row
+    csv_content = (
+        "item_code,grn_qty,plant,unit_rate\n"
+        "WLD-WIRE-01,999.00,Plant 2,520.00\n"
+    )
+    csv_file = io.BytesIO(csv_content.encode("utf-8"))
+
+    res = client.post(
+        "/api/v1/mrp/upload-grn",
+        headers=headers,
+        data={
+            "planning_month": 10,
+            "planning_year": 2026,
+        },
+        files={"file": ("plant2_grn.csv", csv_file, "text/csv")},
+    )
+
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["status"] == "success"
+    # Only Plant 2's record should be updated
+    assert data["updated_count"] == 1
+
+    # Verify Plant 2 record updated
+    r2 = db_session.get(MonthlyRequirementRecord, rec_p2.id)
+    assert r2.grn_received_qty == Decimal("999.0000")
+
+    # Verify Plant 1 record was UNTOUCHED
+    r1 = db_session.get(MonthlyRequirementRecord, test_setup["rec1"].id)
+    assert r1.grn_received_qty == Decimal("100.0000")
+
+    # Rate updated globally
+    c1 = db_session.get(Consumable, test_setup["consumable_1"].id)
+    assert c1.latest_grn_rate == Decimal("520.00")
+

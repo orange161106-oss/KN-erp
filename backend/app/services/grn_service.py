@@ -102,6 +102,29 @@ VENDOR_ALIASES = [
     "vendor_name", "supplier_name",
 ]
 
+PLANT_ALIASES = [
+    "plant", "plant_id", "facility", "plant_name", "location", "unit_location", "works", "unit_name", "unit",
+]
+
+
+def _norm_plant(val: Optional[str]) -> str:
+    if not val:
+        return ""
+    cleaned = str(val).strip().upper().replace(" ", "_").replace("-", "_")
+    roman_map = {
+        "PLANT_I": "PLANT_1",
+        "PLANT_II": "PLANT_2",
+        "PLANT_III": "PLANT_3",
+        "PLANT_IV": "PLANT_4",
+        "PLANT_V": "PLANT_5",
+        "PLANT_1": "PLANT_1",
+        "PLANT_2": "PLANT_2",
+        "PLANT_3": "PLANT_3",
+        "PLANT_4": "PLANT_4",
+        "PLANT_5": "PLANT_5",
+    }
+    return roman_map.get(cleaned, cleaned)
+
 
 def _match_col(name: str, aliases: list[str]) -> bool:
     norm = re.sub(r"[_\-\.\(\)\s]+", " ", name.lower()).strip()
@@ -156,6 +179,8 @@ def parse_grn_tabular_rows(rows: list[list[Any]], filename: str) -> tuple[dict[s
                     col_map["grn_date"] = c_idx
                 elif _match_col(cell, VENDOR_ALIASES) and "vendor_name" not in col_map:
                     col_map["vendor_name"] = c_idx
+                elif _match_col(cell, PLANT_ALIASES) and "plant" not in col_map:
+                    col_map["plant"] = c_idx
             break
 
     # If header row was found after row 0, scan rows 0 to header_row_idx - 1 for title metadata
@@ -233,11 +258,18 @@ def parse_grn_tabular_rows(rows: list[list[Any]], filename: str) -> tuple[dict[s
             if row_ven and not metadata["vendor_name"]:
                 metadata["vendor_name"] = row_ven
 
+        row_plant = None
+        if "plant" in col_map and col_map["plant"] < len(row):
+            val_p = _clean_str(row[col_map["plant"]])
+            if val_p:
+                row_plant = val_p
+
         line_items.append({
             "item_code": raw_item_code,
             "received_qty": qty,
             "unit_rate": rate,
             "total_amount": round(qty * rate, 2),
+            "plant": row_plant,
         })
 
     # Fallback metadata
@@ -324,12 +356,14 @@ def process_grn_ingestion(
         code = it["item_code"]
         q = float(it["received_qty"] or 0.0)
         r = float(it["unit_rate"] or 0.0)
+        p = it.get("plant")
         if code not in aggregated_items:
             aggregated_items[code] = {
                 "item_code": code,
                 "received_qty": q,
                 "unit_rate": r,
                 "total_amount": q * r,
+                "plant": p,
             }
         else:
             prev = aggregated_items[code]
@@ -337,6 +371,8 @@ def process_grn_ingestion(
             new_amount = prev["total_amount"] + (q * r)
             prev["received_qty"] = new_qty
             prev["total_amount"] = new_amount
+            if p and not prev.get("plant"):
+                prev["plant"] = p
             # Use latest positive rate or weighted average
             if r > 0.0:
                 prev["unit_rate"] = r
@@ -408,6 +444,11 @@ def process_grn_ingestion(
 
             if c_code and c_code in aggregated_items:
                 grn_info = aggregated_items[c_code]
+                item_plant = grn_info.get("plant")
+                if item_plant and req_item.plan and req_item.plan.plant_id:
+                    if _norm_plant(req_item.plan.plant_id) != _norm_plant(item_plant):
+                        continue
+
                 unit_rate = float(grn_info["unit_rate"])
                 received_qty = float(grn_info["received_qty"])
 
