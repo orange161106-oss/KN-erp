@@ -172,6 +172,7 @@ export default function ConsumptionNorms() {
     catch (failure) { setError(failure instanceof Error ? failure.message : 'Download failed.'); }
     finally { pending.current = false; setBusy(false); }
   }
+
   function toggleSchLock(id: string) {
     if (!canUpdate || busy) return;
     setRows(previous => previous.map(row => {

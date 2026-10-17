@@ -21,8 +21,11 @@ from app.schemas.requirements import (
     CalculatedRevisionApprovalResponse,
     CalculatedRequirementResponse,
     CalculationRunRequest,
+    FormulaGenerationResponse,
+    GRNUploadResponse,
     MonthlyRequirementPlanCreate,
     MonthlyRequirementPlanResponse,
+    RejectPlanRequest,
     RequirementCalculationErrorResponse,
     RequirementCalculationRunResponse,
     RequirementLineItemCreate,
@@ -33,6 +36,7 @@ from app.services.mrp_calculator import get_aggregated_requirements, run_monthly
 from app.services.requirements import (
     _to_plan_response,
     bulk_upsert_line_items,
+    calculate_formula_requirements_for_plants,
     calculate_planning_version_requirements,
     create_monthly_plan,
     get_calculated_requirements,
@@ -245,7 +249,7 @@ def require_admin_or_planner_role(user: CurrentUser) -> CurrentUser:
     if user.is_super_admin or getattr(user, "is_superuser", False):
         return user
     roles_normalized = [str(r).upper().strip() for r in (user.roles or [])]
-    if any(r in ("ADMIN", "SUPER ADMIN", "SUPER_ADMIN", "PLANNER") for r in roles_normalized):
+    if any(r in ("ADMIN", "SUPER ADMIN", "SUPER_ADMIN", "PLANNER", "MATERIALS_PLANNER", "MATERIALS PLANNER") for r in roles_normalized):
         return user
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
@@ -258,7 +262,7 @@ def handle_submit_plan(
     session: Annotated[Session, Depends(get_db)],
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> MonthlyRequirementPlanResponse:
-    """Transition status from DRAFT to SUBMITTED. Accessible by Plant Incharge."""
+    """Transition status from DRAFT or REJECTED to SUBMITTED. Accessible by Plant Incharge."""
     plan = session.get(MonthlyRequirementPlan, plan_id)
     if not plan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monthly requirement plan not found.")
@@ -272,11 +276,17 @@ def handle_submit_plan(
                 detail=f"You are only authorized to submit plans for assigned plant '{assigned_plant}'.",
             )
 
-    if plan.status != RequirementStatus.DRAFT:
+    if plan.status not in (RequirementStatus.DRAFT, RequirementStatus.REJECTED):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot submit plan in '{plan.status.value}' status. Only DRAFT plans can be submitted.",
         )
+
+    # Re-evaluate is_modified on all line items
+    for item in plan.line_items:
+        f_qty = float(getattr(item, "formula_qty", 0.0) or 0.0)
+        r_qty = float(getattr(item, "requested_qty", 0.0) or 0.0)
+        item.is_modified = bool(getattr(item, "is_modified", False) or (f_qty > 0.0 and abs(r_qty - f_qty) > 0.0001))
 
     plan.status = RequirementStatus.SUBMITTED
     session.commit()
@@ -296,7 +306,7 @@ def handle_approve_plan(
     if not plan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monthly requirement plan not found.")
 
-    if plan.status not in (RequirementStatus.SUBMITTED, RequirementStatus.DRAFT):
+    if plan.status not in (RequirementStatus.SUBMITTED, RequirementStatus.DRAFT, RequirementStatus.REJECTED):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot approve plan in '{plan.status.value}' status. Plan is already {plan.status.value}.",
@@ -312,6 +322,10 @@ def handle_approve_plan(
             detail="Cannot approve an empty plan. Add at least one requirement line item before approving.",
         )
 
+    # Set approved_qty = requested_qty for all line items
+    for item in plan.line_items:
+        item.approved_qty = item.requested_qty
+
     plan.status = RequirementStatus.APPROVED
     session.commit()
     session.refresh(plan)
@@ -322,6 +336,31 @@ def handle_approve_plan(
     except Exception:
         pass
 
+    return _to_plan_response(plan)
+
+
+def handle_reject_plan(
+    plan_id: UUID,
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    payload: Optional[RejectPlanRequest] = None,
+) -> MonthlyRequirementPlanResponse:
+    """Transition status to REJECTED (request revisions). Strictly protected: Admin or Planner."""
+    require_admin_or_planner_role(current_user)
+
+    plan = session.get(MonthlyRequirementPlan, plan_id)
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monthly requirement plan not found.")
+
+    if plan.status not in (RequirementStatus.SUBMITTED, RequirementStatus.APPROVED):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot reject plan in '{plan.status.value}' status. Only SUBMITTED or APPROVED plans can be rejected.",
+        )
+
+    plan.status = RequirementStatus.REJECTED
+    session.commit()
+    session.refresh(plan)
     return _to_plan_response(plan)
 
 
@@ -356,6 +395,30 @@ def handle_reopen_plan(
     return _to_plan_response(plan)
 
 
+def handle_calculate_formulas(
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    month: Optional[int] = Query(None),
+    year: Optional[int] = Query(None),
+    plant_id: Optional[str] = Query(None),
+) -> FormulaGenerationResponse:
+    """Compute initial plant requirements across all 5 plants using the formula engine:
+    (Production for sale) * (Consumption norms).
+    Strictly protected: Admin or Planner."""
+    require_admin_or_planner_role(current_user)
+
+    if not month or not year:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Month and Year query parameters are required.")
+
+    return calculate_formula_requirements_for_plants(
+        db=session,
+        month=month,
+        year=year,
+        plant_id=plant_id,
+        user=current_user,
+    )
+
+
 def handle_run_aggregation(
     month: int,
     year: int,
@@ -379,30 +442,60 @@ def handle_get_aggregated_requirements(
     return get_aggregated_requirements(session, month=month, year=year)
 
 
+def handle_upload_grn(
+    session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    file: UploadFile = File(...),
+    month: Optional[int] = Query(None),
+    year: Optional[int] = Query(None),
+) -> GRNUploadResponse:
+    """Ingest Goods Receipt Note (GRN) file, update consumable latest rate, and update requirement plan receipts."""
+    require_admin_or_planner_role(current_user)
+
+    filename = file.filename or "grn_import.xlsx"
+    contents = file.file.read()
+
+    from app.services.grn_service import process_grn_ingestion
+    return process_grn_ingestion(
+        db=session,
+        file_bytes=contents,
+        filename=filename,
+        user_id=getattr(current_user, "id", None),
+        target_month=month,
+        target_year=year,
+    )
+
+
 # Register endpoints on /requirements/plans and /requirements/aggregate
 router.add_api_route("/plans", handle_get_plans, methods=["GET"], response_model=list[MonthlyRequirementPlanResponse])
 router.add_api_route("/plans", handle_create_plan, methods=["POST"], response_model=MonthlyRequirementPlanResponse, status_code=status.HTTP_201_CREATED)
+router.add_api_route("/plans/calculate-formulas", handle_calculate_formulas, methods=["POST"], response_model=FormulaGenerationResponse)
 router.add_api_route("/plans/{plan_id}/items/single", handle_upsert_single_item, methods=["POST"], response_model=RequirementLineItemResponse)
 router.add_api_route("/plans/{plan_id}/items/{item_id}", handle_update_line_item, methods=["PUT"], response_model=RequirementLineItemResponse)
 router.add_api_route("/plans/{plan_id}/items/{item_id}", handle_delete_line_item, methods=["DELETE"])
 router.add_api_route("/plans/{plan_id}/items/bulk", handle_bulk_upload_items, methods=["POST"], response_model=BulkUploadResponse)
-router.add_api_route("/plans/{plan_id}/submit", handle_submit_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
-router.add_api_route("/plans/{plan_id}/approve", handle_approve_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
-router.add_api_route("/plans/{plan_id}/reopen", handle_reopen_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
+router.add_api_route("/plans/{plan_id}/submit", handle_submit_plan, methods=["PATCH", "POST"], response_model=MonthlyRequirementPlanResponse)
+router.add_api_route("/plans/{plan_id}/approve", handle_approve_plan, methods=["PATCH", "POST"], response_model=MonthlyRequirementPlanResponse)
+router.add_api_route("/plans/{plan_id}/reject", handle_reject_plan, methods=["PATCH", "POST"], response_model=MonthlyRequirementPlanResponse)
+router.add_api_route("/plans/{plan_id}/reopen", handle_reopen_plan, methods=["PATCH", "POST"], response_model=MonthlyRequirementPlanResponse)
 router.add_api_route("/aggregate/{month}/{year}", handle_get_aggregated_requirements, methods=["GET"], response_model=list[AggregatedRequirementResponse])
 router.add_api_route("/aggregate/{month}/{year}", handle_run_aggregation, methods=["POST"], response_model=AggregationRunResponse)
+router.add_api_route("/grn/upload", handle_upload_grn, methods=["POST"], response_model=GRNUploadResponse)
 
 # Register endpoints on /plans directly
 plans_router.add_api_route("", handle_get_plans, methods=["GET"], response_model=list[MonthlyRequirementPlanResponse])
 plans_router.add_api_route("", handle_create_plan, methods=["POST"], response_model=MonthlyRequirementPlanResponse, status_code=status.HTTP_201_CREATED)
+plans_router.add_api_route("/calculate-formulas", handle_calculate_formulas, methods=["POST"], response_model=FormulaGenerationResponse)
 plans_router.add_api_route("/{plan_id}/items/single", handle_upsert_single_item, methods=["POST"], response_model=RequirementLineItemResponse)
 plans_router.add_api_route("/{plan_id}/items/{item_id}", handle_update_line_item, methods=["PUT"], response_model=RequirementLineItemResponse)
 plans_router.add_api_route("/{plan_id}/items/{item_id}", handle_delete_line_item, methods=["DELETE"])
 plans_router.add_api_route("/{plan_id}/items/bulk", handle_bulk_upload_items, methods=["POST"], response_model=BulkUploadResponse)
-plans_router.add_api_route("/{plan_id}/submit", handle_submit_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
-plans_router.add_api_route("/{plan_id}/approve", handle_approve_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
-plans_router.add_api_route("/{plan_id}/reopen", handle_reopen_plan, methods=["PATCH"], response_model=MonthlyRequirementPlanResponse)
+plans_router.add_api_route("/{plan_id}/submit", handle_submit_plan, methods=["PATCH", "POST"], response_model=MonthlyRequirementPlanResponse)
+plans_router.add_api_route("/{plan_id}/approve", handle_approve_plan, methods=["PATCH", "POST"], response_model=MonthlyRequirementPlanResponse)
+plans_router.add_api_route("/{plan_id}/reject", handle_reject_plan, methods=["PATCH", "POST"], response_model=MonthlyRequirementPlanResponse)
+plans_router.add_api_route("/{plan_id}/reopen", handle_reopen_plan, methods=["PATCH", "POST"], response_model=MonthlyRequirementPlanResponse)
 plans_router.add_api_route("/aggregate/{month}/{year}", handle_get_aggregated_requirements, methods=["GET"], response_model=list[AggregatedRequirementResponse])
 plans_router.add_api_route("/aggregate/{month}/{year}", handle_run_aggregation, methods=["POST"], response_model=AggregationRunResponse)
+plans_router.add_api_route("/grn/upload", handle_upload_grn, methods=["POST"], response_model=GRNUploadResponse)
 
 

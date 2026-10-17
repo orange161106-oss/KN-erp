@@ -75,7 +75,7 @@ def export_purchase_workspace(
     search: Optional[str] = None,
     status: Optional[str] = Query(None),
     record_ids: Annotated[list[str] | None, Query()] = None,
-    view: str = Query('normal', pattern='^(normal|md)$'),
+    view: Optional[str] = Query(None, pattern='^(normal|md|recommendations)?$'),
     treat_missing_as_zero: bool = Query(True, description="Treat missing stock statement items as zero stock"),
 ):
     excel_bytes = service.export_purchase_workspace_excel(
@@ -89,8 +89,15 @@ def export_purchase_workspace(
         view=view,
         treat_missing_as_zero=treat_missing_as_zero,
     )
+    if view == "md":
+        filename = f"purchase_md_view_{year:04d}_{month:02d}.xlsx"
+    elif view == "normal":
+        filename = f"purchase_normal_view_{year:04d}_{month:02d}.xlsx"
+    else:
+        filename = f"purchase_recommendations_{year:04d}_{month:02d}.xlsx"
+
     return Response(
         content=excel_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{("purchase_md_view" if view == "md" else "purchase_recommendations")}_{year:04d}_{month:02d}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

@@ -74,7 +74,7 @@ export function canOpen(user: (UserContextData & Record<string, any>) | null | u
     if (path === '/rules') return Boolean(user.consumption_norms_read);
     if (path === '/prd') return Boolean(user.prd_planning_read);
     if (path === '/requirements') return Boolean(user.requirements_read);
-    if (path === '/plant-workflow') return Boolean(
+    if (path === '/plant-workflow' || path === '/plant-review') return Boolean(
       user.plant_workflow_read ||
       user.can_access_plant_1 ||
       user.can_access_plant_2 ||
@@ -98,6 +98,7 @@ export function canOpen(user: (UserContextData & Record<string, any>) | null | u
     '/mappings': ['mappings.read'], '/rules': ['norms.read'],
     '/prd': ['planning.read', 'prd.plan.read'], '/requirements': ['requirements.read'],
     '/plant-workflow': ['plant_workflow:view', 'plant_workflow:confirm', 'plant_workflow:approve'],
+    '/plant-review': ['plant_workflow:view', 'plant_workflow:confirm', 'plant_workflow:approve'],
     '/inventory': ['inventory.stock.read'],
     '/inventory/statement': ['inventory.stock.read'],
     '/inventory/management': ['inventory.stock.read'],
