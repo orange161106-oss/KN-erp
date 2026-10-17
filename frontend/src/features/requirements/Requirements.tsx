@@ -1,12 +1,25 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
-import { apiClient } from '../../api/client';
+import { apiClient, fetchWithAuth } from '../../api/client';
 import { useAuth } from '../auth/context';
 import { canPerform } from '../../core/rbac';
 import DataTable, { type ColumnDef, type HeaderGroupDef } from '../../components/DataTable';
 import Toolbar from '../../components/Toolbar';
 import MonthlyExcelUploadModal from './MonthlyExcelUploadModal';
 const RequirementPlanAction = lazy(()=>import('./RequirementPlanAction'));
+import {
+  FileSpreadsheet,
+  UploadCloud,
+  Download,
+  Save,
+  RefreshCw,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
+  X,
+  Upload,
+} from 'lucide-react';
+
 
 export interface RequirementRecord {
   id: string;
@@ -40,6 +53,18 @@ export interface RequirementRecord {
   remarks: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+
+  // MRP GRN Tracking & Reconciliation Fields
+  opening_stock?: number | string | null;
+  grn_received_qty?: number | string | null;
+  consumed_qty?: number | string | null;
+  closing_stock?: number | string | null;
+  gross_requirement?: number | string | null;
+  net_order_requirement?: number | string | null;
+  last_synced_at?: string | null;
+  grn_source_file?: string | null;
+  invoice_no?: string | null;
+  grn_date?: string | null;
 }
 
 export interface MonthlyPlanMetadata {
@@ -60,6 +85,8 @@ export interface MonthlyPlanMetadata {
   record_count: number;
   source_workflow?: string | null;
   issue_count?: number;
+  grn_reconciled?: boolean;
+  last_grn_synced_at?: string | null;
 }
 
 const MONTH_NAMES = [
@@ -122,6 +149,8 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
   const [isExporting, setIsExporting] = useState(false);
   const pendingExport = useRef(false);
   const pendingIssuesExport = useRef(false);
+  const [isDownloadingIssues, setIsDownloadingIssues] = useState(false);
+
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   const downloadIssues = async () => {
@@ -152,6 +181,13 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
   const [selectedCell, setSelectedCell] = useState<{ rowId: string; colKey: keyof RequirementRecord & string } | null>(null);
   const [selectedAuditRow, setSelectedAuditRow] = useState<RequirementRecord | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
+
+  // MRP GRN Upload Modal State
+  const [isGrnModalOpen, setIsGrnModalOpen] = useState(false);
+  const [grnFile, setGrnFile] = useState<File | null>(null);
+  const [isGrnUploading, setIsGrnUploading] = useState(false);
+  const [grnError, setGrnError] = useState<string | null>(null);
+  const grnFileInputRef = useRef<HTMLInputElement>(null);
 
   // Filter state
   const [searchQuery, setSearchQuery] = useState('');
@@ -188,6 +224,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
       setOriginalMap(orig);
       setModifiedRecords(new Map());
       setSelectedRowIds(new Set());
+      setStatusMessage(null);
     } catch (err) {
       if(generation!==loadGeneration.current)return;
       setStatusMessage({
@@ -410,9 +447,48 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
     }
   };
 
+  // Month-End GRN Ingestion and Overwrite Upsert
+  const handleUploadMRPGRN = async () => {
+    if (!grnFile) return;
+    setIsGrnUploading(true);
+    setGrnError(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', grnFile);
+      formData.append('planning_month', String(selectedMonth));
+      formData.append('planning_year', String(selectedYear));
+
+      const res = await apiClient.post<{
+        status: string;
+        updated_count: number;
+        inserted_count: number;
+        period: string;
+        consumables_updated_count?: number;
+      }>('/api/v1/mrp/upload-grn', formData);
+
+      const ratesNote = res.consumables_updated_count
+        ? `, ${res.consumables_updated_count} unique consumable rates updated`
+        : '';
+
+      setStatusMessage({
+        type: 'success',
+        text: `GRN uploaded successfully for ${res.period}: ${res.updated_count} record(s) updated, ${res.inserted_count} inserted${ratesNote}.`,
+      });
+
+      setIsGrnModalOpen(false);
+      setGrnFile(null);
+      // Auto-refresh spreadsheet and metadata immediately without reload
+      await loadRecords();
+    } catch (err) {
+      setGrnError(err instanceof Error ? err.message : 'Failed to ingest GRN file.');
+    } finally {
+      setIsGrnUploading(false);
+    }
+  };
+
   // Export Excel
   const handleExport = async (mode: 'ALL' | 'FILTERED' | 'SELECTED') => {
-    if(pendingExport.current)return;
+    if (pendingExport.current) return;
     let url = `/api/v1/requirements/workspace/export?month=${selectedMonth}&year=${selectedYear}`;
     const params = new URLSearchParams();
 
@@ -427,16 +503,57 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
     const q = params.toString();
     if (q) url += `&${q}`;
-    pendingExport.current=true;setIsExporting(true);setStatusMessage(null);
+    pendingExport.current = true;
+    setIsExporting(true);
+    setStatusMessage(null);
     try {
-      const blob=await apiClient.getBlob(url);const downloadUrl=URL.createObjectURL(blob);
-      const link=document.createElement('a');link.href=downloadUrl;
-      link.download=`consumable_requirements_${selectedYear}_${String(selectedMonth).padStart(2,'0')}.xlsx`;
+      const blob = await apiClient.getBlob(url);
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `consumable_requirements_${selectedYear}_${String(selectedMonth).padStart(2, '0')}.xlsx`;
       document.body.appendChild(link);
-      try{link.click();}finally{link.remove();URL.revokeObjectURL(downloadUrl);}
-      setStatusMessage({type:'success',text:'Requirements Excel download started.'});
-    }catch(error){setStatusMessage({type:'error',text:error instanceof Error?error.message:'Could not export requirements.'});}
-    finally{pendingExport.current=false;setIsExporting(false);}
+      try { link.click(); }
+      finally { link.remove(); URL.revokeObjectURL(downloadUrl); }
+      setStatusMessage({ type: 'success', text: 'Requirements Excel download started.' });
+    } catch (error) {
+      setStatusMessage({ type: 'error', text: error instanceof Error ? error.message : 'Could not export requirements.' });
+    } finally {
+      pendingExport.current = false;
+      setIsExporting(false);
+    }
+  };
+
+  // Download issues list CSV with authentication
+  const handleDownloadIssues = async () => {
+    setIsDownloadingIssues(true);
+    try {
+      const period = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`;
+      const response = await fetchWithAuth(
+        `/api/v1/requirements/workspace/issues/export?period=${period}`
+      );
+      if (!response.ok) {
+        throw new Error(`Failed to export issues: ${response.statusText}`);
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `requirement_issues_${selectedYear}_${String(selectedMonth).padStart(2, '0')}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Export issues error:", error);
+      setStatusMessage({
+        type: 'error',
+        text: 'Failed to download issues list',
+      });
+    } finally {
+      setIsDownloadingIssues(false);
+    }
+
   };
 
   // Filter options
@@ -499,7 +616,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
       },
       {
         label: 'INVENTORY & OPERATIONAL STATUS',
-        colSpan: 6,
+        colSpan: 7,
         className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-ink-text/20 bg-brand-navy select-none',
       },
     ],
@@ -612,7 +729,29 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
         width: 120,
         minWidth: 80,
         align: 'right',
-        render: val => <span className="font-mono text-gray-700">{val}</span>,
+        render: (val, row) => {
+          const displayVal =
+            val && val !== 'Unavailable'
+              ? val
+              : (row.closing_stock != null && row.closing_stock !== '' && Number(row.closing_stock) > 0)
+              ? String(row.closing_stock)
+              : (row.grn_received_qty != null && row.grn_received_qty !== '' && Number(row.grn_received_qty) > 0)
+              ? String(row.grn_received_qty)
+              : val || '—';
+          return <span className="font-mono text-gray-700">{displayVal}</span>;
+        },
+      },
+      {
+        key: 'grn_received_qty',
+        label: 'GRN Received',
+        width: 120,
+        minWidth: 80,
+        align: 'right',
+        render: val => (
+          <span className="font-mono text-emerald-700 font-semibold">
+            {val != null && val !== '' ? String(val) : '—'}
+          </span>
+        ),
       },
       {
         key: 'shortage_qty',
@@ -714,15 +853,15 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
         </div>
       )}
           {/* Top Banner: Module Purpose & Saved Plan Metadata Card */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-white p-3 rounded border border-gray-200 shadow-2xs">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <div>
-          <h1 className="text-lg font-bold text-gray-900 tracking-tight flex items-center gap-2">
+          <h1 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
             <span>Requirement</span>
-            <span className="text-xs font-normal text-gray-500 bg-gray-100 px-2 py-0.5 rounded border border-gray-300">
+            <span className="text-xs font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
               Consumable Planning Module
             </span>
           </h1>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <p className="text-xs text-slate-500 mt-1">
             Manage and recalculate monthly consumable requirements deterministically based on production planning data.
           </p>
         </div>
@@ -730,31 +869,32 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
         {/* Section 6: Top-Right Saved Plan Metadata Card */}
         <div className="flex min-w-0 flex-wrap items-center gap-3">
           <div className="bg-vanilla-surface border border-ink-text/15 rounded p-2 text-xs shadow-2xs min-w-[280px]">
+
             {planMetadata?.has_plan ? (
-              <div className="space-y-1">
-                <div className="flex items-center justify-between border-b border-ink-text/10 pb-1">
-                  <span className="font-bold text-gray-900 text-xs">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                  <span className="font-bold text-slate-900 text-xs">
                     Period: {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
                   </span>
-                  <div className="flex items-center gap-1">
-                    <span className="px-1.5 py-0.2 bg-blue-100 text-blue-800 rounded text-[10px] font-bold border border-blue-200">
+                  <div className="flex items-center gap-1.5">
+                    <span className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded-md text-[10px] font-bold border border-blue-200">
                       {planMetadata.revision_label}
                     </span>
-                    <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded text-[10px] font-bold border border-emerald-200">
+                    <span className="px-1.5 py-0.5 bg-emerald-50 text-emerald-700 rounded-md text-[10px] font-bold border border-emerald-200">
                       {planMetadata.status}
                     </span>
                   </div>
                 </div>
-                <div className="text-[11px] text-gray-600 flex justify-between">
+                <div className="text-[11px] text-slate-500 flex justify-between">
                   <span>Created:</span>
-                  <span className="font-semibold text-gray-800">
+                  <span className="font-semibold text-slate-700">
                     {formatDisplayDate(planMetadata.created_at)}
                     {planMetadata.created_by_name ? ` by ${planMetadata.created_by_name}` : ''}
                   </span>
                 </div>
-                <div className="text-[11px] text-gray-600 flex justify-between">
+                <div className="text-[11px] text-slate-500 flex justify-between">
                   <span>Last Modified:</span>
-                  <span className="font-semibold text-gray-800">
+                  <span className="font-semibold text-slate-700">
                     {planMetadata.updated_at
                       ? `${formatDisplayDate(planMetadata.updated_at)}${
                           planMetadata.updated_by_name ? ` by ${planMetadata.updated_by_name}` : ''
@@ -764,28 +904,28 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
                 </div>
               </div>
             ) : (
-              <div className="py-2 px-1 text-center text-gray-500 italic text-[11px]">
+              <div className="py-2 px-1 text-center text-slate-400 italic text-[11px]">
                 No monthly requirement plan has been created.
               </div>
             )}
           </div>
 
           {/* Metric Badges */}
-          <div className="hidden lg:flex items-center gap-1.5">
-            <div className="flex items-center gap-1 px-2.5 py-1 bg-white border border-gray-200 rounded text-xs shadow-2xs">
-              <span className="w-2 h-2 rounded-full bg-red-500" />
-              <span className="font-bold text-red-700">{summary.critical}</span>
-              <span className="text-gray-500 text-2xs">Critical</span>
+          <div className="hidden lg:flex items-center gap-2">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs shadow-sm">
+              <span className="w-2 h-2 rounded-full bg-rose-500" />
+              <span className="font-bold text-rose-700">{summary.critical}</span>
+              <span className="text-slate-400 text-2xs">Critical</span>
             </div>
-            <div className="flex items-center gap-1 px-2.5 py-1 bg-white border border-gray-200 rounded text-xs shadow-2xs">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs shadow-sm">
               <span className="w-2 h-2 rounded-full bg-amber-500" />
               <span className="font-bold text-amber-700">{summary.low}</span>
-              <span className="text-gray-500 text-2xs">Low</span>
+              <span className="text-slate-400 text-2xs">Low</span>
             </div>
-            <div className="flex items-center gap-1 px-2.5 py-1 bg-white border border-gray-200 rounded text-xs shadow-2xs">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs shadow-sm">
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
               <span className="font-bold text-emerald-700">{summary.normal}</span>
-              <span className="text-gray-500 text-2xs">Normal</span>
+              <span className="text-slate-400 text-2xs">Normal</span>
             </div>
           </div>
         </div>
@@ -793,9 +933,9 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
       {statusMessage && (
         <div
-          className={`px-3 py-2 rounded text-xs font-medium border flex items-center justify-between ${
+          className={`px-3.5 py-2.5 rounded-xl text-xs font-medium border flex items-center justify-between shadow-xs ${
             statusMessage.type === 'error'
-              ? 'bg-red-50 text-red-800 border-red-200'
+              ? 'bg-rose-50 text-rose-800 border-rose-200'
               : statusMessage.type === 'success'
               ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
               : 'bg-blue-50 text-blue-800 border-blue-200'
@@ -805,7 +945,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
             <span>{statusMessage.type === 'error' ? '⚠️' : '✓'}</span>
             <span>{statusMessage.text}</span>
           </div>
-          <button onClick={() => setStatusMessage(null)} className="text-gray-400 hover:text-gray-600 font-bold">
+          <button onClick={() => setStatusMessage(null)} className="text-slate-400 hover:text-slate-600 font-bold">
             ✕
           </button>
         </div>
@@ -814,16 +954,17 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
       {/* Section 3: Prominent Planning-Period Selector & Action Toolbar */}
       <div className="bg-white border border-gray-200 rounded p-2 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
         <div className="flex min-w-0 flex-wrap items-center gap-3">
+
           {/* Month Selector */}
           <div className="flex items-center gap-1.5">
-            <label htmlFor="req-planning-month-select" className="text-xs font-bold text-gray-700">Planning Month:</label>
+            <label htmlFor="req-planning-month-select" className="text-xs font-bold text-slate-700">Planning Month:</label>
             <select
               id="req-planning-month-select"
               aria-label="Planning Month"
               value={selectedMonth}
               disabled={periodBusy}
               onChange={e => handleMonthChange(parseInt(e.target.value, 10))}
-              className="px-2.5 py-1 text-xs border border-gray-300 rounded bg-white text-gray-800 font-medium focus:ring-1 focus:ring-brand-steel"
+              className="px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white text-slate-800 font-medium focus:ring-1 focus:ring-slate-900"
             >
               {MONTH_NAMES.map((m, idx) => (
                 <option key={idx + 1} value={idx + 1}>
@@ -835,14 +976,14 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
           {/* Year Selector */}
           <div className="flex items-center gap-1.5">
-            <label htmlFor="req-planning-year-select" className="text-xs font-bold text-gray-700">Planning Year:</label>
+            <label htmlFor="req-planning-year-select" className="text-xs font-bold text-slate-700">Planning Year:</label>
             <select
               id="req-planning-year-select"
               aria-label="Planning Year"
               value={selectedYear}
               disabled={periodBusy}
               onChange={e => handleYearChange(parseInt(e.target.value, 10))}
-              className="px-2.5 py-1 text-xs border border-gray-300 rounded bg-white text-gray-800 font-medium focus:ring-1 focus:ring-brand-steel"
+              className="px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white text-slate-800 font-medium focus:ring-1 focus:ring-slate-900"
             >
               {[2024, 2025, 2026, 2027, 2028, 2029, 2030].map(y => (
                 <option key={y} value={y}>
@@ -857,23 +998,53 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
             onClick={() => void loadRecords()}
             disabled={isLoading||periodBusy}
             className="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-800 border border-gray-300 rounded font-semibold text-xs transition-colors shadow-2xs flex items-center gap-1"
+
           >
-            <span>🔄</span>
+            <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
             <span>Load Requirements</span>
           </button>
+
+          {/* Active GRN Reconciliation Badge */}
+          {planMetadata?.grn_reconciled ? (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              <span>GRN Reconciled</span>
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 shadow-2xs">
+              <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+              <span>GRN Pending</span>
+            </span>
+          )}
         </div>
 
         {/* Primary Action Buttons */}
         <div className="flex items-center gap-2">
-          {/* Upload Excel Button */}
+          {/* Upload Plan Button */}
           {canEditPlan && (
             <button
               type="button"
               onClick={() => setShowUploadModal(true)}
-              className="px-3 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded font-semibold text-xs shadow-2xs transition-colors flex items-center gap-1"
+              className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5"
             >
-              <span>📊</span>
-              <span>Upload Excel</span>
+              <UploadCloud className="w-3.5 h-3.5 text-slate-600" />
+              <span>Upload Plan</span>
+            </button>
+          )}
+
+          {/* Upload GRN Button */}
+          {canUpdate && (
+            <button
+              type="button"
+              onClick={() => {
+                setGrnFile(null);
+                setGrnError(null);
+                setIsGrnModalOpen(true);
+              }}
+              className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Upload GRN</span>
             </button>
           )}
 
@@ -883,27 +1054,27 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
               type="button"
               onClick={() => void handleSaveChanges()}
               disabled={isSaving || modifiedRecords.size === 0}
-              className={`px-3 py-1 rounded font-semibold text-xs shadow-2xs transition-colors flex items-center gap-1.5 ${
+              className={`rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 ${
                 modifiedRecords.size > 0
                   ? 'bg-amber-600 hover:bg-amber-700 text-white animate-pulse'
-                  : 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed'
+                  : 'border border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed'
               }`}
             >
               {isSaving ? (
                 <>
-                  <div className="animate-spin h-3 w-3 border-2 border-white border-t-transparent rounded-full" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   <span>Saving…</span>
                 </>
               ) : (
                 <>
-                  <span>💾</span>
+                  <Save className="w-3.5 h-3.5" />
                   <span>Save Changes {modifiedRecords.size > 0 ? `(${modifiedRecords.size})` : ''}</span>
                 </>
               )}
             </button>
           )}
 
-          {/* Recalculate Button */}
+          {/* Recalculate MRP Button (Primary Action) */}
           {canRecalculate && (
             <div className="flex items-stretch">
             <button
@@ -911,15 +1082,16 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
               onClick={() => setShowRecalculate(true)}
               disabled={periodBusy || isLoading || (!productionBased && records.length === 0) || (productionBased && planMetadata?.status === 'APPROVED')}
               className="px-3 py-1 bg-brand-navy hover:bg-opacity-90 disabled:opacity-50 text-white rounded font-semibold text-xs shadow-2xs transition-colors flex items-center gap-1"
+
             >
               {isRecalculating ? (
                 <>
-                  <div className="animate-spin h-3 w-3 border-2 border-white border-t-transparent rounded-full" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   <span>Recalculating…</span>
                 </>
               ) : (
                 <>
-                  <span>⚡</span>
+                  <RefreshCw className="w-3.5 h-3.5" />
                   <span>Recalculate</span>
                 </>
               )}
@@ -945,23 +1117,24 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
                 type="button"
                 disabled={isExporting}
                 onClick={() => handleExport(selectedRowIds.size > 0 ? 'SELECTED' : 'ALL')}
-                className="px-3 py-1 bg-white hover:bg-gray-50 border border-gray-300 text-gray-800 rounded font-semibold text-xs shadow-2xs transition-colors flex items-center gap-1"
+                className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5"
               >
                 <span>📥</span>
                 <span>{isExporting ? 'Exporting…' : 'Export Excel ▾'}</span>
+
               </button>
-              <div className="absolute right-0 top-full mt-1 w-36 bg-white border border-gray-200 rounded shadow-lg py-1 z-30 hidden group-hover:block">
+              <div className="absolute right-0 top-full mt-1 w-40 bg-white border border-slate-200 rounded-xl shadow-lg py-1 z-30 hidden group-hover:block">
                 <button
                   type="button"
                   onClick={() => handleExport('ALL')}
-                  className="w-full text-left px-3 py-1 text-xs text-gray-700 hover:bg-gray-100"
+                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
                 >
                   Export All Rows
                 </button>
                 <button
                   type="button"
                   onClick={() => handleExport('FILTERED')}
-                  className="w-full text-left px-3 py-1 text-xs text-gray-700 hover:bg-gray-100"
+                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
                 >
                   Export Filtered Rows
                 </button>
@@ -969,7 +1142,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
                   <button
                     type="button"
                     onClick={() => handleExport('SELECTED')}
-                    className="w-full text-left px-3 py-1 text-xs text-blue-700 font-semibold hover:bg-blue-50"
+                    className="w-full text-left px-3 py-1.5 text-xs text-blue-700 font-semibold hover:bg-blue-50"
                   >
                     Export Selected ({selectedRowIds.size})
                   </button>
@@ -984,7 +1157,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
       {planMetadata && planMetadata.issue_count !== undefined && planMetadata.issue_count > 0 && (
         <div className="flex items-center justify-between px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-900 shadow-2xs">
           <div className="flex items-center gap-2">
-            <span className="font-bold">⚠️ {planMetadata.issue_count} issue{planMetadata.issue_count === 1 ? '' : 's'}:</span>
+            <span className="font-bold">⚠️ {planMetadata?.issue_count} issue{planMetadata?.issue_count === 1 ? '' : 's'}:</span>
             <span>missing norms or unmapped processes for planned parts in this period.</span>
           </div>
           <button
@@ -1001,6 +1174,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
       {/* Main Spreadsheet Grid Container */}
       <div className="flex-1 min-h-[420px] min-w-0 bg-white border border-gray-300 rounded shadow-xs flex flex-col overflow-hidden">
+
         {/* Toolbar for search and column filters */}
         <Toolbar
           canImport={false}
@@ -1087,6 +1261,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
               return '';
             }}
           />
+
         </div>
       </div>
 
@@ -1117,6 +1292,143 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
           void loadRecords();
         }}
       />
+
+      {/* MRP Month-End GRN Upload Modal */}
+      {isGrnModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-xl shadow-xl border border-slate-200 max-w-lg w-full overflow-hidden animate-in fade-in duration-150">
+            {/* Header */}
+            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/70">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg border border-emerald-100">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Upload Store GRN (Goods Receipt Note)
+                  </h3>
+                  <p className="text-2xs text-slate-500">
+                    Month-End Ingestion & Reconciliation
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsGrnModalOpen(false);
+                  setGrnFile(null);
+                  setGrnError(null);
+                }}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 space-y-4 text-xs">
+              {/* Context Note */}
+              <div className="bg-emerald-50/60 border border-emerald-100 rounded-lg p-3 text-[11px] text-emerald-900 space-y-1">
+                <div className="font-semibold flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Month-End Overwrite Upsert Engine</span>
+                </div>
+                <p className="text-emerald-800">
+                  Matches records by composite key <code className="font-mono font-semibold bg-emerald-100/70 px-1 py-0.5 rounded text-[10px]">(Plant, Month, Year, Consumable Code)</code> (or globally if plant column is omitted). Re-uploading overwrites existing GRN quantities deterministically, updating closing stock and net order requirements.
+                </p>
+              </div>
+
+              {/* Planning Period */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                  Planning Period
+                </label>
+                <div className="px-3 py-2 text-xs bg-slate-100 border border-slate-200 rounded-lg text-slate-700 font-semibold">
+                  {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
+                </div>
+              </div>
+
+              {/* File Dropzone */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                  GRN File (.xlsx, .xls, .csv)
+                </label>
+                <div
+                  onClick={() => grnFileInputRef.current?.click()}
+                  className="border-2 border-dashed border-slate-300 hover:border-slate-400 bg-slate-50/50 hover:bg-slate-50 p-4 rounded-xl text-center cursor-pointer transition-colors"
+                >
+                  <input
+                    ref={grnFileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    className="hidden"
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (file) setGrnFile(file);
+                    }}
+                  />
+                  {grnFile ? (
+                    <div className="flex items-center justify-center gap-2 text-slate-800 font-medium">
+                      <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
+                      <span className="font-semibold">{grnFile.name}</span>
+                      <span className="text-slate-400 text-2xs">
+                        ({(grnFile.size / 1024).toFixed(1)} KB)
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <Upload className="w-6 h-6 text-slate-400 mx-auto" />
+                      <div className="font-semibold text-slate-700">Click to choose store GRN file</div>
+                      <div className="text-2xs text-slate-400">Supported columns: Item ID, Received Qty / GRN Qty, Rate, Date, Invoice No</div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {grnError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div>{grnError}</div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-5 py-3 border-t border-slate-200 bg-slate-50/60 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsGrnModalOpen(false);
+                  setGrnFile(null);
+                  setGrnError(null);
+                }}
+                disabled={isGrnUploading}
+                className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-800 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleUploadMRPGRN()}
+                disabled={!grnFile || isGrnUploading}
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50 rounded-lg shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                {isGrnUploading ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Ingesting GRN…</span>
+                  </>
+                ) : (
+                  <>
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Upload & Reconcile GRN</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Audit & Formula Explanation Modal */}
       {selectedAuditRow && (
@@ -1189,7 +1501,13 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
                 <div className="p-3 bg-gray-50 border border-gray-200 rounded">
                   <div className="text-2xs font-semibold text-gray-500 uppercase">3. Current Stock</div>
                   <div className="text-base font-bold text-gray-900 mt-1">
-                    {selectedAuditRow.stock_qty}{' '}
+                    {selectedAuditRow.stock_qty && selectedAuditRow.stock_qty !== 'Unavailable'
+                      ? selectedAuditRow.stock_qty
+                      : (selectedAuditRow.closing_stock != null && Number(selectedAuditRow.closing_stock) > 0)
+                      ? String(selectedAuditRow.closing_stock)
+                      : (selectedAuditRow.grn_received_qty != null && Number(selectedAuditRow.grn_received_qty) > 0)
+                      ? String(selectedAuditRow.grn_received_qty)
+                      : selectedAuditRow.stock_qty || '—'}{' '}
                     <span className="text-2xs font-normal text-gray-500">{selectedAuditRow.unit}</span>
                   </div>
                   <div className="text-3xs text-gray-400 mt-0.5">Physical closing stock</div>

@@ -3,6 +3,7 @@ import csv
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 import io
+import re
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
@@ -60,13 +61,37 @@ def get_monthly_plan_metadata(
         .order_by(PlanningVersion.version_number.desc())
         .limit(1)
     ).first()
+
     if not row:
+        rec_stats = session.execute(
+            select(
+                func.count(MonthlyRequirementRecord.id),
+                func.count(MonthlyRequirementRecord.id).filter(
+                    or_(
+                        MonthlyRequirementRecord.grn_received_qty > 0,
+                        MonthlyRequirementRecord.last_synced_at.is_not(None),
+                        MonthlyRequirementRecord.grn_source_file.is_not(None),
+                    )
+                ),
+                func.max(MonthlyRequirementRecord.last_synced_at),
+            ).where(
+                MonthlyRequirementRecord.planning_period == planning_period,
+                MonthlyRequirementRecord.is_deleted == False,  # noqa: E712
+            )
+        ).one()
+        rec_count = rec_stats[0] or 0
+        reconciled_count = rec_stats[1] or 0
+        last_synced = rec_stats[2]
         return MonthlyPlanMetadata(
-            has_plan=False,
+            has_plan=rec_count > 0,
             planning_month=month,
             planning_year=year,
             planning_period=planning_period,
-            record_count=0,
+            record_count=rec_count,
+            issue_count=0,
+            source_workflow=None,
+            grn_reconciled=bool(reconciled_count > 0),
+            last_grn_synced_at=last_synced,
         )
 
     version, metadata, creator_name, creator_username, updater_name, updater_username = row
@@ -74,15 +99,58 @@ def get_monthly_plan_metadata(
     central = (metadata or {}).get('workflow') == basic_planning.WORKFLOW
     # A production-based monthly view reads the same saved rows as Central.
     issues_cnt = 0
+    reconciled_count = 0
+    last_synced = None
+
+    grn_cnt_sq = select(func.count(MonthlyRequirementRecord.id)).where(
+        MonthlyRequirementRecord.planning_period == planning_period,
+        MonthlyRequirementRecord.is_deleted == False,
+        or_(
+            MonthlyRequirementRecord.grn_received_qty > 0,
+            MonthlyRequirementRecord.last_synced_at.is_not(None),
+            MonthlyRequirementRecord.grn_source_file.is_not(None),
+        ),
+    ).scalar_subquery()
+
+    grn_max_sq = select(func.max(MonthlyRequirementRecord.last_synced_at)).where(
+        MonthlyRequirementRecord.planning_period == planning_period,
+        MonthlyRequirementRecord.is_deleted == False,
+        or_(
+            MonthlyRequirementRecord.grn_received_qty > 0,
+            MonthlyRequirementRecord.last_synced_at.is_not(None),
+            MonthlyRequirementRecord.grn_source_file.is_not(None),
+        ),
+    ).scalar_subquery()
+
     if central:
         counts = [select(func.count(model.id)).where(model.planning_version_id == version.id).scalar_subquery()
             for model in (CalculatedRequirement, RequirementCalculationError)]
-        calc_cnt, issues_cnt = session.execute(select(*counts)).one()
-        rec_count = calc_cnt
+        extra_grn_sq = select(func.count(MonthlyRequirementRecord.id)).where(
+            MonthlyRequirementRecord.planning_period == planning_period,
+            MonthlyRequirementRecord.is_deleted == False,
+            or_(
+                MonthlyRequirementRecord.grn_source_file.is_not(None),
+                MonthlyRequirementRecord.process_name == "Store Receipt",
+            ),
+        ).scalar_subquery()
+
+        calc_cnt, issues_cnt, extra_grn_cnt, reconciled_count, last_synced = session.execute(
+            select(counts[0], counts[1], extra_grn_sq, grn_cnt_sq, grn_max_sq)
+        ).one()
+        rec_count = calc_cnt or 0
+
     else:
-        rec_count = session.scalar(select(func.count(MonthlyRequirementRecord.id)).where(
+        mrr_cnt_sq = select(func.count(MonthlyRequirementRecord.id)).where(
             MonthlyRequirementRecord.planning_version_id == version.id,
-            MonthlyRequirementRecord.is_deleted == False)) or 0  # noqa: E712
+            MonthlyRequirementRecord.is_deleted == False,
+        ).scalar_subquery()
+
+        rec_count, reconciled_count, last_synced = session.execute(
+            select(mrr_cnt_sq, grn_cnt_sq, grn_max_sq)
+        ).one()
+        rec_count = rec_count or 0
+
+    reconciled_count = reconciled_count or 0
 
     return MonthlyPlanMetadata(
         has_plan=True,
@@ -102,6 +170,8 @@ def get_monthly_plan_metadata(
         record_count=rec_count,
         issue_count=issues_cnt,
         source_workflow=basic_planning.WORKFLOW if central else None,
+        grn_reconciled=bool(reconciled_count > 0),
+        last_grn_synced_at=last_synced,
     )
 
 
@@ -132,11 +202,19 @@ def calculate_workspace_requirements(
     from app.services import basic_planning
     batch_metadata = select(ImportBatch.validation_summary).where(
         ImportBatch.planning_version_id == PlanningVersion.id).limit(1).scalar_subquery()
-    period_row = session.execute(select(PlanningVersion, batch_metadata)
+    mrr_count_subquery = select(func.count(MonthlyRequirementRecord.id)).where(
+        MonthlyRequirementRecord.planning_period == target_period,
+        MonthlyRequirementRecord.is_deleted == False,
+    ).limit(1).scalar_subquery() if target_period else None
+
+    period_row = session.execute(
+        select(PlanningVersion, batch_metadata, mrr_count_subquery)
         .where(PlanningVersion.planning_period == target_period)
-        .order_by(PlanningVersion.version_number.desc()).limit(1)).first() if target_period else None
+        .order_by(PlanningVersion.version_number.desc()).limit(1)
+    ).first() if target_period else None
     period_version = period_row[0] if period_row else None
     central = bool(period_row and (period_row[1] or {}).get('workflow') == basic_planning.WORKFLOW)
+    has_mrr = bool(period_row and (period_row[2] or 0) > 0)
     monthly_rows = [] if central else session.scalars(query.order_by(MonthlyRequirementRecord.row_index, MonthlyRequirementRecord.created_at)).all()
 
     results: list[RequirementWorkspaceRecord] = []
@@ -174,10 +252,22 @@ def calculate_workspace_requirements(
                     msl=format(r.msl, ".4f"),
                     status=r.status,
                     remarks=r.remarks,
+                    # Month-End Overwrite & MRP Balance Tracking
+                    opening_stock=format(getattr(r, "opening_stock", Decimal("0.0")), ".4f"),
+                    grn_received_qty=format(getattr(r, "grn_received_qty", Decimal("0.0")), ".4f"),
+                    consumed_qty=format(getattr(r, "consumed_qty", Decimal("0.0")), ".4f"),
+                    closing_stock=format(getattr(r, "closing_stock", Decimal("0.0")), ".4f"),
+                    gross_requirement=format(getattr(r, "gross_requirement", Decimal("0.0")), ".4f"),
+                    net_order_requirement=format(getattr(r, "net_order_requirement", Decimal("0.0")), ".4f"),
+                    last_synced_at=r.last_synced_at,
+                    grn_source_file=r.grn_source_file,
+                    invoice_no=r.invoice_no,
+                    grn_date=r.grn_date,
                     created_at=r.created_at,
                     updated_at=r.updated_at,
                 )
             )
+
     else:
         # Fallback to existing CalculatedRequirement records
         versions_query = select(PlanningVersion).order_by(PlanningVersion.planning_period, PlanningVersion.version_number.desc())
@@ -187,6 +277,17 @@ def calculate_workspace_requirements(
         latest: dict[str, PlanningVersion] = {}
         for version in versions:
             latest.setdefault(version.planning_period, version)
+
+        # Build index of MonthlyRequirementRecord for this period
+        mrr_records = session.scalars(
+            select(MonthlyRequirementRecord).where(
+                MonthlyRequirementRecord.planning_period == target_period,
+                MonthlyRequirementRecord.is_deleted == False,
+            )
+        ).all() if (target_period and has_mrr) else []
+        mrr_by_code: dict[str, list[MonthlyRequirementRecord]] = {}
+        for m in mrr_records:
+            mrr_by_code.setdefault(m.consumable_code.strip().upper(), []).append(m)
 
         for version in latest.values():
             requirements = session.scalars(
@@ -225,6 +326,25 @@ def calculate_workspace_requirements(
                 else:
                     req_qty_val = row.calculated_qty
 
+                mat_code = material.code.strip().upper() if material and material.code else ""
+                matching_mrrs = mrr_by_code.get(mat_code, [])
+                grn_rec_qty = Decimal("0.0")
+                cls_stk = Decimal("0.0")
+                mrr_file = None
+                mrr_inv = None
+                mrr_dt = None
+                mrr_sync = None
+                if matching_mrrs:
+                    plant_k = _normalize_plant_identifier(plant.name if plant else None)
+                    matched_mrr = next((m for m in matching_mrrs if _normalize_plant_identifier(m.plant_id or m.plant) == plant_k), matching_mrrs[0])
+                    grn_rec_qty = matched_mrr.grn_received_qty or Decimal("0.0")
+                    cls_stk = matched_mrr.closing_stock if matched_mrr.closing_stock is not None else grn_rec_qty
+                    mrr_file = matched_mrr.grn_source_file
+                    mrr_inv = matched_mrr.invoice_no
+                    mrr_dt = matched_mrr.grn_date
+                    mrr_sync = matched_mrr.last_synced_at
+
+
                 results.append(
                     RequirementWorkspaceRecord(
                         id=str(row.id),
@@ -252,6 +372,12 @@ def calculate_workspace_requirements(
                         msl="Unavailable",
                         status="Calculated",
                         remarks=row.rounding_policy,
+                        grn_received_qty=format(grn_rec_qty, ".4f"),
+                        closing_stock=format(cls_stk if cls_stk > Decimal("0") else grn_rec_qty, ".4f"),
+                        last_synced_at=mrr_sync,
+                        grn_source_file=mrr_file,
+                        invoice_no=mrr_inv,
+                        grn_date=mrr_dt,
                         created_at=row.created_at,
                         updated_at=row.updated_at,
                     )
@@ -259,6 +385,24 @@ def calculate_workspace_requirements(
 
             for error in errors:
                 plant, product, material = error.plant, error.product, error.consumable
+                mat_code = material.code.strip().upper() if material and material.code else ""
+                matching_mrrs = mrr_by_code.get(mat_code, [])
+                grn_rec_qty = Decimal("0.0")
+                cls_stk = Decimal("0.0")
+                mrr_file = None
+                mrr_inv = None
+                mrr_dt = None
+                mrr_sync = None
+                if matching_mrrs:
+                    plant_k = _normalize_plant_identifier(plant.name if plant else None)
+                    matched_mrr = next((m for m in matching_mrrs if _normalize_plant_identifier(m.plant_id or m.plant) == plant_k), matching_mrrs[0])
+                    grn_rec_qty = matched_mrr.grn_received_qty or Decimal("0.0")
+                    cls_stk = matched_mrr.closing_stock if matched_mrr.closing_stock is not None else grn_rec_qty
+                    mrr_file = matched_mrr.grn_source_file
+                    mrr_inv = matched_mrr.invoice_no
+                    mrr_dt = matched_mrr.grn_date
+                    mrr_sync = matched_mrr.last_synced_at
+
                 results.append(
                     RequirementWorkspaceRecord(
                         id=str(error.id),
@@ -285,9 +429,68 @@ def calculate_workspace_requirements(
                         msl="Unavailable",
                         status="Configuration required",
                         remarks=error.error_code,
+                        grn_received_qty=format(grn_rec_qty, ".4f"),
+                        closing_stock=format(cls_stk if cls_stk > Decimal("0") else grn_rec_qty, ".4f"),
+                        last_synced_at=mrr_sync,
+                        grn_source_file=mrr_file,
+                        invoice_no=mrr_inv,
+                        grn_date=mrr_dt,
                         created_at=error.created_at,
                     )
                 )
+
+            # Include store receipts and standalone GRN intake items from MonthlyRequirementRecord
+            added_codes = {r.consumable_code.strip().upper() for r in results if r.consumable_code}
+            for m in mrr_records:
+                is_store_receipt = (
+                    m.process_name == "Store Receipt"
+                    or bool(m.grn_source_file)
+                    or (m.grn_received_qty and m.grn_received_qty > Decimal("0"))
+                )
+                if is_store_receipt and m.consumable_code.strip().upper() not in added_codes:
+                    results.append(
+                        RequirementWorkspaceRecord(
+                            id=str(m.id),
+                            plan_id=str(m.planning_version_id) if m.planning_version_id else str(version.id),
+                            planning_period=m.planning_period,
+                            planning_month=m.planning_month,
+                            planning_year=m.planning_year,
+                            revision=m.planning_version.revision_label if m.planning_version else version.revision_label,
+                            part_name=m.part_name,
+                            part_number=m.part_number,
+                            consumable_code=m.consumable_code,
+                            consumable_name=m.consumable_name,
+                            process_name=m.process_name,
+                            part_thickness=format(m.part_thickness, ".4f"),
+                            process_count=m.process_count,
+                            production_order_qty=format(m.production_order_qty, ".4f"),
+                            scheduled_consumable_qty=format(m.scheduled_consumable_qty, ".4f"),
+                            plant=m.plant,
+                            process=m.process_name,
+                            description=m.consumable_name,
+                            unit=m.unit,
+                            required_qty=format(m.scheduled_consumable_qty, ".4f"),
+                            stock_qty=format(m.stock_qty, ".4f"),
+                            shortage_qty=format(m.shortage_qty, ".4f"),
+                            po_pending_qty=format(m.po_pending_qty, ".4f"),
+                            msl=format(m.msl, ".4f"),
+                            status=m.status,
+                            remarks=m.remarks,
+                            opening_stock=format(getattr(m, "opening_stock", Decimal("0.0")), ".4f"),
+                            grn_received_qty=format(getattr(m, "grn_received_qty", Decimal("0.0")), ".4f"),
+                            consumed_qty=format(getattr(m, "consumed_qty", Decimal("0.0")), ".4f"),
+                            closing_stock=format(getattr(m, "closing_stock", Decimal("0.0")), ".4f"),
+                            gross_requirement=format(getattr(m, "gross_requirement", Decimal("0.0")), ".4f"),
+                            net_order_requirement=format(getattr(m, "net_order_requirement", Decimal("0.0")), ".4f"),
+                            last_synced_at=m.last_synced_at,
+                            grn_source_file=m.grn_source_file,
+                            invoice_no=m.invoice_no,
+                            grn_date=m.grn_date,
+                            created_at=m.created_at,
+                            updated_at=m.updated_at,
+                        )
+                    )
+                    added_codes.add(m.consumable_code.strip().upper())
 
     # Filter predicate
     def matches(record: RequirementWorkspaceRecord) -> bool:
@@ -1350,6 +1553,520 @@ def export_requirements_excel(
     return buf.getvalue()
 
 
+def _normalize_header_key(col_name: Any) -> str:
+    if col_name is None:
+        return ""
+    return str(col_name).strip().lower().replace(" ", "_").replace("-", "_").replace(".", "_")
+
+
+def _normalize_header_slug(val: Any) -> str:
+    if val is None:
+        return ""
+    return re.sub(r"[^a-z0-9]", "", str(val).lower())
+
+
+ITEM_CODE_SLUGS = {
+    "itemid", "itemcode", "partno", "partnumber", "consumableid",
+    "consumablecode", "materialcode", "itemno", "item", "consumable", "material"
+}
+
+QTY_SLUGS = {
+    "grnqty", "receivedqty", "acceptedqty", "billedqty", "qty",
+    "receiptqty", "grnquantity", "receivedquantity", "quantity", "received", "accepted"
+}
+
+RATE_SLUGS = {
+    "rate", "unitprice", "basicrate", "landedcostrate", "unitrate",
+    "grnrate", "price", "cost", "unitcost", "itemrate"
+}
+
+GRN_NO_SLUGS = {
+    "grnno", "grnnumber", "grnid", "docno", "documentno",
+    "receiptno", "receiptnumber", "invoiceno", "invoicenum", "invoicenumber",
+    "billno", "dcno", "challanno", "doc"
+}
+
+DATE_SLUGS = {
+    "grndate", "date", "receiptdate", "docdate", "postingdate",
+    "billdate", "invoicedate", "entrydate"
+}
+
+VENDOR_SLUGS = {
+    "suppliername", "vendorname", "supplier", "vendor",
+    "partyname", "party", "supplierid", "vendorid"
+}
+
+PLANT_SLUGS = {
+    "plant", "plantid", "plantname", "location", "facility",
+    "unitlocation", "works", "plantunit", "worklocation"
+}
+
+UOM_SLUGS = {
+    "unit", "uom", "unitofmeasure", "outputunit"
+}
+
+CANCELLED_SLUGS = {
+    "cancelled", "canceled", "iscancelled", "iscanceled"
+}
+
+DESC_SLUGS = {
+    "description", "itemdescription", "itemname", "name", "materialname",
+    "materialdescription", "partname", "partdescription", "itemdesc", "desc", "productdescription"
+}
+
+
+def _score_qty_slug(slug: str) -> int:
+    if slug in ("grnqty", "receivedqty", "grnquantity", "receivedquantity", "receiptqty"):
+        return 3
+    if slug in ("acceptedqty", "accepted"):
+        return 2
+    return 1
+
+
+def _score_rate_slug(slug: str) -> int:
+    if slug in ("rate", "unitrate", "unitprice", "basicrate", "grnrate", "price"):
+        return 3
+    if slug in ("landedcostrate", "cost", "unitcost", "itemrate"):
+        return 2
+    return 1
+
+
+def _normalize_plant_identifier(val: Optional[str]) -> str:
+    if not val:
+        return ""
+    cleaned = str(val).strip().upper().replace(" ", "_").replace("-", "_")
+    roman_map = {
+        "PLANT_I": "PLANT_1",
+        "PLANT_II": "PLANT_2",
+        "PLANT_III": "PLANT_3",
+        "PLANT_IV": "PLANT_4",
+        "PLANT_V": "PLANT_5",
+        "PLANT_1": "PLANT_1",
+        "PLANT_2": "PLANT_2",
+        "PLANT_3": "PLANT_3",
+        "PLANT_4": "PLANT_4",
+        "PLANT_5": "PLANT_5",
+    }
+    return roman_map.get(cleaned, cleaned)
+
+
+def _parse_safe_date(val: Any) -> Optional[datetime]:
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+    if hasattr(val, "year") and hasattr(val, "month") and hasattr(val, "day"):
+        return datetime(val.year, val.month, val.day, tzinfo=timezone.utc)
+    val_str = str(val).strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%m/%d/%Y", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(val_str, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return None
+
+
+def ingest_mrp_grn(
+    session,
+    file_bytes: bytes,
+    filename: str,
+    plant_id: Optional[str] = None,
+    planning_month: int = 1,
+    planning_year: int = 2026,
+    current_user_id: Optional[UUID] = None,
+) -> dict[str, Any]:
+    """Ingests store GRN file and performs month-end overwrite upsert for MRP consumable records."""
+    if not file_bytes:
+        raise ApplicationError("EMPTY_FILE", "The uploaded GRN file is empty.", 400)
+
+    planning_period = f"{planning_year:04d}-{planning_month:02d}"
+    now = datetime.now(timezone.utc)
+
+    # 1. Parse raw rows from CSV or Excel into list of lists
+    raw_rows: list[list[Any]] = []
+    is_csv = filename.lower().endswith(".csv")
+
+    if is_csv:
+        text_content = ""
+        for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                text_content = file_bytes.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        if not text_content:
+            text_content = file_bytes.decode("utf-8", errors="replace")
+
+        reader = csv.reader(io.StringIO(text_content))
+        for row in reader:
+            if any(str(c).strip() for c in row if c is not None):
+                raw_rows.append(list(row))
+    else:
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+            ws = wb.active
+            if ws is None:
+                ws = wb.worksheets[0]
+            for row in ws.iter_rows(values_only=True):
+                if any(row is not None and str(c).strip() for c in row if c is not None):
+                    raw_rows.append(list(row))
+        except Exception as exc:
+            raise ApplicationError("INVALID_EXCEL_FORMAT", f"Unable to parse Excel file: {str(exc)}", 400)
+
+    if not raw_rows:
+        raise ApplicationError("EMPTY_DATA", "No data rows found in uploaded GRN file.", 400)
+
+    # 2. Dynamic header detection in first 10 rows
+    header_row_idx = -1
+    col_map: dict[str, int] = {}
+
+    for r_idx, row in enumerate(raw_rows[:10]):
+        slugs = [_normalize_header_slug(c) for c in row]
+        has_item = any(s in ITEM_CODE_SLUGS for s in slugs if s)
+        has_qty = any(s in QTY_SLUGS for s in slugs if s)
+        if has_item and has_qty:
+            header_row_idx = r_idx
+            for c_idx, s in enumerate(slugs):
+                if not s:
+                    continue
+                if s in ITEM_CODE_SLUGS and "item_code" not in col_map:
+                    col_map["item_code"] = c_idx
+                elif s in QTY_SLUGS:
+                    if "qty" not in col_map or _score_qty_slug(s) > _score_qty_slug(slugs[col_map["qty"]]):
+                        col_map["qty"] = c_idx
+                elif s in RATE_SLUGS:
+                    if "rate" not in col_map or _score_rate_slug(s) > _score_rate_slug(slugs[col_map["rate"]]):
+                        col_map["rate"] = c_idx
+                elif s in GRN_NO_SLUGS and "grn_no" not in col_map:
+                    col_map["grn_no"] = c_idx
+                elif s in DATE_SLUGS and "date" not in col_map:
+                    col_map["date"] = c_idx
+                elif s in VENDOR_SLUGS and "vendor" not in col_map:
+                    col_map["vendor"] = c_idx
+                elif s in PLANT_SLUGS and "plant" not in col_map:
+                    col_map["plant"] = c_idx
+                elif s in UOM_SLUGS and "uom" not in col_map:
+                    col_map["uom"] = c_idx
+                elif s in CANCELLED_SLUGS and "cancelled" not in col_map:
+                    col_map["cancelled"] = c_idx
+                elif s in DESC_SLUGS and "desc" not in col_map:
+                    col_map["desc"] = c_idx
+            break
+
+    if header_row_idx == -1 or "item_code" not in col_map or "qty" not in col_map:
+        raise ApplicationError(
+            "NO_VALID_GRN_ITEMS",
+            "Could not detect valid items or received quantities in uploaded GRN file. Ensure headers include 'item_id' / 'item_code' and 'grn_qty' / 'received_qty'.",
+            400,
+        )
+
+    # 3. Aggregate incoming quantities per consumable and plant within this file
+    aggregated_incoming: dict[tuple[str, Optional[str]], dict[str, Any]] = {}
+
+    for row_idx, r in enumerate(raw_rows[header_row_idx + 1:], start=header_row_idx + 2):
+        # Skip summary rows where grn_no starts with total
+        grn_no_val = ""
+        if "grn_no" in col_map and col_map["grn_no"] < len(r) and r[col_map["grn_no"]] is not None:
+            grn_no_val = str(r[col_map["grn_no"]]).strip()
+        if grn_no_val.lower().startswith("total"):
+            continue
+
+        # Skip rows where item_code is empty or starts with total
+        item_raw = r[col_map["item_code"]] if "item_code" in col_map and col_map["item_code"] < len(r) else None
+        item_val = str(item_raw).strip() if item_raw is not None else ""
+        if not item_val or item_val.lower() == "total" or item_val.lower().startswith("total"):
+            continue
+
+        # Skip cancelled rows
+        if "cancelled" in col_map and col_map["cancelled"] < len(r):
+            canc_raw = r[col_map["cancelled"]]
+            canc_val = str(canc_raw).strip().lower() if canc_raw is not None else ""
+            if canc_val in ("yes", "y", "true", "1"):
+                continue
+
+        # Quantity
+        qty_raw = r[col_map["qty"]] if "qty" in col_map and col_map["qty"] < len(r) else None
+        if qty_raw is None or str(qty_raw).strip() == "":
+            continue
+        try:
+            qty_clean = Decimal(str(qty_raw).replace(",", "").strip())
+        except (InvalidOperation, ValueError):
+            continue
+
+        # Rate
+        rate_val = None
+        if "rate" in col_map and col_map["rate"] < len(r) and r[col_map["rate"]] is not None:
+            rate_str = str(r[col_map["rate"]]).replace(",", "").strip()
+            if rate_str:
+                try:
+                    rate_val = Decimal(rate_str)
+                except (InvalidOperation, ValueError):
+                    pass
+
+        # Date
+        date_val = None
+        if "date" in col_map and col_map["date"] < len(r) and r[col_map["date"]] is not None:
+            date_val = _parse_safe_date(r[col_map["date"]])
+
+        # Plant
+        plant_val = None
+        if "plant" in col_map and col_map["plant"] < len(r) and r[col_map["plant"]] is not None:
+            pv = str(r[col_map["plant"]]).strip()
+            if pv:
+                plant_val = pv
+        if not plant_val and plant_id and str(plant_id).strip():
+            plant_val = str(plant_id).strip()
+
+        row_plant_key = _normalize_plant_identifier(plant_val) if plant_val else None
+
+        # UOM & Description
+        uom_val = None
+        if "uom" in col_map and col_map["uom"] < len(r) and r[col_map["uom"]] is not None:
+            uv = str(r[col_map["uom"]]).strip()
+            if uv:
+                uom_val = uv
+
+        desc_val = None
+        if "desc" in col_map and col_map["desc"] < len(r) and r[col_map["desc"]] is not None:
+            dv = str(r[col_map["desc"]]).strip()
+            if dv:
+                desc_val = dv
+
+        inv_val = grn_no_val or None
+
+        item_key = item_val.strip().upper()
+        agg_key = (item_key, row_plant_key)
+        if agg_key not in aggregated_incoming:
+            aggregated_incoming[agg_key] = {
+                "raw_item": item_val.strip(),
+                "qty": qty_clean,
+                "invoice_no": inv_val,
+                "grn_date": date_val,
+                "rate": rate_val,
+                "row_plant_key": row_plant_key,
+                "raw_plant": plant_val,
+                "uom": uom_val,
+                "description": desc_val,
+            }
+        else:
+            aggregated_incoming[agg_key]["qty"] += qty_clean
+            if inv_val:
+                aggregated_incoming[agg_key]["invoice_no"] = inv_val
+            if date_val:
+                aggregated_incoming[agg_key]["grn_date"] = date_val
+            if rate_val is not None:
+                aggregated_incoming[agg_key]["rate"] = rate_val
+            if uom_val and not aggregated_incoming[agg_key].get("uom"):
+                aggregated_incoming[agg_key]["uom"] = uom_val
+            if desc_val and not aggregated_incoming[agg_key].get("description"):
+                aggregated_incoming[agg_key]["description"] = desc_val
+
+    # 4. Existing record index across month and year
+    existing_records = session.scalars(
+        select(MonthlyRequirementRecord).where(
+            MonthlyRequirementRecord.planning_month == planning_month,
+            MonthlyRequirementRecord.planning_year == planning_year,
+            MonthlyRequirementRecord.is_deleted == False,  # noqa: E712
+        )
+    ).all()
+
+    # Index by (consumable_code, plant_key) and globally by consumable_code
+    existing_by_plant_and_code: dict[tuple[str, str], list[MonthlyRequirementRecord]] = {}
+    existing_by_code: dict[str, list[MonthlyRequirementRecord]] = {}
+    for rec in existing_records:
+        rec_code = rec.consumable_code.strip().upper()
+        rec_plant_k = _normalize_plant_identifier(rec.plant_id or rec.plant)
+        if rec_plant_k:
+            existing_by_plant_and_code.setdefault((rec_code, rec_plant_k), []).append(rec)
+        existing_by_code.setdefault(rec_code, []).append(rec)
+
+    # Find active PlanningVersion if any
+    version = session.scalar(
+        select(PlanningVersion)
+        .where(PlanningVersion.planning_period == planning_period)
+        .order_by(PlanningVersion.version_number.desc())
+        .limit(1)
+    )
+
+    consumables_updated_count = 0
+    updated_count = 0
+    inserted_count = 0
+
+    # 5. Perform month-end overwrite upsert
+    for entry in aggregated_incoming.values():
+        raw_item = entry["raw_item"]
+        incoming_qty = entry["qty"]
+        inv_no = entry["invoice_no"]
+        grn_dt = entry["grn_date"]
+        rate = entry["rate"]
+        row_plant_key = entry["row_plant_key"]
+        raw_plant = entry["raw_plant"]
+        row_uom = entry.get("uom")
+        row_desc = entry.get("description")
+
+        # Resolve consumable master
+        consumable = None
+        try:
+            c_uuid = UUID(raw_item)
+            consumable = session.get(Consumable, c_uuid)
+        except (ValueError, TypeError):
+            pass
+        if not consumable:
+            consumable = session.scalar(
+                select(Consumable).where(func.upper(func.btrim(Consumable.item_id)) == raw_item.upper()).limit(1)
+            )
+
+        if consumable:
+            consumable_code = consumable.code
+            consumable_name = getattr(consumable, "name", None) or row_desc or consumable.code
+            consumable_uom = getattr(consumable, "output_unit", None) or getattr(consumable, "unit_of_measure", None) or row_uom or "NOS"
+            if rate is not None and hasattr(consumable, "latest_grn_rate"):
+                consumable.latest_grn_rate = rate
+                consumables_updated_count += 1
+        else:
+            consumable_code = raw_item
+            consumable_name = row_desc or raw_item
+            consumable_uom = row_uom or "NOS"
+            # Auto-create consumable in master so latest_grn_rate is recorded
+            new_consumable = Consumable(
+                item_id=raw_item.strip().upper(),
+                name=consumable_name,
+                output_unit=consumable_uom,
+                latest_grn_rate=rate if (rate is not None and rate > Decimal("0")) else Decimal("0.0"),
+            )
+            session.add(new_consumable)
+            consumables_updated_count += 1
+
+        code_upper = consumable_code.strip().upper()
+        raw_upper = raw_item.strip().upper()
+
+        matched_recs: list[MonthlyRequirementRecord] = []
+        if row_plant_key:
+            # Row has specific plant
+            matched_recs = existing_by_plant_and_code.get((code_upper, row_plant_key), [])
+            if not matched_recs and raw_upper != code_upper:
+                matched_recs = existing_by_plant_and_code.get((raw_upper, row_plant_key), [])
+        else:
+            # Global store intake: match across all plants
+            matched_recs = existing_by_code.get(code_upper, [])
+            if not matched_recs and raw_upper != code_upper:
+                matched_recs = existing_by_code.get(raw_upper, [])
+
+        if matched_recs:
+            # Overwrite existing record's grn_received_qty (month-end overwrite, not additive summing)
+            for rec in matched_recs:
+                rec.grn_received_qty = incoming_qty
+                opening = rec.opening_stock if rec.opening_stock is not None else Decimal("0.0")
+                consumed = rec.consumed_qty if rec.consumed_qty is not None else Decimal("0.0")
+                closing = (opening + rec.grn_received_qty) - consumed
+                rec.closing_stock = closing
+
+                gross = rec.gross_requirement if rec.gross_requirement and rec.gross_requirement > Decimal("0") else (rec.scheduled_consumable_qty or Decimal("0.0"))
+                rec.gross_requirement = gross
+                net_req = max(Decimal("0.0"), gross - closing)
+                rec.net_order_requirement = net_req
+
+                # Sync spreadsheet display columns
+                rec.stock_qty = closing
+                rec.shortage_qty = net_req
+                rec.last_synced_at = now
+                rec.grn_source_file = filename
+                if inv_no:
+                    rec.invoice_no = inv_no
+                if grn_dt:
+                    rec.grn_date = grn_dt
+
+                if rec.shortage_qty > Decimal("0"):
+                    rec.status = "Critical shortage" if rec.closing_stock <= Decimal("0") else "Low"
+                else:
+                    rec.status = "Normal"
+
+                rec.updated_at = now
+                updated_count += 1
+        else:
+            # Insert a new record initialized with the uploaded GRN quantity
+            closing = incoming_qty
+            assigned_plant = raw_plant or plant_id or "Plant 1"
+            assigned_plant_id = raw_plant or plant_id or "PLANT_1"
+            new_rec = MonthlyRequirementRecord(
+                planning_period=planning_period,
+                planning_month=planning_month,
+                planning_year=planning_year,
+                planning_version_id=version.id if version else None,
+                part_name=row_desc or "General",
+                part_number=raw_item.strip().upper(),
+                consumable_code=consumable_code,
+                consumable_name=consumable_name,
+                process_name="Store Receipt",
+                part_thickness=Decimal("0.0000"),
+                process_count=1,
+                production_order_qty=Decimal("0.0000"),
+                scheduled_consumable_qty=Decimal("0.0000"),
+                unit=consumable_uom,
+                plant=assigned_plant,
+                plant_id=assigned_plant_id,
+                opening_stock=Decimal("0.0000"),
+                grn_received_qty=incoming_qty,
+                consumed_qty=Decimal("0.0000"),
+                closing_stock=closing,
+                gross_requirement=Decimal("0.0000"),
+                net_order_requirement=Decimal("0.0000"),
+                stock_qty=closing,
+                shortage_qty=Decimal("0.0000"),
+                po_pending_qty=Decimal("0.0000"),
+                msl=Decimal("0.0000"),
+                status="Normal",
+                last_synced_at=now,
+                grn_source_file=filename,
+                invoice_no=inv_no,
+                grn_date=grn_dt,
+                created_by=current_user_id,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(new_rec)
+            rec_p_k = _normalize_plant_identifier(assigned_plant_id)
+            if rec_p_k:
+                existing_by_plant_and_code.setdefault((code_upper, rec_p_k), []).append(new_rec)
+            existing_by_code.setdefault(code_upper, []).append(new_rec)
+            inserted_count += 1
+
+    # Update version timestamp if available
+    if version:
+        version.updated_at = now
+        if current_user_id:
+            version.updated_by = current_user_id
+
+    # Audit log
+    session.add(
+        AuditLog(
+            actor_id=current_user_id,
+            action="GRN_OVERWRITE_INGEST",
+            entity_type="monthly_requirement_records",
+            entity_id=version.id if version else uuid4(),
+            new_values={
+                "period": planning_period,
+                "plant_id": plant_id or "ALL",
+                "filename": filename,
+                "updated_count": updated_count,
+                "inserted_count": inserted_count,
+                "consumables_updated_count": consumables_updated_count,
+            },
+            reason=f"Ingested GRN month-end overwrite file {filename} for {plant_id or 'all plants'} ({planning_period})",
+        )
+    )
+
+    session.commit()
+
+    return {
+        "status": "success",
+        "updated_count": updated_count,
+        "inserted_count": inserted_count,
+        "period": planning_period,
+        "consumables_updated_count": consumables_updated_count,
+    }
+
+
 def get_period_calculation_issues(session, *, month: int, year: int) -> list[dict[str, Any]]:
     planning_period = f"{year:04d}-{month:02d}"
     version = session.scalar(
@@ -1372,17 +2089,60 @@ def get_period_calculation_issues(session, *, month: int, year: int) -> list[dic
     ).all()
     results = []
     for err in errors:
-        prod = err.product
-        product_code = err.prd_order_item.product_code if err.prd_order_item else (prod.code if prod else '')
+        prod = getattr(err, "product", None)
+        prd_item = getattr(err, "prd_order_item", None)
+        consumable = getattr(err, "consumable", None)
+        ctx = getattr(err, "context_data", None) or {}
+
+        product_ref = (
+            getattr(err, "product_code", None)
+            or (prod.code if prod else None)
+            or (prd_item.product_code if prd_item else None)
+            or ctx.get("product_code")
+            or str(getattr(err, "product_id", "") or "")
+        )
+        part_number = (
+            (prod.part_number if prod else None)
+            or (prd_item.part_number if prd_item else None)
+            or ctx.get("part_number")
+            or getattr(err, "product_code", None)
+            or product_ref
+            or ""
+        )
+        item_id = (
+            (prod.item_id if prod else None)
+            or (prd_item.item_id if prd_item else None)
+            or ctx.get("item_id")
+            or ""
+        )
+        product_name = (
+            (prod.name if prod else None)
+            or (prd_item.product_name if prd_item else None)
+            or ctx.get("product_name")
+            or ""
+        )
+        consumable_code = (
+            (consumable.code if consumable else None)
+            or (consumable.item_id if consumable else None)
+            or ctx.get("consumable_code")
+            or ""
+        )
+        error_code = getattr(err, "error_code", "") or ""
+        error_message = (
+            getattr(err, "error_message", None)
+            or getattr(err, "reason", None)
+            or ""
+        )
+
         results.append({
-            "id": str(err.id),
-            "product_code": product_code,
-            "part_number": (prod.part_number if prod else "") or product_code,
-            "item_id": (prod.item_id if prod else "") or "",
-            "product_name": (prod.name if prod else "") or "",
-            "consumable_code": err.consumable.code if err.consumable else "",
-            "error_code": err.error_code,
-            "error_message": err.error_message,
+            "id": str(getattr(err, "id", "")),
+            "product_code": product_ref,
+            "part_number": part_number,
+            "item_id": item_id,
+            "product_name": product_name,
+            "consumable_code": consumable_code,
+            "error_code": error_code,
+            "error_message": error_message,
         })
     return results
 

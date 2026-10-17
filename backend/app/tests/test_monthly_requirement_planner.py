@@ -664,6 +664,84 @@ def test_five_column_catalog_without_qty_defaults_to_zero(client, test_data):
     assert items_by_code["CAT-ITEM-003"]["unit"] == "KGS"
 
 
+def test_formula_generation_and_plant_modification_workflow(client, test_data):
+    # 1. Trigger formula generation
+    res_gen = client.post(
+        "/api/v1/plans/calculate-formulas?month=11&year=2026",
+        headers=test_data["admin_headers"],
+    )
+    assert res_gen.status_code == 200, res_gen.text
+    gen_data = res_gen.json()
+    assert gen_data["month"] == 11
+    assert gen_data["year"] == 2026
+    assert len(gen_data["plans_updated"]) == 5
+
+    # 2. Fetch Plant 1 plan
+    plans_res = client.get("/api/v1/plans?month=11&year=2026", headers=test_data["admin_headers"])
+    assert plans_res.status_code == 200
+    p1_plan = next(p for p in plans_res.json() if p["plant_id"] == "PLANT_I")
+    p1_id = p1_plan["id"]
+
+    # 3. Add an item with formula_qty
+    item_res = client.post(
+        f"/api/v1/plans/{p1_id}/items/single",
+        json={"item_code": "CONS-FORM-101", "item_description": "Industrial Oil", "requested_qty": 100.0, "unit": "LTR"},
+        headers=test_data["admin_headers"],
+    )
+    assert item_res.status_code == 200
+    item_id = item_res.json()["id"]
+
+    # Manually set formula_qty = 100.0
+    client.put(
+        f"/api/v1/plans/{p1_id}/items/{item_id}",
+        json={"formula_qty": 100.0, "requested_qty": 100.0},
+        headers=test_data["admin_headers"],
+    )
+
+    # 4. Plant Incharge modifies quantity from 100 to 140
+    mod_res = client.put(
+        f"/api/v1/plans/{p1_id}/items/{item_id}",
+        json={"requested_qty": 140.0, "modification_reason": "High shopfloor wear during monsoon"},
+        headers=test_data["plant_1_headers"],
+    )
+    assert mod_res.status_code == 200
+    mod_item = mod_res.json()
+    assert mod_item["requested_qty"] == 140.0
+    assert mod_item["formula_qty"] == 100.0
+    assert mod_item["is_modified"] is True
+    assert mod_item["modification_reason"] == "High shopfloor wear during monsoon"
+
+    # 5. Plant Incharge submits for approval
+    sub_res = client.patch(f"/api/v1/plans/{p1_id}/submit", headers=test_data["plant_1_headers"])
+    assert sub_res.status_code == 200
+    assert sub_res.json()["status"] == "SUBMITTED"
+
+    # 6. Admin rejects plan for revisions
+    rej_res = client.patch(f"/api/v1/plans/{p1_id}/reject", headers=test_data["admin_headers"])
+    assert rej_res.status_code == 200
+    assert rej_res.json()["status"] == "REJECTED"
+
+    # 7. Plant Incharge adjusts and resubmits
+    client.put(
+        f"/api/v1/plans/{p1_id}/items/{item_id}",
+        json={"requested_qty": 125.0, "modification_reason": "Revised after planner discussion"},
+        headers=test_data["plant_1_headers"],
+    )
+    resub_res = client.patch(f"/api/v1/plans/{p1_id}/submit", headers=test_data["plant_1_headers"])
+    assert resub_res.status_code == 200
+    assert resub_res.json()["status"] == "SUBMITTED"
+
+    # 8. Admin approves plan -> approved_qty set to requested_qty
+    appr_res = client.patch(f"/api/v1/plans/{p1_id}/approve", headers=test_data["admin_headers"])
+    assert appr_res.status_code == 200
+    approved_plan = appr_res.json()
+    assert approved_plan["status"] == "APPROVED"
+    approved_item = next(it for it in approved_plan["line_items"] if it["id"] == item_id)
+    assert approved_item["approved_qty"] == 125.0
+    assert approved_item["is_modified"] is True
+
+
+
 
 
 
