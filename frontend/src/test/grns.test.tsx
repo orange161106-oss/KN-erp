@@ -88,10 +88,10 @@ test('renders Excel table with headers, toolbar buttons, and formula bar', async
 
   // Table headers
   expect(await screen.findByText('Part Number')).toBeInTheDocument();
-  expect(screen.getByText('Item ID')).toBeInTheDocument();
-  expect(screen.getByText('Description')).toBeInTheDocument();
-  expect(screen.getByText('Qty')).toBeInTheDocument();
-  expect(screen.getByText('Unit')).toBeInTheDocument();
+  expect(await screen.findByText('Item ID')).toBeInTheDocument();
+  expect(await screen.findByText('Description')).toBeInTheDocument();
+  expect(await screen.findByText('Qty')).toBeInTheDocument();
+  expect(await screen.findByText('Unit')).toBeInTheDocument();
 
   // Table data rows
   expect(await screen.findByText('1222A00201')).toBeInTheDocument();
