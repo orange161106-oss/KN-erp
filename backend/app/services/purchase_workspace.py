@@ -33,7 +33,15 @@ from app.schemas.purchase_workspace import (
     PurchaseWorkspaceResponse,
 )
 from app.services.purchase_approval import submit_purchase_approval
-from app.services.requirements_workspace import get_monthly_plan_metadata
+from app.services.requirements_workspace import (
+    get_monthly_plan_metadata,
+    _normalize_plant_identifier,
+    _match_department_tab,
+    is_department_unit,
+)
+
+PLANT_MATRIX_KEYS = ["PLANT_1", "PLANT_2", "PLANT_3", "PLANT_4", "PLANT_5"]
+DEPT_MATRIX_KEYS = ["TOOL_ROOM", "QAD", "PMD", "NPD", "HRD", "ACCOUNTS", "SALES"]
 from app.services.stock_management_service import resolve_stock_parameter_for_item
 
 
@@ -73,15 +81,87 @@ def _central_workspace(session, version, meta, *, month, year, search, status_fi
     """Show saved central demand without inventing stock or bypassing traced assessment."""
     if current_user and not current_user.is_super_admin and current_user.plant_ids:
         raise ApplicationError('CENTRAL_REVIEW_REQUIRED', 'Central plans are reviewed by Super Admin.', 403)
-    totals = session.execute(select(
-        Consumable.id, Consumable.code, Consumable.name, CalculatedRequirement.unit_id,
-        CalculatedRequirement.uom, func.sum(CalculatedRequirement.calculated_qty),
-        func.count(CalculatedRequirement.id), func.min(CalculatedRequirement.created_at),
-        func.max(CalculatedRequirement.updated_at),
-    ).join(CalculatedRequirement, CalculatedRequirement.consumable_id == Consumable.id)
+    from app.models.production import Plant
+    calc_rows = session.execute(
+        select(
+            Consumable.id,
+            Consumable.code,
+            Consumable.name,
+            CalculatedRequirement.unit_id,
+            CalculatedRequirement.uom,
+            CalculatedRequirement.calculated_qty,
+            Plant.name,
+            CalculatedRequirement.id,
+            CalculatedRequirement.created_at,
+            CalculatedRequirement.updated_at,
+        )
+        .join(CalculatedRequirement, CalculatedRequirement.consumable_id == Consumable.id)
+        .outerjoin(Plant, Plant.id == CalculatedRequirement.plant_id)
         .where(CalculatedRequirement.planning_version_id == version.id)
-        .group_by(Consumable.id, Consumable.code, Consumable.name,
-            CalculatedRequirement.unit_id, CalculatedRequirement.uom)).all()
+    ).all()
+
+    dept_mrrs = session.scalars(
+        select(MonthlyRequirementRecord).where(
+            MonthlyRequirementRecord.planning_period == version.planning_period,
+            MonthlyRequirementRecord.is_deleted == False,
+        )
+    ).all()
+
+    # Aggregate plant and departmental demands per (consumable_id, uom)
+    calc_grouped: dict[tuple[UUID, str], dict[str, object]] = {}
+    for mat_id, code, name, unit_id, uom, qty, plant_name, req_id, c_at, u_at in calc_rows:
+        ckey = (mat_id, uom)
+        cbucket = calc_grouped.setdefault(
+            ckey,
+            {
+                "code": code,
+                "name": name,
+                "unit_id": unit_id,
+                "count": 0,
+                "created_at": c_at,
+                "updated_at": u_at,
+                "plant_demands": {k: Decimal("0.0000") for k in PLANT_MATRIX_KEYS},
+                "dept_demands": {k: Decimal("0.0000") for k in DEPT_MATRIX_KEYS},
+            },
+        )
+        cbucket["count"] = int(cbucket["count"]) + 1
+        p_k = _normalize_plant_identifier(plant_name)
+        val_qty = Decimal(str(qty or "0.0000"))
+        if p_k in cbucket["plant_demands"]:
+            cbucket["plant_demands"][p_k] += val_qty
+        elif p_k in cbucket["dept_demands"]:
+            cbucket["dept_demands"][p_k] += val_qty
+        else:
+            cbucket["plant_demands"]["PLANT_1"] += val_qty
+
+    # Add spliced departmental rows
+    for m in dept_mrrs:
+        if is_department_unit(m.plant) or is_department_unit(m.plant_id) or m.part_number == "DEPARTMENT_INDENT":
+            m_code = m.consumable_code.strip().upper()
+            m_qty = getattr(m, "gross_requirement", Decimal("0.0")) or (m.scheduled_consumable_qty or Decimal("0.0"))
+            m_dept = _normalize_plant_identifier(m.plant_id or m.plant)
+            # Find matching cbucket
+            for ckey, cbucket in calc_grouped.items():
+                if str(cbucket["code"]).strip().upper() == m_code:
+                    if m_dept in cbucket["dept_demands"]:
+                        cbucket["dept_demands"][m_dept] += m_qty
+                    else:
+                        dk = _match_department_tab(m.plant)
+                        if dk and dk in cbucket["dept_demands"]:
+                            cbucket["dept_demands"][dk] += m_qty
+                        else:
+                            cbucket["dept_demands"]["TOOL_ROOM"] += m_qty
+
+    totals = []
+    for (mat_id, uom), cbucket in calc_grouped.items():
+        tot_p = sum(cbucket["plant_demands"].values())
+        tot_d = sum(cbucket["dept_demands"].values())
+        tot_bg = tot_p + tot_d
+        totals.append((
+            mat_id, cbucket["code"], cbucket["name"], cbucket["unit_id"], uom,
+            tot_bg, cbucket["count"], cbucket["created_at"], cbucket["updated_at"],
+            cbucket["plant_demands"], cbucket["dept_demands"], tot_p, tot_d
+        ))
     approved = version.status == 'APPROVED' and version.approved_at is not None
     submitted = {}
     if approved:
@@ -103,7 +183,7 @@ def _central_workspace(session, version, meta, *, month, year, search, status_fi
     else:
         notice = 'Central requirements are approved. Complete the central inventory and supplier assessment to calculate purchase quantities. Submitted assessments appear here with their saved stock and purchase evidence.'
     records = []
-    for material_id, code, name, unit_id, uom, required, count, created_at, updated_at in totals:
+    for material_id, code, name, unit_id, uom, required, count, created_at, updated_at, p_demands, d_demands, t_p, t_d in totals:
         previous = submitted.get((material_id, uom))
         approval, report, supplier = previous if previous else (None, {}, None)
         status = 'REQUIREMENT_REVIEW_REQUIRED' if not approved else 'ASSESSMENT_REQUIRED'
@@ -115,7 +195,9 @@ def _central_workspace(session, version, meta, *, month, year, search, status_fi
             id=f'{version.id}:{material_id}:{unit_id}', planning_period=version.planning_period,
             planning_month=month, planning_year=year, plan_id=str(version.id), revision=version.revision_label,
             consumable_id=material_id, consumable_code=code, consumable_name=name, unit=uom,
-            required_qty=_q4(required), source_row_count=count, created_at=created_at, updated_at=updated_at,
+            required_qty=_q4(required), plant_demands=p_demands, dept_demands=d_demands,
+            total_plant_qty=_q4(t_p), total_dept_qty=_q4(t_d),
+            source_row_count=count, created_at=created_at, updated_at=updated_at,
             supplier_id=supplier.id if supplier else None, supplier_code=supplier.code if supplier else None,
             supplier_name=supplier.name if supplier else None,
             stock_qty=_q4(report['current_stock']) if report.get('current_stock') is not None else None,
@@ -269,11 +351,25 @@ def list_purchase_workspace(
                 "po_pending": Decimal("0"),
                 "shortage": Decimal("0"),
                 "count": 0,
+                "plant_demands": {k: Decimal("0.0000") for k in PLANT_MATRIX_KEYS},
+                "dept_demands": {k: Decimal("0.0000") for k in DEPT_MATRIX_KEYS},
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
             },
         )
-        bucket["required"] = bucket["required"] + row.scheduled_consumable_qty  # type: ignore[operator]
+        row_req = getattr(row, "gross_requirement", Decimal("0.0")) or (row.scheduled_consumable_qty or Decimal("0.0"))
+        norm_p = _normalize_plant_identifier(row.plant_id or row.plant)
+        if norm_p in bucket["plant_demands"]:
+            bucket["plant_demands"][norm_p] += row_req
+        elif norm_p in bucket["dept_demands"]:
+            bucket["dept_demands"][norm_p] += row_req
+        else:
+            dk = _match_department_tab(row.plant)
+            if dk and dk in bucket["dept_demands"]:
+                bucket["dept_demands"][dk] += row_req
+            else:
+                bucket["plant_demands"]["PLANT_1"] += row_req
+
         bucket["stock"] = bucket["stock"] + row.stock_qty  # type: ignore[operator]
         bucket["po_pending"] = bucket["po_pending"] + row.po_pending_qty  # type: ignore[operator]
         bucket["shortage"] = bucket["shortage"] + row.shortage_qty  # type: ignore[operator]
@@ -360,6 +456,10 @@ def list_purchase_workspace(
         if flags:
             remarks = f"{remarks} [{'; '.join(flags)}]" if remarks else "; ".join(flags)
 
+        tot_plants = sum(bucket["plant_demands"].values())
+        tot_depts = sum(bucket["dept_demands"].values())
+        tot_gross_bg = tot_plants + tot_depts
+
         record = PurchaseWorkspaceRecord(
             id=f"{version.id}:{key}",
             planning_period=planning_period,
@@ -374,7 +474,11 @@ def list_purchase_workspace(
             supplier_code=supplier.code if supplier else None,
             supplier_name=supplier.name if supplier else None,
             unit=stock_unit.code if stock_unit else str(bucket["unit"]),
-            required_qty=_q4(bucket["required"]),  # type: ignore[arg-type]
+            required_qty=_q4(tot_gross_bg),
+            plant_demands=bucket["plant_demands"],
+            dept_demands=bucket["dept_demands"],
+            total_plant_qty=_q4(tot_plants),
+            total_dept_qty=_q4(tot_depts),
             stock_qty=_q4(effective_stock),
             po_pending_qty=_q4(bucket["po_pending"]),  # type: ignore[arg-type]
             shortage_qty=shortage,
@@ -635,6 +739,82 @@ def export_purchase_workspace_excel(
     for col in ws.columns:
         width = max(len(str(cell.value or "")) for cell in col)
         ws.column_dimensions[get_column_letter(col[0].column)].width = max(12, min(width + 3, 48))
+
+    # --- Sheet 2: Consolidated Matrix (AT-BG) ---
+    ws2 = wb.create_sheet(title="Consolidated Matrix (AT-BG)")
+    ws2.cell(row=1, column=1, value="KNL CONSOLIDATED REQUIREMENTS MATRIX (COLUMNS AT TO BG)").font = title_font
+    ws2.cell(
+        row=2,
+        column=1,
+        value=f"Planning Period: {period_label} | Revision: {workspace.plan_metadata.revision_label} | Exported: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+    )
+
+    matrix_headers = [
+        "Consumable Code",
+        "Consumable Name",
+        "Unit",
+        "Plant I (AT)",
+        "Plant II (AU)",
+        "Plant III (AV)",
+        "Plant IV (AW)",
+        "Plant V (AX)",
+        "Total Plant Qty (AT:AX)",
+        "Tool Room (AY)",
+        "QAD / Quality (AZ)",
+        "PMD (BA)",
+        "NPD (BB)",
+        "HRD (BC)",
+        "Accounts (BD)",
+        "Sales (BE)",
+        "Total Dept Qty (AY:BE)",
+        "Total Gross Requirement (BG)",
+    ]
+    for col, h in enumerate(matrix_headers, start=1):
+        c = ws2.cell(row=4, column=col, value=h)
+        c.fill = navy_fill if col <= 3 else steel_fill
+        c.font = header_font
+        c.border = thin_border
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for row_idx, r in enumerate(records, start=5):
+        pd = r.plant_demands or {}
+        dd = r.dept_demands or {}
+        p1 = pd.get("PLANT_1", Decimal("0.0000"))
+        p2 = pd.get("PLANT_2", Decimal("0.0000"))
+        p3 = pd.get("PLANT_3", Decimal("0.0000"))
+        p4 = pd.get("PLANT_4", Decimal("0.0000"))
+        p5 = pd.get("PLANT_5", Decimal("0.0000"))
+        tot_p = r.total_plant_qty or (p1 + p2 + p3 + p4 + p5)
+
+        tr = dd.get("TOOL_ROOM", Decimal("0.0000"))
+        qa = dd.get("QAD", Decimal("0.0000"))
+        pm = dd.get("PMD", Decimal("0.0000"))
+        np = dd.get("NPD", Decimal("0.0000"))
+        hr = dd.get("HRD", Decimal("0.0000"))
+        ac = dd.get("ACCOUNTS", Decimal("0.0000"))
+        sa = dd.get("SALES", Decimal("0.0000"))
+        tot_d = r.total_dept_qty or (tr + qa + pm + np + hr + ac + sa)
+        tot_bg = r.required_qty or (tot_p + tot_d)
+
+        vals = [
+            r.consumable_code,
+            r.consumable_name,
+            r.unit,
+            p1, p2, p3, p4, p5, tot_p,
+            tr, qa, pm, np, hr, ac, sa, tot_d,
+            tot_bg,
+        ]
+        for col, val in enumerate(vals, start=1):
+            cell = ws2.cell(row=row_idx, column=col, value=val)
+            cell.font = data_font
+            cell.border = thin_border
+            if col >= 4:
+                cell.number_format = "#,##0.0000"
+                cell.alignment = Alignment(horizontal="right")
+
+    for col in ws2.columns:
+        width = max(len(str(cell.value or "")) for cell in col)
+        ws2.column_dimensions[get_column_letter(col[0].column)].width = max(12, min(width + 3, 35))
 
     buf = io.BytesIO()
     wb.save(buf)

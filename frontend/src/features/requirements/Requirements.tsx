@@ -241,6 +241,8 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
       const payloadRecords = Array.from(modifiedRecords.entries()).map(([id, changes]) => ({
         id,
         production_order_qty: changes.production_order_qty,
+        scheduled_consumable_qty: changes.scheduled_consumable_qty,
+        gross_requirement: changes.scheduled_consumable_qty,
         part_thickness: changes.part_thickness,
         process_count: changes.process_count,
         remarks: changes.remarks,
@@ -509,10 +511,25 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
   };
 
   // Filter options
+  const DEFAULT_OPERATIONAL_UNITS = [
+    'Plant 1',
+    'Plant 2',
+    'Plant 3',
+    'Plant 4',
+    'Plant 5',
+    'Tool Room',
+    'PMD',
+    'NPD',
+    'HRD',
+    'QAD',
+    'Accounts',
+    'Sales',
+  ];
+
   const uniquePlants = useMemo(() => {
-    const set = new Set<string>();
+    const set = new Set<string>(DEFAULT_OPERATIONAL_UNITS);
     records.forEach(r => { if (r.plant) set.add(r.plant); });
-    return Array.from(set).sort();
+    return Array.from(set);
   }, [records]);
 
   const uniqueConsumables = useMemo(() => {
@@ -663,7 +680,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
         minWidth: 150,
         align: 'right',
         type: 'number',
-        isEditable: false,
+        isEditable: canUpdate,
         render: val => <span className="font-mono font-bold text-indigo-950">{val}</span>,
       },
 
@@ -1119,11 +1136,11 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
           filters={[
             {
               key: 'plant',
-              label: 'Plant',
+              label: 'Plant / Unit',
               value: plantFilter,
               onChange: setPlantFilter,
               options: [
-                { value: '', label: 'All Plants' },
+                { value: '', label: 'All Plants / Units' },
                 ...uniquePlants.map(p => ({ value: p, label: p })),
               ],
             },

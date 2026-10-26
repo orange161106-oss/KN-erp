@@ -29,6 +29,7 @@ class RequirementWorkspaceRecord(BaseModel):
     process: str = ""  # alias for process_name
     description: str = ""  # alias for consumable_name
     unit: str = "NOS"
+    rule_type: str = "PRODUCTION_RATE"
     required_qty: str = "0.0000"  # alias for scheduled_consumable_qty
     stock_qty: str = "0.0000"
     shortage_qty: str = "0.0000"
@@ -115,6 +116,8 @@ class RequirementImportRequest(BaseModel):
 
 class RequirementUpdateItem(BaseModel):
     id: str
+    scheduled_consumable_qty: Optional[str] = None
+    gross_requirement: Optional[str] = None
     production_order_qty: Optional[str] = None
     part_thickness: Optional[str] = None
     process_count: Optional[int] = None

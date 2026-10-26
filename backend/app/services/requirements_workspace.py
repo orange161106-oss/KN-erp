@@ -60,6 +60,136 @@ def get_t_minus_2_period(month: int, year: int) -> tuple[int, int]:
     else:
         return month - 2, year
 
+CORE_DEPARTMENTS = [
+    "TOOL_ROOM",
+    "PMD",
+    "NPD",
+    "HRD",
+    "QAD",
+]
+SUPPORT_DEPARTMENTS = [
+    "ACCOUNTS",
+    "SALES",
+]
+ALL_DEPARTMENTS = CORE_DEPARTMENTS + SUPPORT_DEPARTMENTS
+
+DEPARTMENT_DISPLAY_NAMES = {
+    "TOOL_ROOM": "Tool Room",
+    "PMD": "PMD",
+    "NPD": "NPD",
+    "HRD": "HRD",
+    "QAD": "QAD",
+    "ACCOUNTS": "Accounts",
+    "SALES": "Sales",
+}
+
+DEPARTMENT_TAB_ALIASES: dict[str, list[str]] = {
+    "TOOL_ROOM": ["tool room", "toolroom", "tool_room", "dept tool room", "dept: tool room"],
+    "PMD": ["pmd", "plant maintenance", "maintenance", "pmd & tool maintenance", "pmd tool maintenance"],
+    "NPD": ["npd", "new product development"],
+    "HRD": ["hrd", "hr & admin", "hr admin", "safety", "hr"],
+    "QAD": ["qad", "quality", "qa", "quality assurance"],
+    "ACCOUNTS": ["accounts", "account", "finance"],
+    "SALES": ["sales", "purchase ,stores&admin", "stores&admin", "stores admin", "stores and admin", "purchase stores admin"],
+}
+
+
+def _normalize_header(hdr: Any) -> str:
+    if hdr is None:
+        return ""
+    text = str(hdr).strip().lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return " ".join(text.split())
+
+
+def _normalize_plant_identifier(val: Optional[str]) -> str:
+    if not val:
+        return ""
+    cleaned = str(val).strip().upper().replace(" ", "_").replace("-", "_")
+    roman_map = {
+        "PLANT_I": "PLANT_1",
+        "PLANT_II": "PLANT_2",
+        "PLANT_III": "PLANT_3",
+        "PLANT_IV": "PLANT_4",
+        "PLANT_V": "PLANT_5",
+        "PLANT_1": "PLANT_1",
+        "PLANT_2": "PLANT_2",
+        "PLANT_3": "PLANT_3",
+        "PLANT_4": "PLANT_4",
+        "PLANT_5": "PLANT_5",
+        "P1": "PLANT_1",
+        "P2": "PLANT_2",
+        "P3": "PLANT_3",
+        "P4": "PLANT_4",
+        "P5": "PLANT_5",
+        "TOOL_ROOM": "TOOL_ROOM",
+        "TOOLROOM": "TOOL_ROOM",
+        "DEPT:_TOOL_ROOM": "TOOL_ROOM",
+        "DEPT_TOOL_ROOM": "TOOL_ROOM",
+        "PMD": "PMD",
+        "PMD_&_TOOL_MAINTENANCE": "PMD",
+        "PMD_TOOL_MAINTENANCE": "PMD",
+        "MAINTENANCE": "PMD",
+        "NPD": "NPD",
+        "HRD": "HRD",
+        "HR_&_ADMIN": "HRD",
+        "QAD": "QAD",
+        "QUALITY": "QAD",
+        "QA": "QAD",
+        "ACCOUNTS": "ACCOUNTS",
+        "SALES": "SALES",
+    }
+    return roman_map.get(cleaned, cleaned)
+
+
+def _match_department_tab(title: Optional[str]) -> Optional[str]:
+    """Matches sheet title against known departmental aliases."""
+    if not title:
+        return None
+    raw = _normalize_header(title)
+    for dept_key, aliases in DEPARTMENT_TAB_ALIASES.items():
+        if any(alias == raw or alias in raw for alias in aliases):
+            return dept_key
+    return None
+
+
+def is_department_unit(val: Optional[str]) -> bool:
+    """Checks whether a string represents a maintenance or support department."""
+    if not val:
+        return False
+    norm = _normalize_plant_identifier(val)
+    if norm in ALL_DEPARTMENTS:
+        return True
+    matched = _match_department_tab(val)
+    return matched is not None
+
+
+def ensure_operational_units(session) -> None:
+    """Idempotently seeds department cost centers into the plants table."""
+    try:
+        existing_plants = {
+            name.strip().upper()
+            for name in session.scalars(select(Plant.name)).all()
+            if name
+        }
+        to_create = []
+        for dept_key, display_name in DEPARTMENT_DISPLAY_NAMES.items():
+            if display_name.upper() not in existing_plants and dept_key not in existing_plants:
+                to_create.append(
+                    Plant(
+                        id=uuid4(),
+                        name=display_name,
+                        location="Department",
+                        is_active=True,
+                    )
+                )
+        if to_create:
+            session.add_all(to_create)
+            session.flush()
+    except Exception:
+        # Ignore if tables not yet populated or session in read-only transaction
+        pass
+
 
 def get_monthly_plan_metadata(
     session, month: int, year: int
@@ -292,6 +422,17 @@ def calculate_workspace_requirements(
             stock_qty_val = format(cls_stk, ".4f") if has_stock_data else format(r.stock_qty, ".4f")
             shortage_qty_val = format(net_order, ".4f") if has_stock_data else format(r.shortage_qty, ".4f")
 
+            is_dept = is_department_unit(r.plant) or is_department_unit(r.plant_id) or r.part_number == "DEPARTMENT_INDENT" or r.process_name in ("DEPARTMENT_INDENT", "MAINTENANCE")
+            row_rule_type = "PLANT_REQUEST" if is_dept else "PRODUCTION_RATE"
+            row_status = r.status
+            if is_dept:
+                if row_status in ("Configuration required", "DRAFT"):
+                    row_status = "Calculated"
+                if net_order > Decimal("0"):
+                    row_status = "Critical shortage" if cls_stk <= Decimal("0") else "Low"
+                elif cls_stk > Decimal("0") or has_stock_data:
+                    row_status = "Normal"
+
             results.append(
                 RequirementWorkspaceRecord(
                     id=str(r.id),
@@ -316,12 +457,13 @@ def calculate_workspace_requirements(
                     process=r.process_name,
                     description=r.consumable_name,
                     unit=r.unit,
+                    rule_type=row_rule_type,
                     required_qty=format(r.scheduled_consumable_qty, ".4f"),
                     stock_qty=stock_qty_val,
                     shortage_qty=shortage_qty_val,
                     po_pending_qty=format(r.po_pending_qty, ".4f"),
                     msl=format(msl_qty, ".4f"),
-                    status=r.status,
+                    status=row_status,
                     remarks=r.remarks,
                     # Month-End Overwrite & MRP Balance Tracking
                     opening_stock=format(op_stock, ".4f"),
@@ -373,6 +515,12 @@ def calculate_workspace_requirements(
                     joinedload(RequirementCalculationError.prd_order_item))
                 .where(RequirementCalculationError.planning_version_id == version.id)
             ).all()
+            errors = [
+                err for err in errors
+                if not (is_department_unit(err.plant.name if err.plant else None)
+                        or (getattr(err, "context_data", None) or {}).get("rule_type") == "PLANT_REQUEST"
+                        or getattr(err, "product_code", "") == "DEPARTMENT_INDENT")
+            ]
 
             from app.services.rules import norm_reference_data
             references = norm_reference_data(session, list({row.rule_id for row in requirements}))
@@ -533,16 +681,30 @@ def calculate_workspace_requirements(
                     )
                 )
 
-            # Include store receipts and standalone GRN intake items from MonthlyRequirementRecord
+            # Include departmental indents, store receipts, and standalone GRN intake items from MonthlyRequirementRecord
+            added_keys = {(r.consumable_code.strip().upper(), _normalize_plant_identifier(r.plant)) for r in results if r.consumable_code}
             added_codes = {r.consumable_code.strip().upper() for r in results if r.consumable_code}
             for m in mrr_records:
+                is_dept = (
+                    is_department_unit(m.plant)
+                    or is_department_unit(m.plant_id)
+                    or m.part_number == "DEPARTMENT_INDENT"
+                    or m.process_name in ("DEPARTMENT_INDENT", "MAINTENANCE")
+                )
                 is_store_receipt = (
                     m.process_name == "Store Receipt"
                     or bool(m.grn_source_file)
                     or (m.grn_received_qty and m.grn_received_qty > Decimal("0"))
                 )
-                if is_store_receipt and m.consumable_code.strip().upper() not in added_codes:
-                    m_code = m.consumable_code.strip().upper()
+                m_code = m.consumable_code.strip().upper()
+                m_plant_norm = _normalize_plant_identifier(m.plant_id or m.plant)
+                should_splice = False
+                if is_dept and (m_code, m_plant_norm) not in added_keys:
+                    should_splice = True
+                elif is_store_receipt and m_code not in added_codes:
+                    should_splice = True
+
+                if should_splice:
                     if m_code in t2_stock_by_code:
                         m_op = t2_stock_by_code[m_code]
                     else:
@@ -558,6 +720,15 @@ def calculate_workspace_requirements(
                     has_stock_data = (m_code in t2_stock_by_code) or (m_grn > Decimal("0")) or (m_op > Decimal("0"))
                     m_stk = m_cls if has_stock_data else m.stock_qty
                     m_short = m_net if has_stock_data else m.shortage_qty
+
+                    m_status = m.status
+                    if is_dept:
+                        if m_status in ("Configuration required", "DRAFT"):
+                            m_status = "Calculated"
+                        if m_net > Decimal("0"):
+                            m_status = "Critical shortage" if m_cls <= Decimal("0") else "Low"
+                        elif m_cls > Decimal("0") or has_stock_data:
+                            m_status = "Normal"
 
                     results.append(
                         RequirementWorkspaceRecord(
@@ -580,12 +751,13 @@ def calculate_workspace_requirements(
                             process=m.process_name,
                             description=m.consumable_name,
                             unit=m.unit,
+                            rule_type="PLANT_REQUEST" if is_dept else "PRODUCTION_RATE",
                             required_qty=format(m.scheduled_consumable_qty, ".4f"),
                             stock_qty=format(m_stk, ".4f"),
                             shortage_qty=format(m_short, ".4f"),
                             po_pending_qty=format(m.po_pending_qty, ".4f"),
                             msl=format(m_msl, ".4f"),
-                            status=m.status,
+                            status=m_status,
                             remarks=m.remarks,
                             opening_stock=format(m_op, ".4f"),
                             grn_received_qty=format(m_grn, ".4f"),
@@ -602,11 +774,15 @@ def calculate_workspace_requirements(
                         )
                     )
                     added_codes.add(m_code)
+                    added_keys.add((m_code, m_plant_norm))
 
     # Filter predicate
     def matches(record: RequirementWorkspaceRecord) -> bool:
-        if plant_filter and plant_filter.upper() != "ALL" and plant_filter.lower() not in record.plant.lower():
-            return False
+        if plant_filter and plant_filter.upper() != "ALL":
+            pf = plant_filter.strip().lower().replace("_", " ")
+            rp = record.plant.strip().lower().replace("_", " ")
+            if pf not in rp and rp not in pf:
+                return False
         if consumable_filter and consumable_filter.upper() != "ALL":
             if (
                 consumable_filter.lower() not in record.consumable_code.lower()
@@ -650,6 +826,141 @@ def _normalize_header(hdr: Any) -> str:
     return " ".join(text.split())
 
 
+def _parse_departmental_sheet(
+    ws, dept_key: str, month: int, year: int
+) -> list[dict[str, Any]]:
+    """Dynamically parses a departmental consumable indent worksheet.
+
+    Scans first 10 rows for target month column and item/description/unit/qty headers.
+    """
+    month_abbr = calendar.month_abbr[month].lower()
+    month_full = calendar.month_name[month].lower()
+    year_str = str(year)
+    year_short = year_str[2:]
+    month_targets = [
+        f"{month_abbr}'{year_short}",
+        f"{month_abbr} {year_short}",
+        f"{month_abbr}-{year_short}",
+        f"{month_abbr}{year_short}",
+        f"{month_abbr}'{year_str}",
+        f"{month_abbr} {year_str}",
+        f"{month_abbr}-{year_str}",
+    ]
+
+    target_month_col: Optional[int] = None
+    header_row_idx: Optional[int] = None
+    col_map: dict[str, int] = {}
+
+    max_scan_row = min(10, (ws.max_row or 0) + 1)
+    for r in range(1, max_scan_row):
+        row_cells = [ws.cell(r, c).value for c in range(1, min(40, (ws.max_column or 0) + 1))]
+
+        # 1. Target month column search
+        if target_month_col is None:
+            for c_idx, val in enumerate(row_cells):
+                if val is None:
+                    continue
+                norm_val = str(val).strip().lower()
+                if any(t in norm_val for t in month_targets) or (month_abbr in norm_val and year_short in norm_val):
+                    target_month_col = c_idx
+                    break
+
+        # 2. Check for column headers
+        norm_row = [_normalize_header(v) for v in row_cells]
+        row_map = {}
+        for c_idx, text in enumerate(norm_row):
+            if not text:
+                continue
+            if any(k in text for k in ["item id", "item code", "consumable id", "consumable code", "itemid"]):
+                row_map.setdefault("item_id", c_idx)
+            elif any(k in text for k in ["description", "material name", "item description"]):
+                row_map.setdefault("description", c_idx)
+            elif any(k == text or k in text for k in ["unit", "uom"]):
+                row_map.setdefault("unit", c_idx)
+            elif any(k == text or k in text for k in ["qty", "quantity", "req qty", "requested qty"]):
+                row_map.setdefault("qty", c_idx)
+
+        if "item_id" in row_map or "description" in row_map:
+            header_row_idx = r
+            col_map = row_map
+            if target_month_col is not None:
+                break
+
+    if header_row_idx is None:
+        header_row_idx = 2
+        col_map = {"item_id": 1, "description": 2, "unit": 3, "qty": 4}
+
+    if target_month_col is not None:
+        col_map["qty"] = target_month_col
+    elif "qty" not in col_map:
+        col_map["qty"] = 4
+
+    item_col = col_map.get("item_id", 0)
+    desc_col = col_map.get("description", 1)
+    unit_col = col_map.get("unit", 2)
+    qty_col = col_map.get("qty", 3)
+
+    dept_display = DEPARTMENT_DISPLAY_NAMES.get(dept_key, dept_key)
+    proc_name = "MAINTENANCE" if dept_key == "PMD" else "DEPARTMENT_INDENT"
+
+    parsed_rows: list[dict[str, Any]] = []
+    for r_idx in range(header_row_idx + 1, (ws.max_row or 0) + 1):
+        row_vals = [ws.cell(r_idx, c).value for c in range(1, min(40, (ws.max_column or 0) + 1))]
+        if not any(v is not None and str(v).strip() != "" for v in row_vals):
+            continue
+
+        raw_item = row_vals[item_col] if item_col < len(row_vals) else None
+        raw_desc = row_vals[desc_col] if desc_col < len(row_vals) else None
+        raw_unit = row_vals[unit_col] if unit_col < len(row_vals) else None
+        raw_qty = row_vals[qty_col] if qty_col < len(row_vals) else None
+
+        item_str = str(raw_item or "").strip()
+        desc_str = str(raw_desc or "").strip()
+
+        # Skip headers or summary lines
+        item_lower = item_str.lower()
+        if not item_str and not desc_str:
+            continue
+        if item_lower in ("item id", "item id.", "s.no", "to location", "location", "dept:", "total"):
+            continue
+        if "total" in desc_str.lower() or "summary" in desc_str.lower():
+            continue
+
+        try:
+            qty_dec = Decimal(str(raw_qty).replace(",", "").strip()) if raw_qty is not None else Decimal("0")
+        except Exception:
+            qty_dec = Decimal("0")
+
+        unit_str = str(raw_unit or "NOS").strip() or "NOS"
+        code_val = item_str if item_str else desc_str
+        name_val = desc_str if desc_str else item_str
+
+        parsed_rows.append(
+            {
+                "row_index": r_idx,
+                "part_name": dept_display,
+                "part_number": "DEPARTMENT_INDENT",
+                "consumable_code": code_val,
+                "consumable_name": name_val,
+                "process_name": proc_name,
+                "part_thickness": "0.0000",
+                "process_count": 1,
+                "production_order_qty": "0.0000",
+                "scheduled_consumable_qty": format(qty_dec, ".4f"),
+                "plant": dept_display,
+                "unit": unit_str,
+                "required_qty": format(qty_dec, ".4f"),
+                "gross_requirement": format(qty_dec, ".4f"),
+                "rule_type": "PLANT_REQUEST",
+                "status": "Normal",
+                "remarks": f"Departmental indent: {dept_display}",
+                "is_valid": True,
+                "errors": [],
+            }
+        )
+    return parsed_rows
+
+
 def inspect_excel_file(
     file_bytes: bytes, filename: str, month: int, year: int, session
 ) -> RequirementExcelInspectResponse:
@@ -660,15 +971,49 @@ def inspect_excel_file(
     except Exception as e:
         raise ApplicationError("INVALID_EXCEL_FILE", f"Could not read Excel file: {str(e)}", 400)
 
-    # Pick the best worksheet (skip chartsheets or empty sheets)
+    # 1. Scan for departmental worksheets across the workbook
+    dept_preview_rows: list[dict[str, Any]] = []
+    dept_sheet_titles: set[str] = set()
+    for sheet in wb.worksheets:
+        if getattr(sheet, "sheet_type", "worksheet") == "chartsheet":
+            continue
+        dk = _match_department_tab(sheet.title)
+        if dk:
+            dept_sheet_titles.add(sheet.title)
+            dept_preview_rows.extend(_parse_departmental_sheet(sheet, dk, month, year))
+
+    # 2. Pick candidate component worksheet (skip chartsheets, empty sheets, and matched departmental sheets)
     ws = None
     for sheet in wb.worksheets:
         if getattr(sheet, "sheet_type", "worksheet") == "chartsheet":
             continue
+        if sheet.title in dept_sheet_titles:
+            continue
         if sheet.max_row and sheet.max_row > 1:
             ws = sheet
             break
+
     if ws is None:
+        if dept_preview_rows:
+            # Standalone departmental workbook with no separate component sheet
+            existing_plan = session.scalar(
+                select(PlanningVersion)
+                .where(PlanningVersion.planning_period == planning_period)
+                .limit(1)
+            ) if session else None
+
+            return RequirementExcelInspectResponse(
+                filename=filename,
+                total_rows=len(dept_preview_rows),
+                valid_rows=len([r for r in dept_preview_rows if r.get("is_valid", True)]),
+                error_count=0,
+                planning_month=month,
+                planning_year=year,
+                planning_period=planning_period,
+                plan_already_exists=existing_plan is not None,
+                errors=[],
+                preview_rows=dept_preview_rows,
+            )
         ws = wb.active
 
     if not ws:
@@ -795,31 +1140,43 @@ def inspect_excel_file(
                     col_mapping[field] = c_idx
         header_row_idx = 1
 
-    # Validate essential headers
-    if "part_name" not in col_mapping and "part_number" not in col_mapping:
-        errors.append(
-            RequirementRowError(
-                row_number=header_row_idx,
-                column_name="Used For – Part Name / Part Number",
-                error_description="Missing component header ('Used For – Part Name' or 'Used Part No.')",
-            )
-        )
-    if "consumable_code" not in col_mapping and "consumable_name" not in col_mapping:
-        errors.append(
-            RequirementRowError(
-                row_number=header_row_idx,
-                column_name="Consumable Item ID / Name",
-                error_description="Missing consumable header ('Consumable Item ID' or 'Consumable Name')",
-            )
-        )
-    if "production_order_qty" not in col_mapping:
-        errors.append(
-            RequirementRowError(
-                row_number=header_row_idx,
-                column_name="Production Order for Selected Month",
-                error_description="Missing production order quantity header ('Production Order for Selected Month')",
-            )
-        )
+    # Validate essential headers (exempt if departmental rows already captured or sheet is standalone departmental indent)
+    has_comp_headers = ("part_name" in col_mapping or "part_number" in col_mapping) and ("production_order_qty" in col_mapping)
+    if not has_comp_headers:
+        if dept_preview_rows:
+            # Component headers missing on this sheet, but valid departmental sheets exist: ignore component errors
+            pass
+        elif ("consumable_code" in col_mapping or "consumable_name" in col_mapping):
+            # Standalone sheet in departmental indent format
+            dk_fallback = _match_department_tab(ws.title) or "TOOL_ROOM"
+            dept_parsed = _parse_departmental_sheet(ws, dk_fallback, month, year)
+            if dept_parsed:
+                dept_preview_rows.extend(dept_parsed)
+        else:
+            if "part_name" not in col_mapping and "part_number" not in col_mapping:
+                errors.append(
+                    RequirementRowError(
+                        row_number=header_row_idx,
+                        column_name="Used For – Part Name / Part Number",
+                        error_description="Missing component header ('Used For – Part Name' or 'Used Part No.')",
+                    )
+                )
+            if "consumable_code" not in col_mapping and "consumable_name" not in col_mapping:
+                errors.append(
+                    RequirementRowError(
+                        row_number=header_row_idx,
+                        column_name="Consumable Item ID / Name",
+                        error_description="Missing consumable header ('Consumable Item ID' or 'Consumable Name')",
+                    )
+                )
+            if "production_order_qty" not in col_mapping:
+                errors.append(
+                    RequirementRowError(
+                        row_number=header_row_idx,
+                        column_name="Production Order for Selected Month",
+                        error_description="Missing production order quantity header ('Production Order for Selected Month')",
+                    )
+                )
 
     # Read and validate rows
     preview_rows: list[dict[str, Any]] = []
@@ -996,6 +1353,14 @@ def inspect_excel_file(
         .limit(1)
     ) if session else None
 
+    # Combine component preview rows and departmental preview rows
+    if dept_preview_rows:
+        preview_rows = preview_rows + dept_preview_rows
+        total_data_rows = len(preview_rows)
+        valid_data_rows = len([r for r in preview_rows if r.get("is_valid", True)])
+        if not has_comp_headers:
+            errors = []
+
     return RequirementExcelInspectResponse(
         filename=filename,
         total_rows=total_data_rows,
@@ -1077,6 +1442,7 @@ def import_monthly_requirements(
         session.add(version)
         session.flush()
 
+    ensure_operational_units(session)
     inserted_count = 0
     for idx, item in enumerate(req.records, start=1):
         p_name = str(item.get("part_name", "")).strip()
@@ -1105,6 +1471,20 @@ def import_monthly_requirements(
         except Exception:
             p_cnt = 1
 
+        plant_str = str(item.get("plant", "Plant 1")).strip()
+        plant_id_val = _normalize_plant_identifier(plant_str)
+        is_dept = is_department_unit(plant_str) or is_department_unit(plant_id_val) or item.get("rule_type") == "PLANT_REQUEST" or p_num == "DEPARTMENT_INDENT"
+
+        status_val = "CALCULATED" if is_dept else "DRAFT"
+        remarks_val = item.get("remarks") or (f"Departmental indent: {plant_str}" if is_dept else None)
+
+        gross_req_val = sched_qty
+        if "gross_requirement" in item and item["gross_requirement"] is not None:
+            try:
+                gross_req_val = Decimal(str(item["gross_requirement"]).replace(",", ""))
+            except Exception:
+                gross_req_val = sched_qty
+
         rec = MonthlyRequirementRecord(
             planning_version_id=version.id,
             planning_period=planning_period,
@@ -1120,10 +1500,12 @@ def import_monthly_requirements(
             process_count=p_cnt,
             production_order_qty=prod_qty,
             scheduled_consumable_qty=sched_qty,
+            gross_requirement=gross_req_val,
             unit=str(item.get("unit", "NOS")),
-            plant=str(item.get("plant", "Plant 1")),
-            status="DRAFT",
-            remarks=item.get("remarks"),
+            plant=plant_str,
+            plant_id=plant_id_val,
+            status=status_val,
+            remarks=remarks_val,
             created_by=current_user_id,
         )
         session.add(rec)
@@ -1167,6 +1549,20 @@ def batch_update_requirements(
         rec = session.get(MonthlyRequirementRecord, UUID(item.id))
         if not rec or rec.is_deleted:
             continue
+
+        if item.scheduled_consumable_qty is not None:
+            try:
+                rec.scheduled_consumable_qty = Decimal(item.scheduled_consumable_qty.replace(",", ""))
+                if item.gross_requirement is None:
+                    rec.gross_requirement = rec.scheduled_consumable_qty
+            except Exception:
+                pass
+
+        if item.gross_requirement is not None:
+            try:
+                rec.gross_requirement = Decimal(item.gross_requirement.replace(",", ""))
+            except Exception:
+                pass
 
         if item.production_order_qty is not None:
             try:
@@ -1361,6 +1757,28 @@ def recalculate_monthly_requirements(
     low_count = 0
 
     for rec in records:
+        is_dept = (
+            is_department_unit(rec.plant)
+            or is_department_unit(rec.plant_id)
+            or rec.part_number == "DEPARTMENT_INDENT"
+            or rec.process_name in ("DEPARTMENT_INDENT", "MAINTENANCE")
+        )
+        if is_dept:
+            rec.gross_requirement = rec.scheduled_consumable_qty
+            rec.status = "CALCULATED"
+            rec.remarks = f"Departmental indent: {rec.plant or 'Department'}"
+            shortage = max(Decimal("0"), rec.scheduled_consumable_qty - (rec.stock_qty + rec.po_pending_qty))
+            rec.shortage_qty = shortage
+            if shortage > Decimal("0"):
+                if rec.stock_qty <= Decimal("0"):
+                    rec.status = "Critical shortage"
+                    critical_count += 1
+                else:
+                    rec.status = "Low"
+                    low_count += 1
+            rec.updated_at = datetime.now(timezone.utc)
+            continue
+
         # Find approved consumption norm by consumable_code
         norm = session.scalar(
             select(ConsumptionNorm)

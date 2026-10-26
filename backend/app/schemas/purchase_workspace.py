@@ -31,6 +31,10 @@ class PurchaseWorkspaceRecord(BaseModel):
     draft_version: int = 0
 
     required_qty: Decimal = Field(decimal_places=4)
+    plant_demands: Optional[dict[str, Decimal]] = None
+    dept_demands: Optional[dict[str, Decimal]] = None
+    total_plant_qty: Optional[Decimal] = None
+    total_dept_qty: Optional[Decimal] = None
     stock_qty: Optional[Decimal] = Field(default=None, decimal_places=4)
     po_pending_qty: Optional[Decimal] = Field(default=None, decimal_places=4)
     shortage_qty: Optional[Decimal] = Field(default=None, decimal_places=4)
