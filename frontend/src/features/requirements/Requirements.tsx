@@ -207,9 +207,9 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
   // Handle inline cell changes for permitted fields
   const handleCellChange = (rowId: string, colKey: keyof RequirementRecord & string, value: string) => {
-    if (!canEditPlan) return;
-    // Permitted fields: production_order_qty, part_thickness, process_count, remarks
-    const permittedKeys = ['production_order_qty', 'part_thickness', 'process_count', 'remarks'];
+    if (!canUpdate) return;
+    // Permitted fields: production_order_qty, scheduled_consumable_qty, part_thickness, process_count, remarks
+    const permittedKeys = ['production_order_qty', 'scheduled_consumable_qty', 'part_thickness', 'process_count', 'remarks'];
     if (!permittedKeys.includes(colKey)) return;
 
     setRecords(prev =>
@@ -984,15 +984,15 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
         {/* Primary Action Buttons */}
         <div className="flex items-center gap-2">
-          {/* Upload Plan Button */}
-          {canEditPlan && (
+          {/* Upload Dept / Plan Button */}
+          {canUpdate && (
             <button
               type="button"
               onClick={() => setShowUploadModal(true)}
               className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5"
             >
               <UploadCloud className="w-3.5 h-3.5 text-slate-600" />
-              <span>Upload Plan</span>
+              <span>Upload Dept / Plan</span>
             </button>
           )}
 
@@ -1013,7 +1013,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
           )}
 
           {/* Save Changes Button (Active when permitted cells are edited) */}
-          {canEditPlan && (
+          {canUpdate && (
             <button
               type="button"
               onClick={() => void handleSaveChanges()}
@@ -1187,9 +1187,9 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
               onDeleteRows={handleDeleteRows}
               onDiscardChanges={handleDiscardChanges}
               isLoading={isLoading}
-              emptyMessage={`No consumable requirements found for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Click 'Upload Excel' to import a plan.`}
+              emptyMessage={`No consumable requirements found for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Click 'Upload Dept / Plan' to import a plan.`}
               canCreate={false}
-              canUpdate={canEditPlan}
+              canUpdate={canUpdate}
               canDelete={canEditPlan}
               selectedCell={selectedCell}
               onSelectCell={setSelectedCell}

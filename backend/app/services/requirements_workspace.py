@@ -851,9 +851,18 @@ def _parse_departmental_sheet(
     header_row_idx: Optional[int] = None
     col_map: dict[str, int] = {}
 
-    max_scan_row = min(10, (ws.max_row or 0) + 1)
-    for r in range(1, max_scan_row):
-        row_cells = [ws.cell(r, c).value for c in range(1, min(40, (ws.max_column or 0) + 1))]
+    if hasattr(ws, "iter_rows"):
+        all_rows = [list(r[:40]) for r in ws.iter_rows(values_only=True)]
+    else:
+        all_rows = [
+            [ws.cell(r, c).value for c in range(1, min(40, (ws.max_column or 0) + 1))]
+            for r in range(1, (ws.max_row or 0) + 1)
+        ]
+
+    max_scan_row = min(10, len(all_rows))
+    for r_idx_0 in range(max_scan_row):
+        row_cells = all_rows[r_idx_0]
+        r = r_idx_0 + 1
 
         # 1. Target month column search
         if target_month_col is None:
@@ -904,8 +913,8 @@ def _parse_departmental_sheet(
     proc_name = "MAINTENANCE" if dept_key == "PMD" else "DEPARTMENT_INDENT"
 
     parsed_rows: list[dict[str, Any]] = []
-    for r_idx in range(header_row_idx + 1, (ws.max_row or 0) + 1):
-        row_vals = [ws.cell(r_idx, c).value for c in range(1, min(40, (ws.max_column or 0) + 1))]
+    for r_idx in range(header_row_idx + 1, len(all_rows) + 1):
+        row_vals = all_rows[r_idx - 1]
         if not any(v is not None and str(v).strip() != "" for v in row_vals):
             continue
 
@@ -1389,23 +1398,80 @@ def import_monthly_requirements(
         .with_for_update()
     )
 
+    has_dept_records = any(
+        is_department_unit(item.get("plant"))
+        or is_department_unit(item.get("plant_id"))
+        or item.get("rule_type") == "PLANT_REQUEST"
+        or str(item.get("part_number", "")).strip() == "DEPARTMENT_INDENT"
+        for item in req.records
+    )
+    has_prod_records = any(
+        not (
+            is_department_unit(item.get("plant"))
+            or is_department_unit(item.get("plant_id"))
+            or item.get("rule_type") == "PLANT_REQUEST"
+            or str(item.get("part_number", "")).strip() == "DEPARTMENT_INDENT"
+        )
+        for item in req.records
+    )
+
     from app.services import basic_planning
-    if existing_version and basic_planning.is_central_version(session, existing_version.id):
+    is_central = bool(existing_version and basic_planning.is_central_version(session, existing_version.id))
+
+    if existing_version and is_central and has_prod_records and not has_dept_records:
         raise ApplicationError('CENTRAL_PRODUCTION_PLAN',
             'This month uses production-based requirements. Update Production for sale or Consumption Norms, then recalculate; do not replace it with a separate requirement upload.', 409)
 
-    if existing_version and not req.overwrite:
+    # Departmental upload mode: merge without wiping production plants or store receipts
+    if has_dept_records and (not has_prod_records or is_central):
+        version = existing_version
+        if not version:
+            version = PlanningVersion(
+                planning_period=planning_period,
+                version_number=0,
+                revision_label="R0",
+                source_filename=req.source_filename,
+                status="DRAFT",
+                created_by=current_user_id,
+                created_at=datetime.now(timezone.utc),
+                updated_at=None,
+                updated_by=None,
+                planning_month=req.planning_month,
+                planning_year=req.planning_year,
+            )
+            session.add(version)
+            session.flush()
+
+        target_depts = {
+            str(item.get("plant", "")).strip() for item in req.records
+            if is_department_unit(item.get("plant")) or is_department_unit(item.get("plant_id"))
+        }
+        target_plant_ids = {_normalize_plant_identifier(d) for d in target_depts if d}
+
+        # Selectively soft-delete previous rows for ONLY the target uploaded departments
+        if target_depts or target_plant_ids:
+            session.query(MonthlyRequirementRecord).filter(
+                MonthlyRequirementRecord.planning_period == planning_period,
+                MonthlyRequirementRecord.is_deleted == False,
+                or_(
+                    MonthlyRequirementRecord.plant.in_(target_depts),
+                    MonthlyRequirementRecord.plant_id.in_(target_plant_ids),
+                ),
+                or_(
+                    MonthlyRequirementRecord.part_number == "DEPARTMENT_INDENT",
+                    MonthlyRequirementRecord.process_name.in_(["DEPARTMENT_INDENT", "MAINTENANCE"]),
+                ),
+            ).update({"is_deleted": True}, synchronize_session=False)
+
+    elif existing_version and not req.overwrite:
         raise ApplicationError(
             "PLAN_ALREADY_EXISTS",
             f"A monthly requirement plan already exists for {planning_period}. Please confirm to replace/update.",
             status_code=409,
         )
-
-    # If overwrite/update
-    if existing_version and req.overwrite:
+    elif existing_version and req.overwrite:
         new_version_num = existing_version.version_number + 1
         new_revision_label = f"R{new_version_num}"
-        # Archive previous records
         session.query(MonthlyRequirementRecord).filter(
             MonthlyRequirementRecord.planning_version_id == existing_version.id
         ).update({"is_deleted": True}, synchronize_session=False)
@@ -1732,10 +1798,62 @@ def recalculate_monthly_requirements(
         from datetime import date
         from app.schemas.requirements import CalculationRunRequest
         result = basic_planning.calculate(session, CalculationRunRequest(planning_version_id=version.id, as_of_date=date(year, month, 1)), current_user_id)
+
+        # Also recalculate departmental records in MonthlyRequirementRecord for this period
+        dept_records = session.scalars(
+            select(MonthlyRequirementRecord).where(
+                MonthlyRequirementRecord.planning_period == planning_period,
+                MonthlyRequirementRecord.is_deleted == False,
+            )
+        ).all()
+        t2_m, t2_y = get_t_minus_2_period(month, year)
+        t2_b_id = session.scalar(
+            select(StockStatementBatch.id).where(
+                StockStatementBatch.statement_month == t2_m,
+                StockStatementBatch.statement_year == t2_y,
+                StockStatementBatch.status == "active",
+            ).limit(1)
+        )
+        t2_stock: dict[str, Decimal] = {}
+        if t2_b_id:
+            for i_id, c_qty in session.execute(
+                select(StockStatementLine.item_id, StockStatementLine.closing_qty).where(
+                    StockStatementLine.batch_id == t2_b_id,
+                    StockStatementLine.item_class == "CONSUMABLE",
+                )
+            ).all():
+                if i_id:
+                    t2_stock[i_id.strip().upper()] = c_qty or Decimal("0.0")
+
+        for rec in dept_records:
+            is_dept = (
+                is_department_unit(rec.plant)
+                or is_department_unit(rec.plant_id)
+                or rec.part_number == "DEPARTMENT_INDENT"
+                or rec.process_name in ("DEPARTMENT_INDENT", "MAINTENANCE")
+            )
+            if is_dept:
+                code_u = rec.consumable_code.strip().upper() if rec.consumable_code else ""
+                if code_u in t2_stock:
+                    rec.opening_stock = t2_stock[code_u]
+                rec.closing_stock = (rec.opening_stock + rec.grn_received_qty) - rec.consumed_qty
+                rec.gross_requirement = rec.scheduled_consumable_qty or Decimal("0.0")
+                rec.net_order_requirement = max(Decimal("0.0000"), (rec.gross_requirement + rec.msl) - rec.closing_stock)
+                rec.shortage_qty = rec.net_order_requirement
+                rec.stock_qty = rec.closing_stock
+                if rec.net_order_requirement > Decimal("0"):
+                    rec.status = "Critical shortage" if rec.closing_stock <= Decimal("0") else "Low"
+                else:
+                    rec.status = "Normal"
+                rec.remarks = f"Departmental indent: {rec.plant or 'Department'}"
+                rec.updated_at = datetime.now(timezone.utc)
+
         records = calculate_workspace_requirements(session, month=month, year=year)
+        crit_count = sum(1 for r in records if r.status == "Critical shortage")
+        low_count = sum(1 for r in records if r.status == "Low")
         return RequirementRecalculateResponse(
             message=f"Production-based requirements updated: {result.successful_requirements_count} lines; {result.error_count} configuration issues.",
-            record_count=len(records), critical_shortages=0, low_stock=0, records=records,
+            record_count=len(records), critical_shortages=crit_count, low_stock=low_count, records=records,
             plan_metadata=get_monthly_plan_metadata(session, month, year))
 
     records = session.scalars(
@@ -2151,24 +2269,6 @@ def _score_rate_slug(slug: str) -> int:
         return 2
     return 1
 
-
-def _normalize_plant_identifier(val: Optional[str]) -> str:
-    if not val:
-        return ""
-    cleaned = str(val).strip().upper().replace(" ", "_").replace("-", "_")
-    roman_map = {
-        "PLANT_I": "PLANT_1",
-        "PLANT_II": "PLANT_2",
-        "PLANT_III": "PLANT_3",
-        "PLANT_IV": "PLANT_4",
-        "PLANT_V": "PLANT_5",
-        "PLANT_1": "PLANT_1",
-        "PLANT_2": "PLANT_2",
-        "PLANT_3": "PLANT_3",
-        "PLANT_4": "PLANT_4",
-        "PLANT_5": "PLANT_5",
-    }
-    return roman_map.get(cleaned, cleaned)
 
 
 def _parse_safe_date(val: Any) -> Optional[datetime]:
