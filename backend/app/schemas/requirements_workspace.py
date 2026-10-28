@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Optional
 from pydantic import BaseModel, Field
 
@@ -49,6 +50,11 @@ class RequirementWorkspaceRecord(BaseModel):
     grn_source_file: Optional[str] = None
     invoice_no: Optional[str] = None
     grn_date: Optional[datetime] = None
+
+    # Historical Rolling Average & Documentation
+    historical_avg_qty: Optional[str] = "0.0000"
+    active_month_count: Optional[int] = 0
+    doc_ref: Optional[str] = None
 
     # Metadata & Auditing
     created_at: Optional[datetime] = None
@@ -122,6 +128,13 @@ class RequirementUpdateItem(BaseModel):
     part_thickness: Optional[str] = None
     process_count: Optional[int] = None
     remarks: Optional[str] = None
+    consumable_code: Optional[str] = None
+    consumable_name: Optional[str] = None
+    unit: Optional[str] = None
+    part_number: Optional[str] = None
+    plant: Optional[str] = None
+    month: Optional[int] = None
+    year: Optional[int] = None
 
 
 class RequirementBatchUpdateRequest(BaseModel):
@@ -153,3 +166,21 @@ class RequirementBulkDeleteResponse(BaseModel):
     message: str
     deleted_count: int
     plan_metadata: Optional[MonthlyPlanMetadata] = None
+
+class DepartmentalRowCreateRequest(BaseModel):
+    month: int = Field(..., ge=1, le=12)
+    year: int = Field(..., ge=2020, le=2050)
+    plant: str
+    consumable_code: str
+    consumable_name: str
+    part_number: Optional[str] = "DEPARTMENT_INDENT"
+    unit: Optional[str] = "NOS"
+    scheduled_consumable_qty: Decimal = Decimal("0.0000")
+    remarks: Optional[str] = None
+
+
+class RequirementDeleteBatchRequest(BaseModel):
+    record_ids: list[str]
+    month: Optional[int] = None
+    year: Optional[int] = None
+    reason: Optional[str] = None

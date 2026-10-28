@@ -9,12 +9,14 @@ from app.db.session import get_db
 from app.schemas.auth import CurrentUser
 from app.schemas.requirement_loading import MonthlyWorkspace
 from app.schemas.requirements_workspace import (
+    DepartmentalRowCreateRequest,
     MonthlyPlanMetadata,
     MRPGRNUploadResponse,
     RequirementBatchUpdateRequest,
     RequirementBatchUpdateResponse,
     RequirementBulkDeleteRequest,
     RequirementBulkDeleteResponse,
+    RequirementDeleteBatchRequest,
     RequirementExcelInspectResponse,
     RequirementImportRequest,
     RequirementRecalculateResponse,
@@ -344,6 +346,56 @@ def bulk_delete_workspace(
         record_ids=record_uuids,
         current_user_id=user.id,
         reason=data.reason,
+    )
+    return RequirementBulkDeleteResponse(
+        message=f"Successfully deleted {count} requirement record(s).",
+        deleted_count=count,
+        plan_metadata=meta,
+    )
+
+
+@router.post("/departmental-row", response_model=RequirementWorkspaceRecord)
+def post_create_departmental_row(
+    data: DepartmentalRowCreateRequest,
+    user: CanUpdateRequirements,
+    session: Annotated[Session, Depends(get_db)],
+):
+    """Creates a new departmental requirement record."""
+    return service.create_departmental_row(
+        session=session,
+        current_user_id=user.id,
+        data=data,
+    )
+
+
+@router.patch("/batch", response_model=RequirementBatchUpdateResponse)
+def patch_batch_update_requirements(
+    req: RequirementBatchUpdateRequest,
+    user: CanUpdateRequirements,
+    session: Annotated[Session, Depends(get_db)],
+):
+    """Batch-updates requirement records including departmental inline fields."""
+    return service.batch_update_requirements(
+        session=session,
+        current_user_id=user.id,
+        req=req,
+    )
+
+
+@router.post("/delete-batch", response_model=RequirementBulkDeleteResponse)
+def post_delete_batch_requirements(
+    data: RequirementDeleteBatchRequest,
+    user: CanDeleteRequirements,
+    session: Annotated[Session, Depends(get_db)],
+):
+    """Soft-deletes batch requirement records with support for auto-synthesized IDs."""
+    count, meta = service.bulk_delete_requirement_records(
+        session,
+        record_ids=data.record_ids,
+        current_user_id=user.id,
+        reason=data.reason,
+        month=data.month,
+        year=data.year,
     )
     return RequirementBulkDeleteResponse(
         message=f"Successfully deleted {count} requirement record(s).",

@@ -35,9 +35,11 @@ from app.models.requirements import (
 from app.models.stock_statements import StockStatementBatch, StockStatementLine
 from app.models.rules import ConsumptionNorm
 from app.schemas.requirements_workspace import (
+    DepartmentalRowCreateRequest,
     MonthlyPlanMetadata,
     RequirementBatchUpdateRequest,
     RequirementBatchUpdateResponse,
+    RequirementDeleteBatchRequest,
     RequirementExcelInspectResponse,
     RequirementImportRequest,
     RequirementRecalculateResponse,
@@ -349,17 +351,34 @@ def calculate_workspace_requirements(
 
     t2_month, t2_year = get_t_minus_2_period(t_month, t_year) if (t_month and t_year) else (None, None)
 
+    dept_names_upper = [d.upper() for d in ALL_DEPARTMENTS] + [v.upper() for v in DEPARTMENT_DISPLAY_NAMES.values()]
+    target_seq = (t_year * 12 + t_month) if (t_month and t_year) else None
+
     # 1. Query dedicated monthly planning records
     query = select(MonthlyRequirementRecord).options(joinedload(MonthlyRequirementRecord.planning_version)).where(MonthlyRequirementRecord.is_deleted == False)  # noqa: E712
     if target_period:
-        query = query.where(MonthlyRequirementRecord.planning_period == target_period)
+        if target_seq:
+            query = query.where(
+                or_(
+                    MonthlyRequirementRecord.planning_period == target_period,
+                    and_(
+                        func.upper(MonthlyRequirementRecord.plant).in_(dept_names_upper),
+                        (MonthlyRequirementRecord.planning_year * 12 + MonthlyRequirementRecord.planning_month) <= target_seq,
+                    ),
+                )
+            )
+        else:
+            query = query.where(MonthlyRequirementRecord.planning_period == target_period)
 
     from app.services import basic_planning
     batch_metadata = select(ImportBatch.validation_summary).where(
         ImportBatch.planning_version_id == PlanningVersion.id).limit(1).scalar_subquery()
     mrr_count_subquery = select(func.count(MonthlyRequirementRecord.id)).where(
-        MonthlyRequirementRecord.planning_period == target_period,
         MonthlyRequirementRecord.is_deleted == False,
+        or_(
+            MonthlyRequirementRecord.planning_period == target_period,
+            func.upper(MonthlyRequirementRecord.plant).in_(dept_names_upper),
+        ) if target_period else MonthlyRequirementRecord.is_deleted == False,
     ).limit(1).scalar_subquery() if target_period else None
 
     t2_batch_id_subquery = select(StockStatementBatch.id).where(
@@ -399,7 +418,13 @@ def calculate_workspace_requirements(
             if item_id:
                 t2_stock_by_code[item_id.strip().upper()] = closing_qty or Decimal("0.0")
 
-    monthly_rows = [] if central else session.scalars(query.order_by(MonthlyRequirementRecord.row_index, MonthlyRequirementRecord.created_at)).all()
+    history_dept_mrrs: dict[tuple[str, str], list[MonthlyRequirementRecord]] = {}
+    monthly_rows_all = [] if central else session.scalars(query.order_by(MonthlyRequirementRecord.row_index, MonthlyRequirementRecord.created_at)).all()
+    monthly_rows = [r for r in monthly_rows_all if r.planning_period == target_period]
+    for r in monthly_rows_all:
+        if is_department_unit(r.plant) or is_department_unit(r.plant_id):
+            k = (_normalize_plant_identifier(r.plant), (r.consumable_code or "").strip().upper())
+            history_dept_mrrs.setdefault(k, []).append(r)
 
     results: list[RequirementWorkspaceRecord] = []
 
@@ -432,6 +457,18 @@ def calculate_workspace_requirements(
                     row_status = "Critical shortage" if cls_stk <= Decimal("0") else "Low"
                 elif cls_stk > Decimal("0") or has_stock_data:
                     row_status = "Normal"
+                k = (_normalize_plant_identifier(r.plant), code_upper)
+                hist_list = history_dept_mrrs.get(k, [r])
+                avg_qty, active_count = compute_non_zero_rolling_average(
+                    hist_list, t_month or r.planning_month or 1, t_year or r.planning_year or 2026
+                )
+                row_hist_avg = format(avg_qty, ".4f")
+                row_active_count = active_count
+                row_doc_ref = r.part_number if r.part_number != "DEPARTMENT_INDENT" else None
+            else:
+                row_hist_avg = "0.0000"
+                row_active_count = 0
+                row_doc_ref = None
 
             results.append(
                 RequirementWorkspaceRecord(
@@ -472,6 +509,9 @@ def calculate_workspace_requirements(
                     closing_stock=format(cls_stk, ".4f"),
                     gross_requirement=format(gross_req, ".4f"),
                     net_order_requirement=format(net_order, ".4f"),
+                    historical_avg_qty=row_hist_avg,
+                    active_month_count=row_active_count,
+                    doc_ref=row_doc_ref,
                     last_synced_at=r.last_synced_at,
                     grn_source_file=r.grn_source_file,
                     invoice_no=r.invoice_no,
@@ -492,12 +532,30 @@ def calculate_workspace_requirements(
             latest.setdefault(version.planning_period, version)
 
         # Build index of MonthlyRequirementRecord for this period
-        mrr_records = session.scalars(
-            select(MonthlyRequirementRecord).where(
-                MonthlyRequirementRecord.planning_period == target_period,
-                MonthlyRequirementRecord.is_deleted == False,
-            )
-        ).all() if (target_period and has_mrr) else []
+        mrr_query = select(MonthlyRequirementRecord).options(joinedload(MonthlyRequirementRecord.planning_version)).where(
+            MonthlyRequirementRecord.is_deleted == False,
+        )
+        if target_period:
+            if target_seq:
+                mrr_query = mrr_query.where(
+                    or_(
+                        MonthlyRequirementRecord.planning_period == target_period,
+                        and_(
+                            func.upper(MonthlyRequirementRecord.plant).in_(dept_names_upper),
+                            (MonthlyRequirementRecord.planning_year * 12 + MonthlyRequirementRecord.planning_month) <= target_seq,
+                        ),
+                    )
+                )
+            else:
+                mrr_query = mrr_query.where(MonthlyRequirementRecord.planning_period == target_period)
+
+        all_mrr_records = session.scalars(mrr_query).all() if (target_period and has_mrr) else []
+        mrr_records = [r for r in all_mrr_records if r.planning_period == target_period]
+        for r in all_mrr_records:
+            if is_department_unit(r.plant) or is_department_unit(r.plant_id):
+                k = (_normalize_plant_identifier(r.plant), (r.consumable_code or "").strip().upper())
+                history_dept_mrrs.setdefault(k, []).append(r)
+
         mrr_by_code: dict[str, list[MonthlyRequirementRecord]] = {}
         for m in mrr_records:
             mrr_by_code.setdefault(m.consumable_code.strip().upper(), []).append(m)
@@ -729,6 +787,18 @@ def calculate_workspace_requirements(
                             m_status = "Critical shortage" if m_cls <= Decimal("0") else "Low"
                         elif m_cls > Decimal("0") or has_stock_data:
                             m_status = "Normal"
+                        k = (_normalize_plant_identifier(m.plant), m_code)
+                        hist_list = history_dept_mrrs.get(k, [m])
+                        avg_qty, active_count = compute_non_zero_rolling_average(
+                            hist_list, t_month or m.planning_month or 1, t_year or m.planning_year or 2026
+                        )
+                        m_hist_avg = format(avg_qty, ".4f")
+                        m_active_count = active_count
+                        m_doc_ref = m.part_number if m.part_number != "DEPARTMENT_INDENT" else None
+                    else:
+                        m_hist_avg = "0.0000"
+                        m_active_count = 0
+                        m_doc_ref = None
 
                     results.append(
                         RequirementWorkspaceRecord(
@@ -765,6 +835,9 @@ def calculate_workspace_requirements(
                             closing_stock=format(m_cls, ".4f"),
                             gross_requirement=format(m_gross, ".4f"),
                             net_order_requirement=format(m_net, ".4f"),
+                            historical_avg_qty=m_hist_avg,
+                            active_month_count=m_active_count,
+                            doc_ref=m_doc_ref,
                             last_synced_at=m.last_synced_at,
                             grn_source_file=m.grn_source_file,
                             invoice_no=m.invoice_no,
@@ -775,6 +848,76 @@ def calculate_workspace_requirements(
                     )
                     added_codes.add(m_code)
                     added_keys.add((m_code, m_plant_norm))
+
+    # Auto-populate uninitialized departmental items from historical baseline
+    if target_period and t_month and t_year and history_dept_mrrs:
+        existing_dept_keys = {
+            (_normalize_plant_identifier(res.plant), (res.consumable_code or "").strip().upper())
+            for res in results
+            if res.consumable_code and (is_department_unit(res.plant) or res.rule_type == "PLANT_REQUEST")
+        }
+        for (dept_key, code_upper), hist_records in history_dept_mrrs.items():
+            if (dept_key, code_upper) not in existing_dept_keys:
+                sorted_hist = sorted(
+                    hist_records,
+                    key=lambda x: ((x.planning_year or 0) * 12 + (x.planning_month or 0)),
+                    reverse=True,
+                )
+                sample = sorted_hist[0]
+                avg_qty, active_count = compute_non_zero_rolling_average(hist_records, t_month, t_year)
+                dept_disp = DEPARTMENT_DISPLAY_NAMES.get(dept_key, sample.plant)
+                proc_name = "MAINTENANCE" if dept_key == "PMD" else "DEPARTMENT_INDENT"
+                part_no = sample.part_number or "DEPARTMENT_INDENT"
+                doc_ref_val = part_no if part_no != "DEPARTMENT_INDENT" else None
+
+                op_stock = t2_stock_by_code.get(code_upper, Decimal("0.0"))
+                cls_stk = op_stock
+                net_order = max(Decimal("0.0000"), avg_qty - cls_stk)
+                has_stock_data = (code_upper in t2_stock_by_code) or (op_stock > Decimal("0"))
+                stk_str = format(cls_stk, ".4f") if has_stock_data else "0.0000"
+                shortage_str = format(net_order, ".4f")
+                status_str = "Critical shortage" if cls_stk <= Decimal("0") and avg_qty > Decimal("0") else "Normal"
+
+                results.append(
+                    RequirementWorkspaceRecord(
+                        id=f"auto-{dept_disp}-{code_upper}",
+                        plan_id=str(period_version.id) if period_version else None,
+                        planning_period=target_period,
+                        planning_month=t_month,
+                        planning_year=t_year,
+                        revision=period_version.revision_label if period_version else "R0",
+                        part_name=dept_disp,
+                        part_number=part_no,
+                        consumable_code=code_upper,
+                        consumable_name=sample.consumable_name,
+                        process_name=proc_name,
+                        part_thickness="0.0000",
+                        process_count=1,
+                        production_order_qty="0.0000",
+                        scheduled_consumable_qty=format(avg_qty, ".4f"),
+                        plant=dept_disp,
+                        process=proc_name,
+                        description=sample.consumable_name,
+                        unit=sample.unit or "NOS",
+                        rule_type="PLANT_REQUEST",
+                        required_qty=format(avg_qty, ".4f"),
+                        stock_qty=stk_str,
+                        shortage_qty=shortage_str,
+                        po_pending_qty="0.0000",
+                        msl="0.0000",
+                        status=status_str,
+                        remarks=sample.remarks or f"Departmental indent: {dept_disp}",
+                        opening_stock=format(op_stock, ".4f"),
+                        grn_received_qty="0.0000",
+                        consumed_qty="0.0000",
+                        closing_stock=format(cls_stk, ".4f"),
+                        gross_requirement=format(avg_qty, ".4f"),
+                        net_order_requirement=format(net_order, ".4f"),
+                        historical_avg_qty=format(avg_qty, ".4f"),
+                        active_month_count=active_count,
+                        doc_ref=doc_ref_val,
+                    )
+                )
 
     # Filter predicate
     def matches(record: RequirementWorkspaceRecord) -> bool:
@@ -824,6 +967,195 @@ def _normalize_header(hdr: Any) -> str:
     import re
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return " ".join(text.split())
+
+
+MONTH_MAP: dict[str, int] = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6,
+    "jul": 7, "july": 7, "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+
+def _parse_month_col_header(val: Any) -> Optional[tuple[int, int]]:
+    """Extract (month, year) from month header text like Oct'26, Sept'26, April'2026."""
+    if not val:
+        return None
+    s = str(val).strip().lower()
+    m = re.search(r"([a-z]+)[\'\s\-]*([0-9]{2,4})", s)
+    if m:
+        mon_str, yr_str = m.group(1), m.group(2)
+        if mon_str in MONTH_MAP:
+            mon = MONTH_MAP[mon_str]
+            yr = int(yr_str)
+            if yr < 100:
+                yr += 2000
+            return (mon, yr)
+    return None
+
+
+def compute_non_zero_rolling_average(
+    records: list[Any],
+    target_month: int,
+    target_year: int,
+) -> tuple[Decimal, int]:
+    """Calculates active month rolling average excluding zero/blank months.
+
+    Evaluates records prior to target period (year * 12 + month).
+    If no prior records exist, falls back to records <= target period.
+    Only counts months where scheduled_consumable_qty > 0.
+    Returns (average_qty, active_month_count).
+    """
+    target_seq = target_year * 12 + target_month
+    prior_records = [
+        r for r in records
+        if ((getattr(r, "planning_year", 0) or 0) * 12 + (getattr(r, "planning_month", 0) or 0)) < target_seq
+    ]
+    if not prior_records:
+        prior_records = [
+            r for r in records
+            if ((getattr(r, "planning_year", 0) or 0) * 12 + (getattr(r, "planning_month", 0) or 0)) <= target_seq
+        ]
+
+    active_qtys: list[Decimal] = []
+    for r in prior_records:
+        qty_val = getattr(r, "scheduled_consumable_qty", None)
+        if qty_val is not None:
+            try:
+                dec = Decimal(str(qty_val))
+                if dec > Decimal("0"):
+                    active_qtys.append(dec)
+            except Exception:
+                pass
+
+    n_active = len(active_qtys)
+    if n_active == 0:
+        return Decimal("0.0000"), 0
+
+    avg_qty = (sum(active_qtys) / Decimal(str(n_active))).quantize(Decimal("0.0001"))
+    return avg_qty, n_active
+
+
+def _parse_departmental_sheet_all_months(
+    ws, dept_key: str
+) -> dict[tuple[int, int], list[dict[str, Any]]]:
+    """Dynamically parses a departmental consumable indent worksheet across all historical months.
+
+    Detects all month/year columns present alongside Item Id., Item Description,
+    Part No. (doc ref), and Unit.
+    """
+    dept_display = DEPARTMENT_DISPLAY_NAMES.get(dept_key, dept_key)
+    proc_name = "MAINTENANCE" if dept_key == "PMD" else "DEPARTMENT_INDENT"
+
+    if hasattr(ws, "iter_rows"):
+        all_rows = list(ws.iter_rows(values_only=True))
+    else:
+        all_rows = [
+            [ws.cell(r, c).value for c in range(1, min(40, (ws.max_column or 0) + 1))]
+            for r in range(1, (ws.max_row or 0) + 1)
+        ]
+
+    month_cols: dict[int, tuple[int, int]] = {}
+    header_row_idx: Optional[int] = None
+    col_map: dict[str, int] = {}
+
+    max_scan_row = min(10, len(all_rows))
+    for r_idx_0 in range(max_scan_row):
+        row_cells = all_rows[r_idx_0]
+        for c_idx, val in enumerate(row_cells):
+            parsed_m = _parse_month_col_header(val)
+            if parsed_m and c_idx not in month_cols:
+                month_cols[c_idx] = parsed_m
+
+        norm_row = [_normalize_header(v) for v in row_cells]
+        row_map: dict[str, int] = {}
+        for c_idx, text in enumerate(norm_row):
+            if not text:
+                continue
+            if any(k in text for k in ["item id", "item code", "consumable id", "consumable code", "itemid"]):
+                row_map.setdefault("item_id", c_idx)
+            elif any(k in text for k in ["description", "material name", "item description"]):
+                row_map.setdefault("description", c_idx)
+            elif any(k == text or k in text for k in ["unit", "uom"]):
+                row_map.setdefault("unit", c_idx)
+            elif any(k in text for k in ["part no", "part number", "doc ref", "partno"]):
+                row_map.setdefault("part_no", c_idx)
+
+        if "item_id" in row_map or "description" in row_map:
+            header_row_idx = r_idx_0
+            col_map = row_map
+
+    item_col = col_map.get("item_id", 0)
+    desc_col = col_map.get("description", 1)
+    unit_col = col_map.get("unit", 2)
+    part_col = col_map.get("part_no", None)
+
+    start_row = (header_row_idx + 1) if header_row_idx is not None else 3
+    results_by_period: dict[tuple[int, int], list[dict[str, Any]]] = {
+        period: [] for period in month_cols.values()
+    }
+
+    for r_idx_0 in range(start_row, len(all_rows)):
+        row_vals = all_rows[r_idx_0]
+        if not any(v is not None and str(v).strip() != "" for v in row_vals):
+            continue
+
+        raw_item = row_vals[item_col] if item_col < len(row_vals) else None
+        raw_desc = row_vals[desc_col] if desc_col < len(row_vals) else None
+        raw_unit = row_vals[unit_col] if unit_col < len(row_vals) else None
+        raw_part = row_vals[part_col] if (part_col is not None and part_col < len(row_vals)) else None
+
+        item_str = str(raw_item or "").strip()
+        desc_str = str(raw_desc or "").strip()
+        part_str = str(raw_part or "").strip() if raw_part else ""
+
+        if not item_str and not desc_str:
+            continue
+        item_lower = item_str.lower()
+        if item_lower in ("item id", "item id.", "s.no", "to location", "location", "dept:", "total"):
+            continue
+        if "total" in desc_str.lower() or "summary" in desc_str.lower():
+            continue
+
+        code_val = item_str if item_str else desc_str
+        name_val = desc_str if desc_str else item_str
+        unit_str = str(raw_unit or "NOS").strip() or "NOS"
+        part_no = part_str if part_str and part_str != "DEPARTMENT_INDENT" else "DEPARTMENT_INDENT"
+        doc_ref = part_str if part_str and part_str != "DEPARTMENT_INDENT" else None
+
+        for c_idx, (m, y) in month_cols.items():
+            raw_qty = row_vals[c_idx] if c_idx < len(row_vals) else None
+            try:
+                qty_dec = Decimal(str(raw_qty).replace(",", "").strip()) if raw_qty is not None else Decimal("0")
+            except Exception:
+                qty_dec = Decimal("0")
+
+            rec = {
+                "row_index": r_idx_0 + 1,
+                "planning_month": m,
+                "planning_year": y,
+                "planning_period": f"{y:04d}-{m:02d}",
+                "part_name": dept_display,
+                "part_number": part_no,
+                "doc_ref": doc_ref,
+                "consumable_code": code_val,
+                "consumable_name": name_val,
+                "process_name": proc_name,
+                "part_thickness": "0.0000",
+                "process_count": 1,
+                "production_order_qty": "0.0000",
+                "scheduled_consumable_qty": format(qty_dec, ".4f"),
+                "plant": dept_display,
+                "unit": unit_str,
+                "required_qty": format(qty_dec, ".4f"),
+                "gross_requirement": format(qty_dec, ".4f"),
+                "rule_type": "PLANT_REQUEST",
+                "status": "Normal",
+                "remarks": f"Departmental indent: {dept_display}",
+            }
+            results_by_period[(m, y)].append(rec)
+
+    return results_by_period
 
 
 def _parse_departmental_sheet(
@@ -1600,6 +1932,139 @@ def import_monthly_requirements(
     return inserted_count, meta
 
 
+def create_departmental_row(
+    session, current_user_id: UUID, data: DepartmentalRowCreateRequest
+) -> RequirementWorkspaceRecord:
+    """Creates or updates a departmental consumable indent record."""
+    dept_key = _match_department_tab(data.plant) or _normalize_plant_identifier(data.plant)
+    dept_display = DEPARTMENT_DISPLAY_NAMES.get(dept_key, data.plant)
+    proc_name = "MAINTENANCE" if dept_key == "PMD" else "DEPARTMENT_INDENT"
+    planning_period = f"{data.year:04d}-{data.month:02d}"
+
+    plan_ver = session.scalar(
+        select(PlanningVersion)
+        .where(PlanningVersion.planning_period == planning_period)
+        .order_by(PlanningVersion.version_number.desc())
+        .limit(1)
+    )
+    if not plan_ver:
+        plan_ver = PlanningVersion(
+            planning_month=data.month,
+            planning_year=data.year,
+            planning_period=planning_period,
+            version_number=1,
+            status="DRAFT",
+            revision_label="R0",
+            source_filename=f"manual_indent_{planning_period}.xlsx",
+            created_by=current_user_id,
+        )
+        session.add(plan_ver)
+        session.flush()
+
+    code_upper = data.consumable_code.strip().upper()
+    existing = session.scalar(
+        select(MonthlyRequirementRecord).where(
+            MonthlyRequirementRecord.planning_period == planning_period,
+            func.upper(MonthlyRequirementRecord.plant) == dept_display.upper(),
+            func.upper(MonthlyRequirementRecord.consumable_code) == code_upper,
+            MonthlyRequirementRecord.is_deleted == False,
+        ).limit(1)
+    )
+
+    qty = data.scheduled_consumable_qty
+    now = datetime.now(timezone.utc)
+    if existing:
+        existing.scheduled_consumable_qty = qty
+        existing.gross_requirement = qty
+        if data.part_number:
+            existing.part_number = data.part_number
+        if data.unit:
+            existing.unit = data.unit
+        if data.remarks:
+            existing.remarks = data.remarks
+        existing.updated_at = now
+        rec = existing
+    else:
+        rec = MonthlyRequirementRecord(
+            planning_version_id=plan_ver.id,
+            planning_period=planning_period,
+            planning_month=data.month,
+            planning_year=data.year,
+            plant=dept_display,
+            part_name=dept_display,
+            part_number=data.part_number or "DEPARTMENT_INDENT",
+            consumable_code=code_upper,
+            consumable_name=data.consumable_name.strip(),
+            process_name=proc_name,
+            unit=data.unit or "NOS",
+            part_thickness=Decimal("0.0000"),
+            process_count=1,
+            production_order_qty=Decimal("0.0000"),
+            scheduled_consumable_qty=qty,
+            gross_requirement=qty,
+            stock_qty=Decimal("0.0000"),
+            shortage_qty=qty,
+            po_pending_qty=Decimal("0.0000"),
+            msl=Decimal("0.0000"),
+            status="Normal",
+            remarks=data.remarks or f"Departmental indent: {dept_display}",
+            is_deleted=False,
+            created_by=current_user_id,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(rec)
+        session.flush()
+
+    # Calculate rolling average for this item
+    hist_records = session.scalars(
+        select(MonthlyRequirementRecord).where(
+            func.upper(MonthlyRequirementRecord.plant) == dept_display.upper(),
+            func.upper(MonthlyRequirementRecord.consumable_code) == code_upper,
+            MonthlyRequirementRecord.is_deleted == False,
+        )
+    ).all()
+    avg_qty, active_count = compute_non_zero_rolling_average(hist_records, data.month, data.year)
+
+    session.commit()
+
+    doc_ref_val = rec.part_number if rec.part_number != "DEPARTMENT_INDENT" else None
+    return RequirementWorkspaceRecord(
+        id=str(rec.id),
+        plan_id=str(plan_ver.id),
+        planning_period=rec.planning_period,
+        planning_month=rec.planning_month,
+        planning_year=rec.planning_year,
+        revision=plan_ver.revision_label,
+        part_name=rec.part_name,
+        part_number=rec.part_number,
+        consumable_code=rec.consumable_code,
+        consumable_name=rec.consumable_name,
+        process_name=rec.process_name,
+        part_thickness="0.0000",
+        process_count=1,
+        production_order_qty="0.0000",
+        scheduled_consumable_qty=format(rec.scheduled_consumable_qty, ".4f"),
+        plant=rec.plant,
+        process=rec.process_name,
+        description=rec.consumable_name,
+        unit=rec.unit,
+        rule_type="PLANT_REQUEST",
+        required_qty=format(rec.scheduled_consumable_qty, ".4f"),
+        stock_qty=format(rec.stock_qty, ".4f"),
+        shortage_qty=format(rec.shortage_qty, ".4f"),
+        po_pending_qty=format(rec.po_pending_qty, ".4f"),
+        msl=format(rec.msl, ".4f"),
+        status=rec.status,
+        remarks=rec.remarks,
+        historical_avg_qty=format(avg_qty, ".4f"),
+        active_month_count=active_count,
+        doc_ref=doc_ref_val,
+        created_at=rec.created_at,
+        updated_at=rec.updated_at,
+    )
+
+
 def batch_update_requirements(
     session, current_user_id: UUID, req: RequirementBatchUpdateRequest
 ) -> RequirementBatchUpdateResponse:
@@ -1612,13 +2077,82 @@ def batch_update_requirements(
     sample_version = None
 
     for item in req.records:
-        rec = session.get(MonthlyRequirementRecord, UUID(item.id))
+        rec = None
+        is_auto = str(item.id).startswith("auto-")
+        if not is_auto:
+            try:
+                rec = session.get(MonthlyRequirementRecord, UUID(str(item.id)))
+            except (ValueError, TypeError):
+                rec = None
+
+        if is_auto or (not rec and (item.plant or item.month)):
+            parts = str(item.id).split("-", 2)
+            plant_name = item.plant or (parts[1] if len(parts) > 1 else "PMD")
+            code_val = (item.consumable_code or (parts[2] if len(parts) > 2 else "")).strip().upper()
+            month_val = item.month or (sample_version.planning_month if sample_version else 10)
+            year_val = item.year or (sample_version.planning_year if sample_version else 2026)
+            period_str = f"{year_val:04d}-{month_val:02d}"
+
+            plan_ver = session.scalar(
+                select(PlanningVersion).where(PlanningVersion.planning_period == period_str)
+                .order_by(PlanningVersion.version_number.desc()).limit(1)
+            )
+            if not plan_ver:
+                plan_ver = PlanningVersion(
+                    planning_month=month_val,
+                    planning_year=year_val,
+                    planning_period=period_str,
+                    version_number=1,
+                    status="DRAFT",
+                    revision_label="R0",
+                    source_filename=f"manual_indent_{period_str}.xlsx",
+                    created_by=current_user_id,
+                )
+                session.add(plan_ver)
+                session.flush()
+
+            rec = session.scalar(
+                select(MonthlyRequirementRecord).where(
+                    MonthlyRequirementRecord.planning_period == period_str,
+                    func.upper(MonthlyRequirementRecord.plant) == plant_name.upper(),
+                    func.upper(MonthlyRequirementRecord.consumable_code) == code_val,
+                    MonthlyRequirementRecord.is_deleted == False,
+                ).limit(1)
+            )
+            if not rec:
+                proc_name = "MAINTENANCE" if _normalize_plant_identifier(plant_name) == "PMD" else "DEPARTMENT_INDENT"
+                rec = MonthlyRequirementRecord(
+                    planning_version_id=plan_ver.id,
+                    planning_period=period_str,
+                    planning_month=month_val,
+                    planning_year=year_val,
+                    plant=plant_name,
+                    part_name=plant_name,
+                    part_number=item.part_number or "DEPARTMENT_INDENT",
+                    consumable_code=code_val,
+                    consumable_name=item.consumable_name or code_val,
+                    process_name=proc_name,
+                    unit=item.unit or "NOS",
+                    scheduled_consumable_qty=Decimal("0.0000"),
+                    gross_requirement=Decimal("0.0000"),
+                    stock_qty=Decimal("0.0000"),
+                    shortage_qty=Decimal("0.0000"),
+                    po_pending_qty=Decimal("0.0000"),
+                    msl=Decimal("0.0000"),
+                    status="Normal",
+                    remarks=item.remarks or f"Departmental indent: {plant_name}",
+                    is_deleted=False,
+                    created_by=current_user_id,
+                )
+                session.add(rec)
+                session.flush()
+
         if not rec or rec.is_deleted:
             continue
 
         if item.scheduled_consumable_qty is not None:
             try:
-                rec.scheduled_consumable_qty = Decimal(item.scheduled_consumable_qty.replace(",", ""))
+                rec.scheduled_consumable_qty = Decimal(str(item.scheduled_consumable_qty).replace(",", ""))
                 if item.gross_requirement is None:
                     rec.gross_requirement = rec.scheduled_consumable_qty
             except Exception:
@@ -1626,19 +2160,19 @@ def batch_update_requirements(
 
         if item.gross_requirement is not None:
             try:
-                rec.gross_requirement = Decimal(item.gross_requirement.replace(",", ""))
+                rec.gross_requirement = Decimal(str(item.gross_requirement).replace(",", ""))
             except Exception:
                 pass
 
         if item.production_order_qty is not None:
             try:
-                rec.production_order_qty = Decimal(item.production_order_qty.replace(",", ""))
+                rec.production_order_qty = Decimal(str(item.production_order_qty).replace(",", ""))
             except Exception:
                 pass
 
         if item.part_thickness is not None:
             try:
-                rec.part_thickness = Decimal(item.part_thickness.replace(",", ""))
+                rec.part_thickness = Decimal(str(item.part_thickness).replace(",", ""))
             except Exception:
                 pass
 
@@ -1647,6 +2181,27 @@ def batch_update_requirements(
 
         if item.remarks is not None:
             rec.remarks = item.remarks
+
+        if item.consumable_code is not None:
+            rec.consumable_code = item.consumable_code.strip().upper()
+        if item.consumable_name is not None:
+            rec.consumable_name = item.consumable_name.strip()
+        if item.unit is not None:
+            rec.unit = item.unit.strip()
+        if item.part_number is not None:
+            rec.part_number = item.part_number.strip()
+
+        cls = (rec.opening_stock or Decimal("0")) + (rec.grn_received_qty or Decimal("0")) - (rec.consumed_qty or Decimal("0"))
+        rec.closing_stock = cls
+        gross = rec.gross_requirement or rec.scheduled_consumable_qty or Decimal("0")
+        msl_val = rec.msl or Decimal("0")
+        rec.shortage_qty = max(Decimal("0.0000"), (gross + msl_val) - cls)
+        rec.net_order_requirement = rec.shortage_qty
+        if is_department_unit(rec.plant):
+            if rec.shortage_qty > Decimal("0"):
+                rec.status = "Critical shortage" if cls <= Decimal("0") else "Low"
+            else:
+                rec.status = "Normal"
 
         rec.updated_at = datetime.now(timezone.utc)
         if rec.planning_version_id:
@@ -1724,7 +2279,12 @@ def delete_requirement_record(
 
 
 def bulk_delete_requirement_records(
-    session, record_ids: list[UUID], current_user_id: UUID, reason: Optional[str] = None
+    session,
+    record_ids: list[Any],
+    current_user_id: UUID,
+    reason: Optional[str] = None,
+    month: Optional[int] = None,
+    year: Optional[int] = None,
 ) -> tuple[int, Optional[MonthlyPlanMetadata]]:
     if not record_ids:
         return 0, None
@@ -1735,14 +2295,74 @@ def bulk_delete_requirement_records(
     now = datetime.now(timezone.utc)
 
     for r_id in record_ids:
-        rec = session.get(MonthlyRequirementRecord, r_id)
-        if not rec or rec.is_deleted:
+        r_str = str(r_id)
+        if r_str.startswith("auto-"):
+            parts = r_str.split("-", 2)
+            plant_name = parts[1] if len(parts) > 1 else "PMD"
+            code_val = (parts[2] if len(parts) > 2 else "").strip().upper()
+            m = month or 10
+            y = year or 2026
+            period_str = f"{y:04d}-{m:02d}"
+
+            plan_ver = session.scalar(
+                select(PlanningVersion).where(PlanningVersion.planning_period == period_str)
+                .order_by(PlanningVersion.version_number.desc()).limit(1)
+            )
+            if not plan_ver:
+                plan_ver = PlanningVersion(
+                    planning_month=m,
+                    planning_year=y,
+                    planning_period=period_str,
+                    version_number=1,
+                    status="DRAFT",
+                    revision_label="R0",
+                    source_filename=f"manual_indent_{period_str}.xlsx",
+                    created_by=current_user_id,
+                )
+                session.add(plan_ver)
+                session.flush()
+
+            rec = MonthlyRequirementRecord(
+                planning_version_id=plan_ver.id,
+                planning_period=period_str,
+                planning_month=m,
+                planning_year=y,
+                plant=plant_name,
+                part_name=plant_name,
+                part_number="DEPARTMENT_INDENT",
+                consumable_code=code_val,
+                consumable_name=code_val,
+                scheduled_consumable_qty=Decimal("0.0000"),
+                gross_requirement=Decimal("0.0000"),
+                stock_qty=Decimal("0.0000"),
+                shortage_qty=Decimal("0.0000"),
+                po_pending_qty=Decimal("0.0000"),
+                msl=Decimal("0.0000"),
+                status="Normal",
+                remarks=f"Deleted departmental row: {code_val}",
+                is_deleted=True,
+                created_by=current_user_id,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(rec)
+            deleted_count += 1
+            affected_version_ids.add(plan_ver.id)
+            sample_version = plan_ver
             continue
-        rec.is_deleted = True
-        rec.updated_at = now
-        if rec.planning_version_id:
-            affected_version_ids.add(rec.planning_version_id)
-        deleted_count += 1
+
+        try:
+            uuid_id = UUID(r_str)
+            rec = session.get(MonthlyRequirementRecord, uuid_id)
+            if not rec or rec.is_deleted:
+                continue
+            rec.is_deleted = True
+            rec.updated_at = now
+            if rec.planning_version_id:
+                affected_version_ids.add(rec.planning_version_id)
+            deleted_count += 1
+        except (ValueError, TypeError):
+            continue
 
     for v_id in affected_version_ids:
         v = session.get(PlanningVersion, v_id)
@@ -1769,6 +2389,8 @@ def bulk_delete_requirement_records(
     meta = None
     if sample_version and sample_version.planning_month and sample_version.planning_year:
         meta = get_monthly_plan_metadata(session, sample_version.planning_month, sample_version.planning_year)
+    elif month and year:
+        meta = get_monthly_plan_metadata(session, month, year)
 
     return deleted_count, meta
 

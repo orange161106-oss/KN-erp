@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import openpyxl
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app.models.auth import User
 from app.models.inventory_masters import Consumable, Unit
@@ -19,13 +19,22 @@ from app.services.purchase_workspace import (
     list_purchase_workspace,
 )
 from app.services.requirements_workspace import (
+    batch_update_requirements,
+    bulk_delete_requirement_records,
     calculate_workspace_requirements,
+    create_departmental_row,
     ensure_operational_units,
+    get_monthly_plan_metadata,
     import_monthly_requirements,
     inspect_excel_file,
     recalculate_monthly_requirements,
 )
-from app.schemas.requirements_workspace import RequirementImportRequest
+from app.schemas.requirements_workspace import (
+    DepartmentalRowCreateRequest,
+    RequirementBatchUpdateRequest,
+    RequirementImportRequest,
+    RequirementUpdateItem,
+)
 from app.tests.test_permission_foundation import db, actor
 from app.tests.test_central_basic_planning import catalog
 
@@ -350,3 +359,207 @@ def test_t2_stock_baseline_and_purchase_matrix_consolidation(db, catalog):
     assert ws_mat.cell(5, 17).value == Decimal("50.0000")
     # Total Gross Requirement (BG) is col 18
     assert ws_mat.cell(5, 18).value == Decimal("200.0000")
+
+
+def test_departmental_non_zero_rolling_average_rule(db, catalog):
+    """Seed departmental item across 5 months [10, 12, 0, 14, 12]. Verify active count is 4 and avg is 12.0000 (0 excluded)."""
+    user = catalog[0]
+    qtys = [Decimal("10.0000"), Decimal("12.0000"), Decimal("0.0000"), Decimal("14.0000"), Decimal("12.0000")]
+    months = [5, 6, 7, 8, 9]
+
+    for m, q in zip(months, qtys):
+        p_ver = PlanningVersion(
+            planning_month=m,
+            planning_year=2026,
+            planning_period=f"2026-{m:02d}",
+            version_number=1,
+            status="CONFIRMED",
+            revision_label="R0",
+            source_filename="test.xlsx",
+            created_by=user.id,
+        )
+        db.add(p_ver)
+        db.flush()
+
+        rec = MonthlyRequirementRecord(
+            planning_version_id=p_ver.id,
+            planning_period=f"2026-{m:02d}",
+            planning_month=m,
+            planning_year=2026,
+            plant="HRD",
+            part_name="HRD",
+            part_number="DOC-A4-01",
+            consumable_code="HRD-A4",
+            consumable_name="A4 Paper",
+            process_name="DEPARTMENT_INDENT",
+            unit="NOS",
+            scheduled_consumable_qty=q,
+            gross_requirement=q,
+            stock_qty=Decimal("0.0000"),
+            shortage_qty=q,
+            po_pending_qty=Decimal("0.0000"),
+            msl=Decimal("0.0000"),
+            status="Normal",
+            is_deleted=False,
+            created_by=user.id,
+        )
+        db.add(rec)
+    db.commit()
+
+    reqs = calculate_workspace_requirements(db, month=10, year=2026)
+    a4_req = next((r for r in reqs if r.consumable_code == "HRD-A4"), None)
+    assert a4_req is not None
+    assert a4_req.active_month_count == 4
+    assert a4_req.historical_avg_qty == "12.0000"
+    assert a4_req.doc_ref == "DOC-A4-01"
+
+
+def test_departmental_auto_prefill_and_forward_average_update(db, catalog):
+    """Nov 2026 auto-populates HRD - A4 Paper with 12.0000; updating Oct 2026 to 22.0000 updates Nov 2026 avg to 14.0000."""
+    user = catalog[0]
+    test_departmental_non_zero_rolling_average_rule(db, catalog)
+
+    nov_reqs = calculate_workspace_requirements(db, month=11, year=2026)
+    nov_a4 = next((r for r in nov_reqs if r.consumable_code == "HRD-A4"), None)
+    assert nov_a4 is not None
+    assert nov_a4.scheduled_consumable_qty == "12.0000"
+    assert nov_a4.historical_avg_qty == "12.0000"
+    assert nov_a4.active_month_count == 4
+
+    oct_ver = db.scalar(select(PlanningVersion).where(PlanningVersion.planning_period == "2026-10"))
+    if not oct_ver:
+        oct_ver = PlanningVersion(
+            planning_month=10,
+            planning_year=2026,
+            planning_period="2026-10",
+            version_number=1,
+            status="CONFIRMED",
+            revision_label="R0",
+            source_filename="test.xlsx",
+            created_by=user.id,
+        )
+        db.add(oct_ver)
+        db.flush()
+
+    oct_rec = db.scalar(
+        select(MonthlyRequirementRecord).where(
+            MonthlyRequirementRecord.planning_period == "2026-10",
+            MonthlyRequirementRecord.consumable_code == "HRD-A4",
+            MonthlyRequirementRecord.is_deleted == False,
+        )
+    )
+    if oct_rec:
+        oct_rec.scheduled_consumable_qty = Decimal("22.0000")
+        oct_rec.gross_requirement = Decimal("22.0000")
+    else:
+        oct_rec = MonthlyRequirementRecord(
+            planning_version_id=oct_ver.id,
+            planning_period="2026-10",
+            planning_month=10,
+            planning_year=2026,
+            plant="HRD",
+            part_name="HRD",
+            part_number="DOC-A4-01",
+            consumable_code="HRD-A4",
+            consumable_name="A4 Paper",
+            process_name="DEPARTMENT_INDENT",
+            unit="NOS",
+            scheduled_consumable_qty=Decimal("22.0000"),
+            gross_requirement=Decimal("22.0000"),
+            stock_qty=Decimal("0.0000"),
+            shortage_qty=Decimal("22.0000"),
+            po_pending_qty=Decimal("0.0000"),
+            msl=Decimal("0.0000"),
+            status="Normal",
+            is_deleted=False,
+            created_by=user.id,
+        )
+        db.add(oct_rec)
+    db.commit()
+
+    nov_reqs_updated = calculate_workspace_requirements(db, month=11, year=2026)
+    nov_a4_updated = next((r for r in nov_reqs_updated if r.consumable_code == "HRD-A4"), None)
+    assert nov_a4_updated is not None
+    assert nov_a4_updated.active_month_count == 5
+    assert nov_a4_updated.historical_avg_qty == "14.0000"
+    assert nov_a4_updated.scheduled_consumable_qty == "14.0000"
+
+
+def test_departmental_crud_endpoints_and_purchase_workspace_sync(db, catalog):
+    """Test create_departmental_row (POST), batch_update_requirements (PATCH), and bulk_delete (POST delete-batch)."""
+    user = catalog[0]
+
+    create_req = DepartmentalRowCreateRequest(
+        month=10,
+        year=2026,
+        plant="Tool Room",
+        consumable_code="TOOL-DRILL-01",
+        consumable_name="Carbide Drill Bit 6mm",
+        part_number="DOC-DR-01",
+        unit="NOS",
+        scheduled_consumable_qty=Decimal("15.0000"),
+        remarks="Special tooling indent",
+    )
+    created = create_departmental_row(db, user.id, create_req)
+    assert created.consumable_code == "TOOL-DRILL-01"
+    assert created.scheduled_consumable_qty == "15.0000"
+    assert created.rule_type == "PLANT_REQUEST"
+    assert created.doc_ref == "DOC-DR-01"
+
+    update_req = RequirementBatchUpdateRequest(
+        records=[
+            RequirementUpdateItem(
+                id=created.id,
+                scheduled_consumable_qty="25.0000",
+                remarks="Updated drill qty",
+            )
+        ]
+    )
+    updated = batch_update_requirements(db, user.id, update_req)
+    assert updated.updated_count == 1
+    updated_item = next((r for r in updated.records if r.id == created.id), None)
+    assert updated_item is not None
+    assert updated_item.scheduled_consumable_qty == "25.0000"
+
+    current_u = actor(is_super_admin=True)
+    pw = list_purchase_workspace(db, month=10, year=2026, current_user=current_u)
+    pw_item = next((r for r in pw.records if r.consumable_code == "TOOL-DRILL-01"), None)
+    assert pw_item is not None
+    assert pw_item.dept_demands["TOOL_ROOM"] == Decimal("25.0000")
+    assert pw_item.required_qty >= Decimal("25.0000")
+
+    count, meta = bulk_delete_requirement_records(
+        db,
+        record_ids=[created.id],
+        current_user_id=user.id,
+        reason="Test deletion of drill bit",
+        month=10,
+        year=2026,
+    )
+    assert count == 1
+    post_delete_reqs = calculate_workspace_requirements(db, month=10, year=2026)
+    assert not any(r.id == created.id for r in post_delete_reqs)
+
+
+def test_query_bound_invariants_for_departmental_requirements(db, catalog):
+    """Verify calculate_workspace_requirements <= 4 queries and get_monthly_plan_metadata == 2 queries."""
+    user = catalog[0]
+    db.expunge_all()
+
+    queries = []
+    def capture(_conn, _cursor, statement, *_args):
+        if statement.lstrip().upper().startswith("SELECT"):
+            queries.append(statement)
+
+    event.listen(db.get_bind(), "before_cursor_execute", capture)
+    try:
+        queries.clear()
+        meta = get_monthly_plan_metadata(db, 10, 2026)
+        assert len(queries) == 2
+
+        queries.clear()
+        records = calculate_workspace_requirements(db, month=10, year=2026)
+        assert len(queries) <= 4
+    finally:
+        event.remove(db.get_bind(), "before_cursor_execute", capture)
+
