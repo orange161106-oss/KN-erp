@@ -17,6 +17,10 @@ import {
   Loader2,
   X,
   Upload,
+  Plus,
+  Trash2,
+  Building2,
+  Wrench,
 } from 'lucide-react';
 
 export interface RequirementRecord {
@@ -42,6 +46,7 @@ export interface RequirementRecord {
   process: string;
   description: string;
   unit: string;
+  rule_type?: string;
   required_qty: string;
   stock_qty: string;
   shortage_qty: string;
@@ -63,6 +68,11 @@ export interface RequirementRecord {
   grn_source_file?: string | null;
   invoice_no?: string | null;
   grn_date?: string | null;
+
+  // Departmental historical & doc ref fields
+  historical_avg_qty?: string | null;
+  active_month_count?: number | null;
+  doc_ref?: string | null;
 }
 
 export interface MonthlyPlanMetadata {
@@ -122,6 +132,24 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
   // Planning Period State (Month 1-12, Year)
   const [selectedMonth, setSelectedMonth] = useState<number>(10); // Default October
   const [selectedYear, setSelectedYear] = useState<number>(2026);  // Default 2026
+
+  // Top-Level Tab State: Production Consumables vs Departmental & Maintenance
+  type ViewTab = 'production' | 'departmental';
+  const [activeTab, setActiveTab] = useState<ViewTab>('production');
+  const [departmentalFilter, setDepartmentalFilter] = useState<string>('');
+
+  // Add Departmental Row Modal State
+  const [isAddRowModalOpen, setIsAddRowModalOpen] = useState(false);
+  const [isAddingRow, setIsAddingRow] = useState(false);
+  const [newRowData, setNewRowData] = useState({
+    plant: 'Tool Room',
+    consumable_code: '',
+    consumable_name: '',
+    part_number: '',
+    unit: 'NOS',
+    scheduled_consumable_qty: '0',
+    remarks: '',
+  });
 
   // Plan Metadata State
   const [planMetadata, setPlanMetadata] = useState<MonthlyPlanMetadata | null>(null);
@@ -238,22 +266,48 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
     setStatusMessage(null);
 
     try {
-      const payloadRecords = Array.from(modifiedRecords.entries()).map(([id, changes]) => ({
-        id,
-        production_order_qty: changes.production_order_qty,
-        scheduled_consumable_qty: changes.scheduled_consumable_qty,
-        gross_requirement: changes.scheduled_consumable_qty,
-        part_thickness: changes.part_thickness,
-        process_count: changes.process_count,
-        remarks: changes.remarks,
-      }));
+      const payloadRecords = Array.from(modifiedRecords.entries()).map(([id, changes]) => {
+        const row = originalMap.get(id) || records.find(r => r.id === id);
+        return {
+          id,
+          production_order_qty: changes.production_order_qty ?? row?.production_order_qty,
+          scheduled_consumable_qty: changes.scheduled_consumable_qty ?? row?.scheduled_consumable_qty,
+          gross_requirement: changes.scheduled_consumable_qty ?? row?.scheduled_consumable_qty,
+          part_thickness: changes.part_thickness ?? row?.part_thickness,
+          process_count: changes.process_count ?? row?.process_count,
+          remarks: changes.remarks !== undefined ? changes.remarks : row?.remarks,
+          consumable_code: changes.consumable_code ?? row?.consumable_code,
+          consumable_name: changes.consumable_name ?? row?.consumable_name,
+          unit: changes.unit ?? row?.unit,
+          part_number: changes.part_number ?? row?.part_number,
+          plant: changes.plant ?? row?.plant,
+          month: selectedMonth,
+          year: selectedYear,
+        };
+      });
 
-      const res = await apiClient.put<{
+      let res: {
         message: string;
         updated_count: number;
         records: RequirementRecord[];
         plan_metadata: MonthlyPlanMetadata;
-      }>('/api/v1/requirements/workspace/records', { records: payloadRecords });
+      };
+
+      try {
+        res = await apiClient.patch<{
+          message: string;
+          updated_count: number;
+          records: RequirementRecord[];
+          plan_metadata: MonthlyPlanMetadata;
+        }>('/api/v1/requirements/workspace/batch', { records: payloadRecords });
+      } catch {
+        res = await apiClient.put<{
+          message: string;
+          updated_count: number;
+          records: RequirementRecord[];
+          plan_metadata: MonthlyPlanMetadata;
+        }>('/api/v1/requirements/workspace/records', { records: payloadRecords });
+      }
 
       setRecords(res.records);
       const orig = new Map<string, RequirementRecord>();
@@ -296,11 +350,29 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
   const handleDeleteRows = async (ids: string[]) => {
     if (!ids || ids.length === 0) return;
     try {
-      const res = await apiClient.post<{
+      let res: {
         message: string;
         deleted_count: number;
         plan_metadata?: MonthlyPlanMetadata;
-      }>('/api/v1/requirements/workspace/bulk-delete', { record_ids: ids });
+      };
+
+      try {
+        res = await apiClient.post<{
+          message: string;
+          deleted_count: number;
+          plan_metadata?: MonthlyPlanMetadata;
+        }>('/api/v1/requirements/workspace/delete-batch', {
+          record_ids: ids,
+          month: selectedMonth,
+          year: selectedYear,
+        });
+      } catch {
+        res = await apiClient.post<{
+          message: string;
+          deleted_count: number;
+          plan_metadata?: MonthlyPlanMetadata;
+        }>('/api/v1/requirements/workspace/bulk-delete', { record_ids: ids });
+      }
 
       setRecords(prev => prev.filter(r => !ids.includes(r.id)));
       setOriginalMap(prev => {
@@ -333,6 +405,80 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
       throw err;
     }
   };
+
+  // Create new departmental requirement row
+  const handleCreateDepartmentalRow = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newRowData.consumable_code || !newRowData.consumable_name) {
+      setStatusMessage({ type: 'error', text: 'Item ID and Description are required.' });
+      return;
+    }
+    setIsAddingRow(true);
+    try {
+      const payload = {
+        month: selectedMonth,
+        year: selectedYear,
+        plant: newRowData.plant,
+        consumable_code: newRowData.consumable_code.trim(),
+        consumable_name: newRowData.consumable_name.trim(),
+        part_number: newRowData.part_number.trim() || 'DEPARTMENT_INDENT',
+        unit: newRowData.unit.trim() || 'NOS',
+        scheduled_consumable_qty: newRowData.scheduled_consumable_qty || '0.0000',
+        remarks: newRowData.remarks.trim() || null,
+      };
+
+      const newRecord = await apiClient.post<RequirementRecord>(
+        '/api/v1/requirements/workspace/departmental-row',
+        payload
+      );
+
+      setRecords(prev => [newRecord, ...prev]);
+      setOriginalMap(prev => {
+        const next = new Map(prev);
+        next.set(newRecord.id, { ...newRecord });
+        return next;
+      });
+
+      setIsAddRowModalOpen(false);
+      setNewRowData({
+        plant: newRowData.plant || 'Tool Room',
+        consumable_code: '',
+        consumable_name: '',
+        part_number: '',
+        unit: 'NOS',
+        scheduled_consumable_qty: '0',
+        remarks: '',
+      });
+
+      setStatusMessage({
+        type: 'success',
+        text: `Added ${newRecord.consumable_name} (${newRecord.consumable_code}) for ${newRecord.plant}.`,
+      });
+
+      void loadRecords();
+    } catch (err) {
+      setStatusMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Failed to add departmental row.',
+      });
+    } finally {
+      setIsAddingRow(false);
+    }
+  };
+
+  // Global Ctrl+S / Cmd+S shortcut to save edits
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (modifiedRecords.size > 0 && !isSaving) {
+          void handleSaveChanges();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [modifiedRecords.size, isSaving, handleSaveChanges]);
 
   // Warn before leaving if unsaved changes exist
   useEffect(() => {
@@ -510,68 +656,122 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
     }
   };
 
-  // Filter options
-  const DEFAULT_OPERATIONAL_UNITS = [
-    'Plant 1',
-    'Plant 2',
-    'Plant 3',
-    'Plant 4',
-    'Plant 5',
-    'Tool Room',
-    'PMD',
-    'NPD',
-    'HRD',
-    'QAD',
-    'Accounts',
-    'Sales',
-  ];
+  // Filter options and department/plant lists
+  const DEPARTMENT_LIST = useMemo(
+    () => ['Tool Room', 'PMD', 'NPD', 'HRD', 'QAD', 'Accounts', 'Sales'],
+    []
+  );
 
-  const uniquePlants = useMemo(() => {
-    const set = new Set<string>(DEFAULT_OPERATIONAL_UNITS);
-    records.forEach(r => { if (r.plant) set.add(r.plant); });
-    return Array.from(set);
-  }, [records]);
+  const PRODUCTION_PLANTS = useMemo(
+    () => ['Plant 1', 'Plant 2', 'Plant 3', 'Plant 4', 'Plant 5'],
+    []
+  );
+
+  const isDepartmentalRecord = useCallback((r: RequirementRecord): boolean => {
+    if (r.rule_type === 'PLANT_REQUEST') return true;
+    if (r.part_number === 'DEPARTMENT_INDENT') return true;
+    const p = (r.plant || '').trim().toLowerCase();
+    const deptKeywords = ['tool room', 'toolroom', 'pmd', 'npd', 'hrd', 'qad', 'accounts', 'sales', 'maintenance'];
+    return deptKeywords.some(d => p.includes(d));
+  }, []);
+
+  const isProductionRecord = useCallback(
+    (r: RequirementRecord): boolean => !isDepartmentalRecord(r),
+    [isDepartmentalRecord]
+  );
+
+  const productionCount = useMemo(
+    () => records.filter(isProductionRecord).length,
+    [records, isProductionRecord]
+  );
+
+  const departmentalCount = useMemo(
+    () => records.filter(isDepartmentalRecord).length,
+    [records, isDepartmentalRecord]
+  );
+
+  const uniqueProductionPlants = useMemo(() => {
+    const set = new Set<string>(PRODUCTION_PLANTS);
+    records.filter(isProductionRecord).forEach(r => {
+      if (r.plant) set.add(r.plant);
+    });
+    return Array.from(set).sort();
+  }, [records, PRODUCTION_PLANTS, isProductionRecord]);
 
   const uniqueConsumables = useMemo(() => {
+    const currentSet = activeTab === 'production'
+      ? records.filter(isProductionRecord)
+      : records.filter(isDepartmentalRecord);
     const set = new Set<string>();
-    records.forEach(r => { if (r.consumable_code) set.add(r.consumable_code); });
+    currentSet.forEach(r => {
+      if (r.consumable_code) set.add(r.consumable_code);
+    });
     return Array.from(set).sort();
-  }, [records]);
+  }, [activeTab, records, isProductionRecord, isDepartmentalRecord]);
 
-  // Filtered records
+  // Filtered records partitioned by activeTab
   const filteredRecords = useMemo(() => {
-    return records.filter(r => {
-      if (plantFilter && r.plant !== plantFilter) return false;
+    const baseRecords = activeTab === 'production'
+      ? records.filter(isProductionRecord)
+      : records.filter(isDepartmentalRecord);
+
+    return baseRecords.filter(r => {
+      if (activeTab === 'production') {
+        if (plantFilter && r.plant !== plantFilter) return false;
+      } else {
+        if (departmentalFilter && departmentalFilter !== 'ALL') {
+          if (!r.plant || !r.plant.toLowerCase().includes(departmentalFilter.toLowerCase())) {
+            return false;
+          }
+        }
+      }
+
       if (consumableFilter && r.consumable_code !== consumableFilter) return false;
       if (statusFilter && r.status !== statusFilter) return false;
+
       if (!searchQuery) return true;
       const q = searchQuery.toLowerCase();
       return (
-        r.part_name.toLowerCase().includes(q) ||
-        r.part_number.toLowerCase().includes(q) ||
-        r.consumable_code.toLowerCase().includes(q) ||
-        r.consumable_name.toLowerCase().includes(q) ||
-        r.process_name.toLowerCase().includes(q) ||
+        (r.part_name && r.part_name.toLowerCase().includes(q)) ||
+        (r.part_number && r.part_number.toLowerCase().includes(q)) ||
+        (r.consumable_code && r.consumable_code.toLowerCase().includes(q)) ||
+        (r.consumable_name && r.consumable_name.toLowerCase().includes(q)) ||
+        (r.process_name && r.process_name.toLowerCase().includes(q)) ||
+        (r.plant && r.plant.toLowerCase().includes(q)) ||
+        (r.doc_ref && r.doc_ref.toLowerCase().includes(q)) ||
         (r.remarks && r.remarks.toLowerCase().includes(q))
       );
     });
-  }, [records, plantFilter, consumableFilter, statusFilter, searchQuery]);
+  }, [
+    activeTab,
+    records,
+    isProductionRecord,
+    isDepartmentalRecord,
+    plantFilter,
+    departmentalFilter,
+    consumableFilter,
+    statusFilter,
+    searchQuery,
+  ]);
 
-  // Summary counts
+  // Summary counts for current tab
   const summary = useMemo(() => {
+    const target = activeTab === 'production'
+      ? records.filter(isProductionRecord)
+      : records.filter(isDepartmentalRecord);
     let critical = 0;
     let low = 0;
     let normal = 0;
-    records.forEach(r => {
+    target.forEach(r => {
       if (r.status === 'Critical shortage') critical++;
       else if (r.status === 'Low') low++;
       else normal++;
     });
-    return { critical, low, normal, total: records.length };
-  }, [records]);
+    return { critical, low, normal, total: target.length };
+  }, [activeTab, records, isProductionRecord, isDepartmentalRecord]);
 
-  // Section 7A: Grouped Headers
-  const headerGroups: HeaderGroupDef[] = useMemo(
+  // Section 7A: Grouped Headers for Production Consumables
+  const headerGroupsProduction: HeaderGroupDef[] = useMemo(
     () => [
       {
         label: 'FOR COMPONENT',
@@ -592,8 +792,30 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
     []
   );
 
-  // Section 7A: Fixed Column Definitions with explicit numeric pixel widths
-  const columns: ColumnDef<RequirementRecord>[] = useMemo(
+  // Grouped Headers for Departmental & Maintenance
+  const headerGroupsDepartmental: HeaderGroupDef[] = useMemo(
+    () => [
+      {
+        label: 'DEPARTMENT & ITEM DETAILS',
+        colSpan: 5,
+        className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-ink-text/20 bg-brand-navy select-none',
+      },
+      {
+        label: 'PLANNING & CONSUMPTION',
+        colSpan: 2,
+        className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-ink-text/20 bg-brand-steel select-none',
+      },
+      {
+        label: 'INVENTORY & OPERATIONAL STATUS',
+        colSpan: 6,
+        className: 'p-1 text-center font-bold text-white uppercase tracking-wider text-[11px] border-r border-ink-text/20 bg-brand-navy select-none',
+      },
+    ],
+    []
+  );
+
+  // Columns for Production Consumables (Plants 1–5)
+  const columnsProduction: ColumnDef<RequirementRecord>[] = useMemo(
     () => [
       // --- Group 1: For Component (Frozen Left Columns) ---
       {
@@ -804,7 +1026,223 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
               e.stopPropagation();
               setSelectedAuditRow(row);
             }}
-            className="px-2 py-0.5 rounded text-2xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition-colors shadow-2xs"
+            className="px-2 py-0.5 rounded text-2xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition-colors shadow-2xs cursor-pointer"
+          >
+            🔍 Audit
+          </button>
+        ),
+      },
+    ],
+    [canUpdate]
+  );
+
+  // Columns for Departmental & Maintenance (Hiding Component / Manufacturing columns)
+  const columnsDepartmental: ColumnDef<RequirementRecord>[] = useMemo(
+    () => [
+      {
+        key: 'plant',
+        label: 'Department',
+        width: 120,
+        minWidth: 90,
+        align: 'left',
+        isSticky: true,
+        render: val => (
+          <span className="font-bold text-slate-800 text-xs px-2 py-0.5 bg-slate-100 rounded border border-slate-200/60">
+            {val}
+          </span>
+        ),
+      },
+      {
+        key: 'consumable_code',
+        label: 'Item ID',
+        width: 160,
+        minWidth: 120,
+        align: 'left',
+        isSticky: true,
+        render: val => <span className="font-mono font-bold text-blue-900">{val}</span>,
+      },
+      {
+        key: 'consumable_name',
+        label: 'Item Description',
+        width: 250,
+        minWidth: 160,
+        align: 'left',
+        render: val => <span className="text-gray-900 truncate block font-medium">{val}</span>,
+      },
+      {
+        key: 'part_number',
+        label: 'Part / Doc Ref',
+        width: 170,
+        minWidth: 120,
+        align: 'left',
+        render: (_val, row) => {
+          const ref = row.doc_ref || (row.part_number !== 'DEPARTMENT_INDENT' ? row.part_number : '') || '—';
+          return <span className="font-mono text-xs text-slate-600">{ref}</span>;
+        },
+      },
+      {
+        key: 'unit',
+        label: 'Unit',
+        width: 80,
+        minWidth: 60,
+        align: 'center',
+        render: val => <span className="text-slate-700 font-semibold text-xs">{val || 'NOS'}</span>,
+      },
+      {
+        key: 'historical_avg_qty' as any,
+        label: 'Historical Avg (Active Mos)',
+        width: 180,
+        minWidth: 140,
+        align: 'right',
+        render: (_val, row) => {
+          const avg = row.historical_avg_qty && row.historical_avg_qty !== '0.0000'
+            ? row.historical_avg_qty
+            : '—';
+          const count = row.active_month_count ?? 0;
+          return (
+            <div className="flex items-center justify-end gap-1.5 font-mono">
+              <span className="font-semibold text-slate-800">{avg}</span>
+              {count > 0 ? (
+                <span
+                  className="px-1.5 py-0.5 rounded-full text-3xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200"
+                  title={`${count} active non-zero historical month(s)`}
+                >
+                  {count} mo
+                </span>
+              ) : (
+                <span className="text-3xs text-slate-400">new</span>
+              )}
+            </div>
+          );
+        },
+      },
+      {
+        key: 'scheduled_consumable_qty',
+        label: 'Required Qty',
+        width: 130,
+        minWidth: 100,
+        align: 'right',
+        type: 'number',
+        isEditable: canUpdate,
+        render: val => (
+          <span className="font-mono font-bold text-indigo-950 bg-indigo-50/60 px-1.5 py-0.5 rounded">
+            {val}
+          </span>
+        ),
+      },
+      {
+        key: 'stock_qty',
+        label: 'Stock Qty (T-2)',
+        width: 120,
+        minWidth: 80,
+        align: 'right',
+        render: (val, row) => {
+          const displayVal =
+            val && val !== 'Unavailable'
+              ? val
+              : (row.closing_stock != null && row.closing_stock !== '' && Number(row.closing_stock) > 0)
+              ? String(row.closing_stock)
+              : (row.grn_received_qty != null && row.grn_received_qty !== '' && Number(row.grn_received_qty) > 0)
+              ? String(row.grn_received_qty)
+              : val || '—';
+          return <span className="font-mono text-gray-700">{displayVal}</span>;
+        },
+      },
+      {
+        key: 'grn_received_qty',
+        label: 'GRN Received',
+        width: 120,
+        minWidth: 80,
+        align: 'right',
+        render: val => (
+          <span className="font-mono text-emerald-700 font-semibold">
+            {val != null && val !== '' ? String(val) : '—'}
+          </span>
+        ),
+      },
+      {
+        key: 'shortage_qty',
+        label: 'Shortage Qty',
+        width: 120,
+        minWidth: 80,
+        align: 'right',
+        render: val => {
+          const num = parseFloat(val) || 0;
+          return (
+            <span
+              className={`font-mono font-bold ${
+                num > 0 ? 'text-red-600 bg-red-100/80 px-1.5 py-0.5 rounded' : 'text-gray-400'
+              }`}
+            >
+              {val}
+            </span>
+          );
+        },
+      },
+      {
+        key: 'status',
+        label: 'Status',
+        width: 140,
+        minWidth: 100,
+        align: 'center',
+        render: val => {
+          if (val === 'Critical shortage') {
+            return (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-800 border border-red-300">
+                CRITICAL SHORTAGE
+              </span>
+            );
+          }
+          if (val === 'Low') {
+            return (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                LOW STOCK
+              </span>
+            );
+          }
+          if (val === 'Configuration required') {
+            return (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-300">
+                RULE REVIEW
+              </span>
+            );
+          }
+          if (val === 'Calculated') {
+            return (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-300">
+                CALCULATED
+              </span>
+            );
+          }
+          return (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+              NORMAL
+            </span>
+          );
+        },
+      },
+      {
+        key: 'remarks',
+        label: 'Remarks',
+        width: 220,
+        minWidth: 140,
+        align: 'left',
+        isEditable: canUpdate,
+      },
+      {
+        key: 'id' as any,
+        label: 'Audit Trail',
+        width: 90,
+        minWidth: 70,
+        align: 'center',
+        render: (_val, row) => (
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              setSelectedAuditRow(row);
+            }}
+            className="px-2 py-0.5 rounded text-2xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition-colors shadow-2xs cursor-pointer"
           >
             🔍 Audit
           </button>
@@ -816,13 +1254,8 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
   return (
     <div className="flex flex-col h-full space-y-3 font-['Plus_Jakarta_Sans',sans-serif]">
-      {productionBased && (
-        <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
-          Production-based requirements calculated deterministically from Production order quantities (R0) and Consumption Norms (Sch).
-        </div>
-      )}
-          {/* Top Banner: Module Purpose & Saved Plan Metadata Card */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+      {/* Top Banner: Module Purpose & Saved Plan Metadata Card */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <div>
           <h1 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
             <span>Requirement</span>
@@ -831,7 +1264,9 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
             </span>
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            Manage and recalculate monthly consumable requirements deterministically based on production planning data.
+            {activeTab === 'production'
+              ? 'Manage and recalculate monthly consumable requirements deterministically based on production planning data.'
+              : 'Departmental non-BOM indents and plant maintenance planning with non-zero active month rolling averages.'}
           </p>
         </div>
 
@@ -899,6 +1334,69 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
         </div>
       </div>
 
+      {/* Top-Level Tab Navigation */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('production');
+              setSelectedRowIds(new Set());
+            }}
+            className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
+              activeTab === 'production'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            <Building2 className="w-3.5 h-3.5" />
+            <span>Production Consumables (Plants 1–5)</span>
+            <span
+              className={`px-1.5 py-0.5 rounded-full text-2xs font-semibold ${
+                activeTab === 'production' ? 'bg-slate-700 text-slate-100' : 'bg-slate-200 text-slate-600'
+              }`}
+            >
+              {productionCount}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('departmental');
+              setSelectedRowIds(new Set());
+            }}
+            className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
+              activeTab === 'departmental'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            <span>Departmental &amp; Maintenance</span>
+            <span
+              className={`px-1.5 py-0.5 rounded-full text-2xs font-semibold ${
+                activeTab === 'departmental' ? 'bg-slate-700 text-slate-100' : 'bg-slate-200 text-slate-600'
+              }`}
+            >
+              {departmentalCount}
+            </span>
+          </button>
+        </div>
+
+        <div className="text-2xs text-slate-500 font-medium px-2 hidden sm:block">
+          {activeTab === 'production'
+            ? 'Deterministic BOM norm explosion for production units'
+            : 'Tool Room · PMD · NPD · HRD · QAD · Accounts · Sales'}
+        </div>
+      </div>
+
+      {activeTab === 'production' && productionBased && (
+        <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+          Production-based requirements calculated deterministically from Production order quantities (R0) and Consumption Norms (Sch).
+        </div>
+      )}
+
       {statusMessage && (
         <div
           className={`px-3.5 py-2.5 rounded-xl text-xs font-medium border flex items-center justify-between shadow-xs ${
@@ -962,7 +1460,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
             type="button"
             onClick={() => void loadRecords()}
             disabled={isLoading}
-            className="px-3 py-1.5 border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg font-semibold text-xs transition-colors shadow-sm flex items-center gap-1.5"
+            className="px-3 py-1.5 border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg font-semibold text-xs transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
           >
             <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
             <span>Load Requirements</span>
@@ -984,12 +1482,40 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
 
         {/* Primary Action Buttons */}
         <div className="flex items-center gap-2">
+          {/* Add Row Button (in Departmental tab) */}
+          {activeTab === 'departmental' && canUpdate && (
+            <button
+              type="button"
+              onClick={() => setIsAddRowModalOpen(true)}
+              className="border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5 text-indigo-600" />
+              <span>+ Add Row</span>
+            </button>
+          )}
+
+          {/* Delete Selected Button (in Departmental tab when items selected) */}
+          {activeTab === 'departmental' && canUpdate && selectedRowIds.size > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm(`Are you sure you want to delete ${selectedRowIds.size} selected item(s)?`)) {
+                  void handleDeleteRows(Array.from(selectedRowIds));
+                }
+              }}
+              className="border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+              <span>Delete Selected ({selectedRowIds.size})</span>
+            </button>
+          )}
+
           {/* Upload Dept / Plan Button */}
           {canUpdate && (
             <button
               type="button"
               onClick={() => setShowUploadModal(true)}
-              className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5"
+              className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
             >
               <UploadCloud className="w-3.5 h-3.5 text-slate-600" />
               <span>Upload Dept / Plan</span>
@@ -1005,7 +1531,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
                 setGrnError(null);
                 setIsGrnModalOpen(true);
               }}
-              className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5"
+              className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
             >
               <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
               <span>Upload GRN</span>
@@ -1020,7 +1546,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
               disabled={isSaving || modifiedRecords.size === 0}
               className={`rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 ${
                 modifiedRecords.size > 0
-                  ? 'bg-amber-600 hover:bg-amber-700 text-white animate-pulse'
+                  ? 'bg-amber-600 hover:bg-amber-700 text-white animate-pulse cursor-pointer'
                   : 'border border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed'
               }`}
             >
@@ -1038,13 +1564,13 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
             </button>
           )}
 
-          {/* Recalculate MRP Button (Primary Action) */}
-          {canRecalculate && (
+          {/* Recalculate MRP Button (in Production tab) */}
+          {activeTab === 'production' && canRecalculate && (
             <button
               type="button"
               onClick={() => void handleRecalculate()}
               disabled={isRecalculating || isLoading || (!productionBased && records.length === 0) || (productionBased && planMetadata?.status === 'APPROVED')}
-              className="border border-slate-300 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-lg px-3.5 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5"
+              className="border border-slate-300 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-lg px-3.5 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
             >
               {isRecalculating ? (
                 <>
@@ -1066,7 +1592,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
               <button
                 type="button"
                 onClick={() => handleExport(selectedRowIds.size > 0 ? 'SELECTED' : 'ALL')}
-                className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5"
+                className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5 text-slate-600" />
                 <span>Export Excel ▾</span>
@@ -1075,14 +1601,14 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
                 <button
                   type="button"
                   onClick={() => handleExport('ALL')}
-                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 cursor-pointer"
                 >
                   Export All Rows
                 </button>
                 <button
                   type="button"
                   onClick={() => handleExport('FILTERED')}
-                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 cursor-pointer"
                 >
                   Export Filtered Rows
                 </button>
@@ -1090,7 +1616,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
                   <button
                     type="button"
                     onClick={() => handleExport('SELECTED')}
-                    className="w-full text-left px-3 py-1.5 text-xs text-blue-700 font-semibold hover:bg-blue-50"
+                    className="w-full text-left px-3 py-1.5 text-xs text-blue-700 font-semibold hover:bg-blue-50 cursor-pointer"
                   >
                     Export Selected ({selectedRowIds.size})
                   </button>
@@ -1101,8 +1627,8 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
         </div>
       </div>
 
-      {/* Issues Alert Line */}
-      {Boolean(planMetadata?.issue_count && planMetadata.issue_count > 0) && (
+      {/* Issues Alert Line (Shown only for Production Consumables) */}
+      {activeTab === 'production' && Boolean(planMetadata?.issue_count && planMetadata.issue_count > 0) && (
         <div className="flex items-center justify-between px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-900 shadow-2xs">
           <div className="flex items-center gap-2">
             <span className="font-bold">⚠️ {planMetadata?.issue_count} issue{planMetadata?.issue_count === 1 ? '' : 's'}:</span>
@@ -1120,6 +1646,51 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
         </div>
       )}
 
+      {/* Department Quick Filter Bar (Shown only in Departmental tab) */}
+      {activeTab === 'departmental' && (
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 bg-white border border-slate-200 rounded-xl shadow-2xs">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-slate-500 font-bold text-2xs uppercase tracking-wider mr-1">
+              Department:
+            </span>
+            {['ALL', ...DEPARTMENT_LIST].map(dept => {
+              const isSelected = (dept === 'ALL' && !departmentalFilter) || departmentalFilter === dept;
+              const count = records.filter(r => {
+                if (!isDepartmentalRecord(r)) return false;
+                if (dept === 'ALL') return true;
+                return (r.plant || '').toLowerCase() === dept.toLowerCase();
+              }).length;
+
+              return (
+                <button
+                  key={dept}
+                  type="button"
+                  onClick={() => setDepartmentalFilter(dept === 'ALL' ? '' : dept)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    isSelected
+                      ? 'bg-slate-900 text-white shadow-2xs'
+                      : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200'
+                  }`}
+                >
+                  <span>{dept === 'ALL' ? 'All Depts' : dept}</span>
+                  <span
+                    className={`px-1 rounded-full text-3xs font-bold ${
+                      isSelected ? 'bg-slate-700 text-slate-200' : 'bg-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="text-2xs text-slate-400 italic hidden md:block">
+            Maintenance indents &amp; non-zero rolling average tracking
+          </div>
+        </div>
+      )}
+
       {/* Main Spreadsheet Grid Container */}
       <div className="flex-1 min-h-0 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden">
         {/* Toolbar for search and column filters */}
@@ -1132,43 +1703,86 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
           selectedCount={selectedRowIds.size}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
-          searchPlaceholder="🔍 Search part name, part no, consumable ID, process..."
-          filters={[
-            {
-              key: 'plant',
-              label: 'Plant / Unit',
-              value: plantFilter,
-              onChange: setPlantFilter,
-              options: [
-                { value: '', label: 'All Plants / Units' },
-                ...uniquePlants.map(p => ({ value: p, label: p })),
-              ],
-            },
-            {
-              key: 'consumable',
-              label: 'Consumable',
-              value: consumableFilter,
-              onChange: setConsumableFilter,
-              options: [
-                { value: '', label: 'All Consumables' },
-                ...uniqueConsumables.map(c => ({ value: c, label: c })),
-              ],
-            },
-            {
-              key: 'status',
-              label: 'Status',
-              value: statusFilter,
-              onChange: setStatusFilter,
-              options: [
-                { value: '', label: 'All Statuses' },
-                { value: 'Critical shortage', label: 'Critical shortage' },
-                { value: 'Low', label: 'Low Stock' },
-                { value: 'Normal', label: 'Normal' },
-                { value: 'Calculated', label: 'Calculated' },
-                { value: 'Configuration required', label: 'Rule Review Required' },
-              ],
-            },
-          ]}
+          searchPlaceholder={
+            activeTab === 'production'
+              ? '🔍 Search part name, part no, consumable ID, process...'
+              : '🔍 Search department, consumable ID, item description, doc ref...'
+          }
+          filters={
+            activeTab === 'production'
+              ? [
+                  {
+                    key: 'plant',
+                    label: 'Plant',
+                    value: plantFilter,
+                    onChange: setPlantFilter,
+                    options: [
+                      { value: '', label: 'All Plants (1–5)' },
+                      ...uniqueProductionPlants.map(p => ({ value: p, label: p })),
+                    ],
+                  },
+                  {
+                    key: 'consumable',
+                    label: 'Consumable',
+                    value: consumableFilter,
+                    onChange: setConsumableFilter,
+                    options: [
+                      { value: '', label: 'All Consumables' },
+                      ...uniqueConsumables.map(c => ({ value: c, label: c })),
+                    ],
+                  },
+                  {
+                    key: 'status',
+                    label: 'Status',
+                    value: statusFilter,
+                    onChange: setStatusFilter,
+                    options: [
+                      { value: '', label: 'All Statuses' },
+                      { value: 'Critical shortage', label: 'Critical shortage' },
+                      { value: 'Low', label: 'Low Stock' },
+                      { value: 'Normal', label: 'Normal' },
+                      { value: 'Calculated', label: 'Calculated' },
+                      { value: 'Configuration required', label: 'Rule Review Required' },
+                    ],
+                  },
+                ]
+              : [
+                  {
+                    key: 'department',
+                    label: 'Department',
+                    value: departmentalFilter,
+                    onChange: setDepartmentalFilter,
+                    options: [
+                      { value: '', label: 'All Departments' },
+                      ...DEPARTMENT_LIST.map(d => ({ value: d, label: d })),
+                    ],
+                  },
+                  {
+                    key: 'consumable',
+                    label: 'Consumable',
+                    value: consumableFilter,
+                    onChange: setConsumableFilter,
+                    options: [
+                      { value: '', label: 'All Consumables' },
+                      ...uniqueConsumables.map(c => ({ value: c, label: c })),
+                    ],
+                  },
+                  {
+                    key: 'status',
+                    label: 'Status',
+                    value: statusFilter,
+                    onChange: setStatusFilter,
+                    options: [
+                      { value: '', label: 'All Statuses' },
+                      { value: 'Critical shortage', label: 'Critical shortage' },
+                      { value: 'Low', label: 'Low Stock' },
+                      { value: 'Normal', label: 'Normal' },
+                      { value: 'Calculated', label: 'Calculated' },
+                      { value: 'Configuration required', label: 'Rule Review Required' },
+                    ],
+                  },
+                ]
+          }
         />
 
         {/* Section 7 & 7A: Spreadsheet Table Grid with ALWAYS VISIBLE HEADERS */}
@@ -1176,8 +1790,8 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
           <div className="overflow-x-auto overflow-y-auto max-h-[calc(100vh-320px)] border border-slate-200 rounded-lg">
             <DataTable
               virtualize
-              columns={columns}
-              headerGroups={headerGroups}
+              columns={activeTab === 'production' ? columnsProduction : columnsDepartmental}
+              headerGroups={activeTab === 'production' ? headerGroupsProduction : headerGroupsDepartmental}
               data={filteredRecords}
               originalData={originalMap}
               selectedIds={selectedRowIds}
@@ -1187,13 +1801,19 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
               onDeleteRows={handleDeleteRows}
               onDiscardChanges={handleDiscardChanges}
               isLoading={isLoading}
-              emptyMessage={`No consumable requirements found for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Click 'Upload Dept / Plan' to import a plan.`}
+              emptyMessage={
+                activeTab === 'production'
+                  ? `No production consumable requirements found for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Click 'Upload Dept / Plan' to import a plan.`
+                  : `No departmental or maintenance requirements found for ${
+                      departmentalFilter && departmentalFilter !== 'ALL' ? departmentalFilter : 'any department'
+                    } in ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Click '+ Add Row' or 'Upload Dept / Plan' to add items.`
+              }
               canCreate={false}
               canUpdate={canUpdate}
-              canDelete={canEditPlan}
+              canDelete={canEditPlan || activeTab === 'departmental'}
               selectedCell={selectedCell}
               onSelectCell={setSelectedCell}
-              storageKey="knl_requirements_grid"
+              storageKey={activeTab === 'production' ? 'knl_requirements_grid_production' : 'knl_requirements_grid_departmental'}
               saveStatus={isSaving ? 'saving' : modifiedRecords.size > 0 ? 'idle' : 'saved'}
               lastModifiedText={
                 planMetadata?.updated_at
@@ -1211,6 +1831,174 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
           </div>
         </div>
       </div>
+
+      {/* Add Departmental Row Modal */}
+      {isAddRowModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-xl shadow-xl border border-slate-200 max-w-lg w-full overflow-hidden animate-in fade-in duration-150">
+            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/70">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg border border-indigo-100">
+                  <Plus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Add Departmental Requirement Row</h3>
+                  <p className="text-2xs text-slate-500">
+                    Create manual indent or maintenance item for {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAddRowModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateDepartmentalRow}>
+              <div className="p-5 space-y-3.5 text-xs">
+                <div>
+                  <label htmlFor="dept-input-plant" className="block text-[11px] font-bold text-slate-700 mb-1">
+                    Department <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    id="dept-input-plant"
+                    value={newRowData.plant}
+                    onChange={e => setNewRowData(prev => ({ ...prev, plant: e.target.value }))}
+                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white text-slate-800 font-medium focus:ring-1 focus:ring-slate-900"
+                  >
+                    {DEPARTMENT_LIST.map(dept => (
+                      <option key={dept} value={dept}>
+                        {dept}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label htmlFor="dept-input-code" className="block text-[11px] font-bold text-slate-700 mb-1">
+                      Item ID (Consumable Code) <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="dept-input-code"
+                      type="text"
+                      required
+                      placeholder="e.g. BEAR-6205"
+                      value={newRowData.consumable_code}
+                      onChange={e => setNewRowData(prev => ({ ...prev, consumable_code: e.target.value.toUpperCase() }))}
+                      className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg font-mono text-slate-800 focus:ring-1 focus:ring-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="dept-input-unit" className="block text-[11px] font-bold text-slate-700 mb-1">
+                      Unit
+                    </label>
+                    <input
+                      id="dept-input-unit"
+                      type="text"
+                      placeholder="e.g. NOS"
+                      value={newRowData.unit}
+                      onChange={e => setNewRowData(prev => ({ ...prev, unit: e.target.value.toUpperCase() }))}
+                      className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg font-mono text-slate-800 focus:ring-1 focus:ring-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="dept-input-desc" className="block text-[11px] font-bold text-slate-700 mb-1">
+                    Item Description <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    id="dept-input-desc"
+                    type="text"
+                    required
+                    placeholder="e.g. Deep Groove Ball Bearing 6205-2RS"
+                    value={newRowData.consumable_name}
+                    onChange={e => setNewRowData(prev => ({ ...prev, consumable_name: e.target.value }))}
+                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg text-slate-800 focus:ring-1 focus:ring-slate-900"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label htmlFor="dept-input-ref" className="block text-[11px] font-bold text-slate-700 mb-1">
+                      Part / Doc Ref (Optional)
+                    </label>
+                    <input
+                      id="dept-input-ref"
+                      type="text"
+                      placeholder="e.g. KNL/PMD/DI/33"
+                      value={newRowData.part_number}
+                      onChange={e => setNewRowData(prev => ({ ...prev, part_number: e.target.value }))}
+                      className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg font-mono text-slate-800 focus:ring-1 focus:ring-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="dept-input-qty" className="block text-[11px] font-bold text-slate-700 mb-1">
+                      Initial Required Qty
+                    </label>
+                    <input
+                      id="dept-input-qty"
+                      type="number"
+                      step="any"
+                      min="0"
+                      placeholder="0"
+                      value={newRowData.scheduled_consumable_qty}
+                      onChange={e => setNewRowData(prev => ({ ...prev, scheduled_consumable_qty: e.target.value }))}
+                      className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg font-mono text-slate-800 focus:ring-1 focus:ring-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="dept-input-remarks" className="block text-[11px] font-bold text-slate-700 mb-1">
+                    Remarks (Optional)
+                  </label>
+                  <input
+                    id="dept-input-remarks"
+                    type="text"
+                    placeholder="e.g. Scheduled PM maintenance replenishment"
+                    value={newRowData.remarks}
+                    onChange={e => setNewRowData(prev => ({ ...prev, remarks: e.target.value }))}
+                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg text-slate-800 focus:ring-1 focus:ring-slate-900"
+                  />
+                </div>
+              </div>
+
+              <div className="px-5 py-3 border-t border-slate-200 bg-slate-50/60 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAddRowModalOpen(false)}
+                  disabled={isAddingRow}
+                  className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-800 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isAddingRow || !newRowData.consumable_code || !newRowData.consumable_name}
+                  className="px-4 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50 rounded-lg shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  {isAddingRow ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Creating Row…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Departmental Item</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Upload Excel Modal */}
       <MonthlyExcelUploadModal
