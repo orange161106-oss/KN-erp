@@ -459,3 +459,58 @@ test('multi-row selection and Delete Selected calls delete-batch API', async () 
   // Verify row removed from view
   expect(screen.queryByText('Carbide End Mill 10mm')).not.toBeInTheDocument();
 });
+
+test('dedicated departmental toolbar renders Upload Dept Excel and Export Dept Excel', async () => {
+  let exportUrl = '';
+  const originalCreateObjectURL = window.URL.createObjectURL;
+  const originalRevokeObjectURL = window.URL.revokeObjectURL;
+  window.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+  window.URL.revokeObjectURL = vi.fn();
+
+  try {
+    fetchMock.mockImplementation(async input => {
+      const urlStr = String(input);
+      if (urlStr.includes('/workspace/export')) {
+        exportUrl = urlStr;
+        return new Response('mock-excel-bytes', {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition': 'attachment; filename="departmental_requirements_2026_10.xlsx"',
+          },
+        });
+      }
+      if (urlStr.includes('/workspace/view')) {
+        return jsonResponse({
+          records: mockRequirements,
+          plan_metadata: mockPlanMetadata,
+        });
+      }
+      return jsonResponse([]);
+    });
+
+    renderRequirements();
+
+    // Switch to Departmental tab
+    const deptTab = await screen.findByRole('button', { name: /Departmental & Maintenance/i });
+    await userEvent.click(deptTab);
+
+    // Verify Dedicated Toolbar elements
+    expect(screen.getByRole('button', { name: /Upload Dept Excel/i })).toBeInTheDocument();
+    const exportBtn = screen.getByRole('button', { name: /Export Dept Excel/i });
+    expect(exportBtn).toBeInTheDocument();
+
+    // Click Export Dept Excel
+    await userEvent.click(exportBtn);
+
+    await waitFor(() => {
+      expect(exportUrl).toContain('/workspace/export');
+      expect(exportUrl).toContain('scope=departmental');
+      expect(exportUrl).toContain('month=10');
+      expect(exportUrl).toContain('year=2026');
+    });
+  } finally {
+    window.URL.createObjectURL = originalCreateObjectURL;
+    window.URL.revokeObjectURL = originalRevokeObjectURL;
+  }
+});

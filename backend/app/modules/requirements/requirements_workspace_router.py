@@ -227,6 +227,7 @@ def export_requirements_workspace(
     status: Optional[str] = None,
     search: Optional[str] = None,
     record_ids: Annotated[list[str] | None, Query()] = None,
+    scope: Optional[str] = None,
 ):
     _check_central_scope(session, user, month, year, planning_period)
     excel_bytes = service.export_requirements_excel(
@@ -239,12 +240,13 @@ def export_requirements_workspace(
         status_filter=status,
         search=search,
         record_ids=record_ids,
+        scope=scope,
     )
     period_label = planning_period or (f"{year:04d}_{month:02d}" if month and year else "all")
     return Response(
         content=excel_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="consumable_requirements_{period_label}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="{"departmental_requirements" if scope and scope.strip().lower() == "departmental" else "consumable_requirements"}_{period_label}.xlsx"'},
     )
 
 
@@ -258,6 +260,7 @@ def export_requirements_workspace_post(
     month = data.get("month")
     year = data.get("year")
     planning_period = data.get("planning_period")
+    scope = data.get("scope")
     _check_central_scope(session, user, month, year, planning_period)
     excel_bytes = service.export_requirements_excel(
         session,
@@ -265,12 +268,13 @@ def export_requirements_workspace_post(
         year=year,
         planning_period=planning_period,
         record_ids=raw_ids if raw_ids else None,
+        scope=scope,
     )
     period_label = planning_period or (f"{year}_{month}" if month and year else "workspace")
     return Response(
         content=excel_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="consumable_requirements_{period_label}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="{"departmental_requirements" if scope and scope.strip().lower() == "departmental" else "consumable_requirements"}_{period_label}.xlsx"'},
     )
 
 

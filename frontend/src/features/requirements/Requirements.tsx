@@ -625,6 +625,43 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
     }
   };
 
+  // Export Departmental Excel with authentication
+  const handleExportDeptExcel = async () => {
+    let url = `/api/v1/requirements/workspace/export?month=${selectedMonth}&year=${selectedYear}&scope=departmental`;
+    const params = new URLSearchParams();
+    if (departmentalFilter && departmentalFilter !== 'ALL') {
+      params.append('plant', departmentalFilter);
+    }
+    if (searchQuery) {
+      params.append('search', searchQuery);
+    }
+    if (selectedRowIds.size > 0) {
+      Array.from(selectedRowIds).forEach(id => params.append('record_ids', id));
+    }
+    const q = params.toString();
+    if (q) url += `&${q}`;
+
+    try {
+      const res = await fetchWithAuth(url);
+      if (!res.ok) throw new Error('Download failed');
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `departmental_requirements_${selectedYear}_${String(selectedMonth).padStart(2, '0')}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      console.error('Export Departmental Excel error:', err);
+      setStatusMessage({
+        type: 'error',
+        text: 'Failed to export departmental spreadsheet.',
+      });
+    }
+  };
+
   // Download issues list CSV with authentication
   const handleDownloadIssues = async () => {
     setIsDownloadingIssues(true);
@@ -689,6 +726,26 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
     () => records.filter(isDepartmentalRecord).length,
     [records, isDepartmentalRecord]
   );
+
+  const departmentPillCounts = useMemo(() => {
+    const counts: Record<string, number> = { ALL: 0 };
+    DEPARTMENT_LIST.forEach(d => {
+      counts[d] = 0;
+    });
+
+    records.forEach(r => {
+      if (!isDepartmentalRecord(r)) return;
+      counts.ALL = (counts.ALL || 0) + 1;
+      const plantLower = (r.plant || '').trim().toLowerCase();
+      DEPARTMENT_LIST.forEach(dept => {
+        if (plantLower === dept.toLowerCase()) {
+          counts[dept] = (counts[dept] || 0) + 1;
+        }
+      });
+    });
+
+    return counts;
+  }, [records, DEPARTMENT_LIST, isDepartmentalRecord]);
 
   const uniqueProductionPlants = useMemo(() => {
     const set = new Set<string>(PRODUCTION_PLANTS);
@@ -1466,165 +1523,141 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
             <span>Load Requirements</span>
           </button>
 
-          {/* Active GRN Reconciliation Badge */}
-          {planMetadata?.grn_reconciled ? (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>GRN Reconciled</span>
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 shadow-2xs">
-              <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-              <span>GRN Pending</span>
-            </span>
+          {/* Active GRN Reconciliation Badge (Only in Production tab) */}
+          {activeTab === 'production' && (
+            planMetadata?.grn_reconciled ? (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                <span>GRN Reconciled</span>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 shadow-2xs">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                <span>GRN Pending</span>
+              </span>
+            )
           )}
         </div>
 
-        {/* Primary Action Buttons */}
-        <div className="flex items-center gap-2">
-          {/* Add Row Button (in Departmental tab) */}
-          {activeTab === 'departmental' && canUpdate && (
-            <button
-              type="button"
-              onClick={() => setIsAddRowModalOpen(true)}
-              className="border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5 text-indigo-600" />
-              <span>+ Add Row</span>
-            </button>
-          )}
-
-          {/* Delete Selected Button (in Departmental tab when items selected) */}
-          {activeTab === 'departmental' && canUpdate && selectedRowIds.size > 0 && (
-            <button
-              type="button"
-              onClick={() => {
-                if (window.confirm(`Are you sure you want to delete ${selectedRowIds.size} selected item(s)?`)) {
-                  void handleDeleteRows(Array.from(selectedRowIds));
-                }
-              }}
-              className="border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
-            >
-              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-              <span>Delete Selected ({selectedRowIds.size})</span>
-            </button>
-          )}
-
-          {/* Upload Dept / Plan Button */}
-          {canUpdate && (
-            <button
-              type="button"
-              onClick={() => setShowUploadModal(true)}
-              className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
-            >
-              <UploadCloud className="w-3.5 h-3.5 text-slate-600" />
-              <span>Upload Dept / Plan</span>
-            </button>
-          )}
-
-          {/* Upload GRN Button */}
-          {canUpdate && (
-            <button
-              type="button"
-              onClick={() => {
-                setGrnFile(null);
-                setGrnError(null);
-                setIsGrnModalOpen(true);
-              }}
-              className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
-            >
-              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Upload GRN</span>
-            </button>
-          )}
-
-          {/* Save Changes Button (Active when permitted cells are edited) */}
-          {canUpdate && (
-            <button
-              type="button"
-              onClick={() => void handleSaveChanges()}
-              disabled={isSaving || modifiedRecords.size === 0}
-              className={`rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 ${
-                modifiedRecords.size > 0
-                  ? 'bg-amber-600 hover:bg-amber-700 text-white animate-pulse cursor-pointer'
-                  : 'border border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed'
-              }`}
-            >
-              {isSaving ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Saving…</span>
-                </>
-              ) : (
-                <>
-                  <Save className="w-3.5 h-3.5" />
-                  <span>Save Changes {modifiedRecords.size > 0 ? `(${modifiedRecords.size})` : ''}</span>
-                </>
-              )}
-            </button>
-          )}
-
-          {/* Recalculate MRP Button (in Production tab) */}
-          {activeTab === 'production' && canRecalculate && (
-            <button
-              type="button"
-              onClick={() => void handleRecalculate()}
-              disabled={isRecalculating || isLoading || (!productionBased && records.length === 0) || (productionBased && planMetadata?.status === 'APPROVED')}
-              className="border border-slate-300 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-lg px-3.5 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
-            >
-              {isRecalculating ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Recalculating…</span>
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Recalculate</span>
-                </>
-              )}
-            </button>
-          )}
-
-          {/* Export Excel Button */}
-          {canExport && (
-            <div className="relative group">
+        {/* Primary Action Buttons (Production Tab Only) */}
+        {activeTab === 'production' && (
+          <div className="flex items-center gap-2">
+            {/* Upload Dept / Plan Button */}
+            {canUpdate && (
               <button
                 type="button"
-                onClick={() => handleExport(selectedRowIds.size > 0 ? 'SELECTED' : 'ALL')}
+                onClick={() => setShowUploadModal(true)}
                 className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
               >
-                <Download className="w-3.5 h-3.5 text-slate-600" />
-                <span>Export Excel ▾</span>
+                <UploadCloud className="w-3.5 h-3.5 text-slate-600" />
+                <span>Upload Dept / Plan</span>
               </button>
-              <div className="absolute right-0 top-full mt-1 w-40 bg-white border border-slate-200 rounded-xl shadow-lg py-1 z-30 hidden group-hover:block">
+            )}
+
+            {/* Upload GRN Button */}
+            {canUpdate && (
+              <button
+                type="button"
+                onClick={() => {
+                  setGrnFile(null);
+                  setGrnError(null);
+                  setIsGrnModalOpen(true);
+                }}
+                className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Upload GRN</span>
+              </button>
+            )}
+
+            {/* Save Changes Button */}
+            {canUpdate && (
+              <button
+                type="button"
+                onClick={() => void handleSaveChanges()}
+                disabled={isSaving || modifiedRecords.size === 0}
+                className={`rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 ${
+                  modifiedRecords.size > 0
+                    ? 'bg-amber-600 hover:bg-amber-700 text-white animate-pulse cursor-pointer'
+                    : 'border border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed'
+                }`}
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving…</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Save Changes {modifiedRecords.size > 0 ? `(${modifiedRecords.size})` : ''}</span>
+                  </>
+                )}
+              </button>
+            )}
+
+            {/* Recalculate MRP Button */}
+            {canRecalculate && (
+              <button
+                type="button"
+                onClick={() => void handleRecalculate()}
+                disabled={isRecalculating || isLoading || (!productionBased && records.length === 0) || (productionBased && planMetadata?.status === 'APPROVED')}
+                className="border border-slate-300 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-lg px-3.5 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                {isRecalculating ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Recalculating…</span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Recalculate</span>
+                  </>
+                )}
+              </button>
+            )}
+
+            {/* Export Excel Button */}
+            {canExport && (
+              <div className="relative group">
                 <button
                   type="button"
-                  onClick={() => handleExport('ALL')}
-                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 cursor-pointer"
+                  onClick={() => handleExport(selectedRowIds.size > 0 ? 'SELECTED' : 'ALL')}
+                  className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
-                  Export All Rows
+                  <Download className="w-3.5 h-3.5 text-slate-600" />
+                  <span>Export Excel ▾</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => handleExport('FILTERED')}
-                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 cursor-pointer"
-                >
-                  Export Filtered Rows
-                </button>
-                {selectedRowIds.size > 0 && (
+                <div className="absolute right-0 top-full mt-1 w-40 bg-white border border-slate-200 rounded-xl shadow-lg py-1 z-30 hidden group-hover:block">
                   <button
                     type="button"
-                    onClick={() => handleExport('SELECTED')}
-                    className="w-full text-left px-3 py-1.5 text-xs text-blue-700 font-semibold hover:bg-blue-50 cursor-pointer"
+                    onClick={() => handleExport('ALL')}
+                    className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 cursor-pointer"
                   >
-                    Export Selected ({selectedRowIds.size})
+                    Export All Rows
                   </button>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => handleExport('FILTERED')}
+                    className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 cursor-pointer"
+                  >
+                    Export Filtered Rows
+                  </button>
+                  {selectedRowIds.size > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleExport('SELECTED')}
+                      className="w-full text-left px-3 py-1.5 text-xs text-blue-700 font-semibold hover:bg-blue-50 cursor-pointer"
+                    >
+                      Export Selected ({selectedRowIds.size})
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Issues Alert Line (Shown only for Production Consumables) */}
@@ -1646,148 +1679,214 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
         </div>
       )}
 
-      {/* Department Quick Filter Bar (Shown only in Departmental tab) */}
+      {/* Dedicated Departmental Toolbar (Shown only in Departmental tab) */}
       {activeTab === 'departmental' && (
-        <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 bg-white border border-slate-200 rounded-xl shadow-2xs">
-          <div className="flex flex-wrap items-center gap-1.5 text-xs">
-            <span className="text-slate-500 font-bold text-2xs uppercase tracking-wider mr-1">
-              Department:
-            </span>
-            {['ALL', ...DEPARTMENT_LIST].map(dept => {
-              const isSelected = (dept === 'ALL' && !departmentalFilter) || departmentalFilter === dept;
-              const count = records.filter(r => {
-                if (!isDepartmentalRecord(r)) return false;
-                if (dept === 'ALL') return true;
-                return (r.plant || '').toLowerCase() === dept.toLowerCase();
-              }).length;
+        <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs flex flex-col gap-3">
+          {/* Top row: Quick filter pills */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="text-slate-500 font-bold text-2xs uppercase tracking-wider mr-1">
+                Department:
+              </span>
+              {['ALL', ...DEPARTMENT_LIST].map(dept => {
+                const isSelected = (dept === 'ALL' && !departmentalFilter) || departmentalFilter === dept;
+                const count = departmentPillCounts[dept] || 0;
 
-              return (
-                <button
-                  key={dept}
-                  type="button"
-                  onClick={() => setDepartmentalFilter(dept === 'ALL' ? '' : dept)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-                    isSelected
-                      ? 'bg-slate-900 text-white shadow-2xs'
-                      : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200'
-                  }`}
-                >
-                  <span>{dept === 'ALL' ? 'All Depts' : dept}</span>
-                  <span
-                    className={`px-1 rounded-full text-3xs font-bold ${
-                      isSelected ? 'bg-slate-700 text-slate-200' : 'bg-slate-200 text-slate-600'
+                return (
+                  <button
+                    key={dept}
+                    type="button"
+                    onClick={() => setDepartmentalFilter(dept === 'ALL' ? '' : dept)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+                      isSelected
+                        ? 'bg-slate-900 text-white shadow-2xs'
+                        : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200'
                     }`}
                   >
-                    {count}
-                  </span>
-                </button>
-              );
-            })}
+                    <span>{dept === 'ALL' ? 'All Depts' : dept}</span>
+                    <span
+                      className={`px-1 rounded-full text-3xs font-bold ${
+                        isSelected ? 'bg-slate-700 text-slate-200' : 'bg-slate-200 text-slate-600'
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="text-2xs text-slate-400 italic hidden md:block">
+              Maintenance indents &amp; non-zero rolling average tracking
+            </div>
           </div>
 
-          <div className="text-2xs text-slate-400 italic hidden md:block">
-            Maintenance indents &amp; non-zero rolling average tracking
+          {/* Bottom row: Search input + Dedicated Departmental Actions */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-slate-100">
+            {/* Search Input */}
+            <div className="relative flex-1 min-w-[260px] max-w-md">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="🔍 Search department, consumable ID, item description, doc ref..."
+                className="w-full pl-3 pr-8 py-1.5 text-xs border border-slate-300 rounded-lg bg-slate-50/50 text-slate-800 focus:bg-white focus:outline-hidden focus:ring-1 focus:ring-slate-900 placeholder:text-slate-400 transition-colors"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold cursor-pointer"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            {/* Departmental Action Buttons */}
+            <div className="flex flex-wrap items-center gap-2">
+              {/* + Add Row */}
+              {canUpdate && (
+                <button
+                  type="button"
+                  onClick={() => setIsAddRowModalOpen(true)}
+                  className="border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>+ Add Row</span>
+                </button>
+              )}
+
+              {/* Upload Dept Excel */}
+              {canUpdate && (
+                <button
+                  type="button"
+                  onClick={() => setShowUploadModal(true)}
+                  className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <UploadCloud className="w-3.5 h-3.5 text-slate-600" />
+                  <span>Upload Dept Excel</span>
+                </button>
+              )}
+
+              {/* Save Changes / Ctrl + S */}
+              {canUpdate && (
+                <button
+                  type="button"
+                  onClick={() => void handleSaveChanges()}
+                  disabled={isSaving || modifiedRecords.size === 0}
+                  title="Save Changes (Ctrl+S)"
+                  className={`rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 ${
+                    modifiedRecords.size > 0
+                      ? 'bg-amber-600 hover:bg-amber-700 text-white animate-pulse cursor-pointer'
+                      : 'border border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed'
+                  }`}
+                >
+                  {isSaving ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-3.5 h-3.5" />
+                      <span>Save Changes {modifiedRecords.size > 0 ? `(${modifiedRecords.size})` : ''}</span>
+                    </>
+                  )}
+                </button>
+              )}
+
+              {/* Delete Selected (when rows selected) */}
+              {canUpdate && selectedRowIds.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(`Are you sure you want to delete ${selectedRowIds.size} selected item(s)?`)) {
+                      void handleDeleteRows(Array.from(selectedRowIds));
+                    }
+                  }}
+                  className="border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Delete Selected ({selectedRowIds.size})</span>
+                </button>
+              )}
+
+              {/* Export Dept Excel */}
+              {canExport && (
+                <button
+                  type="button"
+                  onClick={() => void handleExportDeptExcel()}
+                  className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 rounded-lg px-3 py-1.5 font-semibold text-xs shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-600" />
+                  <span>Export Dept Excel</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
 
       {/* Main Spreadsheet Grid Container */}
       <div className="flex-1 min-h-0 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden">
-        {/* Toolbar for search and column filters */}
-        <Toolbar
-          canImport={false}
-          canCreate={false}
-          canUpdate={false}
-          canDelete={false}
-          canExport={false}
-          selectedCount={selectedRowIds.size}
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          searchPlaceholder={
-            activeTab === 'production'
-              ? '🔍 Search part name, part no, consumable ID, process...'
-              : '🔍 Search department, consumable ID, item description, doc ref...'
-          }
-          filters={
-            activeTab === 'production'
-              ? [
-                  {
-                    key: 'plant',
-                    label: 'Plant',
-                    value: plantFilter,
-                    onChange: setPlantFilter,
-                    options: [
-                      { value: '', label: 'All Plants (1–5)' },
-                      ...uniqueProductionPlants.map(p => ({ value: p, label: p })),
-                    ],
-                  },
-                  {
-                    key: 'consumable',
-                    label: 'Consumable',
-                    value: consumableFilter,
-                    onChange: setConsumableFilter,
-                    options: [
-                      { value: '', label: 'All Consumables' },
-                      ...uniqueConsumables.map(c => ({ value: c, label: c })),
-                    ],
-                  },
-                  {
-                    key: 'status',
-                    label: 'Status',
-                    value: statusFilter,
-                    onChange: setStatusFilter,
-                    options: [
-                      { value: '', label: 'All Statuses' },
-                      { value: 'Critical shortage', label: 'Critical shortage' },
-                      { value: 'Low', label: 'Low Stock' },
-                      { value: 'Normal', label: 'Normal' },
-                      { value: 'Calculated', label: 'Calculated' },
-                      { value: 'Configuration required', label: 'Rule Review Required' },
-                    ],
-                  },
-                ]
-              : [
-                  {
-                    key: 'department',
-                    label: 'Department',
-                    value: departmentalFilter,
-                    onChange: setDepartmentalFilter,
-                    options: [
-                      { value: '', label: 'All Departments' },
-                      ...DEPARTMENT_LIST.map(d => ({ value: d, label: d })),
-                    ],
-                  },
-                  {
-                    key: 'consumable',
-                    label: 'Consumable',
-                    value: consumableFilter,
-                    onChange: setConsumableFilter,
-                    options: [
-                      { value: '', label: 'All Consumables' },
-                      ...uniqueConsumables.map(c => ({ value: c, label: c })),
-                    ],
-                  },
-                  {
-                    key: 'status',
-                    label: 'Status',
-                    value: statusFilter,
-                    onChange: setStatusFilter,
-                    options: [
-                      { value: '', label: 'All Statuses' },
-                      { value: 'Critical shortage', label: 'Critical shortage' },
-                      { value: 'Low', label: 'Low Stock' },
-                      { value: 'Normal', label: 'Normal' },
-                      { value: 'Calculated', label: 'Calculated' },
-                      { value: 'Configuration required', label: 'Rule Review Required' },
-                    ],
-                  },
-                ]
-          }
-        />
+        {/* Toolbar for search and column filters (Only rendered for Production Consumables) */}
+        {activeTab === 'production' && (
+          <Toolbar
+            canImport={false}
+            canCreate={false}
+            canUpdate={false}
+            canDelete={false}
+            canExport={false}
+            selectedCount={selectedRowIds.size}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            searchPlaceholder="🔍 Search part name, part no, consumable ID, process..."
+            filters={[
+              {
+                key: 'plant',
+                label: 'Plant',
+                value: plantFilter,
+                onChange: setPlantFilter,
+                options: [
+                  { value: '', label: 'All Plants (1–5)' },
+                  ...uniqueProductionPlants.map(p => ({ value: p, label: p })),
+                ],
+              },
+              {
+                key: 'consumable',
+                label: 'Consumable',
+                value: consumableFilter,
+                onChange: setConsumableFilter,
+                options: [
+                  { value: '', label: 'All Consumables' },
+                  ...uniqueConsumables.map(c => ({ value: c, label: c })),
+                ],
+              },
+              {
+                key: 'status',
+                label: 'Status',
+                value: statusFilter,
+                onChange: setStatusFilter,
+                options: [
+                  { value: '', label: 'All Statuses' },
+                  { value: 'Critical shortage', label: 'Critical shortage' },
+                  { value: 'Low', label: 'Low Stock' },
+                  { value: 'Normal', label: 'Normal' },
+                  { value: 'Calculated', label: 'Calculated' },
+                  { value: 'Configuration required', label: 'Rule Review Required' },
+                ],
+              },
+            ]}
+          />
+        )}
 
         {/* Section 7 & 7A: Spreadsheet Table Grid with ALWAYS VISIBLE HEADERS */}
         <div className="flex-1 min-h-0">
-          <div className="overflow-x-auto overflow-y-auto max-h-[calc(100vh-320px)] border border-slate-200 rounded-lg">
+          <div
+            className="overflow-x-auto overflow-y-auto max-h-[calc(100vh-320px)] border border-slate-200 rounded-lg overscroll-contain transform-gpu"
+            style={{ overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch' }}
+          >
             <DataTable
               virtualize
               columns={activeTab === 'production' ? columnsProduction : columnsDepartmental}
@@ -1806,7 +1905,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
                   ? `No production consumable requirements found for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Click 'Upload Dept / Plan' to import a plan.`
                   : `No departmental or maintenance requirements found for ${
                       departmentalFilter && departmentalFilter !== 'ALL' ? departmentalFilter : 'any department'
-                    } in ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Click '+ Add Row' or 'Upload Dept / Plan' to add items.`
+                    } in ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}. Click '+ Add Row' or 'Upload Dept Excel' to import a plan.`
               }
               canCreate={false}
               canUpdate={canUpdate}
@@ -1820,7 +1919,7 @@ export default function Requirements(_props: { defaultTab?: 'workspace' | 'mrp' 
                   ? `Modified ${formatDisplayDate(planMetadata.updated_at)}${planMetadata.updated_by_name ? ` by ${planMetadata.updated_by_name}` : ''}`
                   : undefined
               }
-              onExport={handleExport}
+              onExport={activeTab === 'production' ? handleExport : handleExportDeptExcel}
               getRowClassName={row => {
                 if (row.status === 'Critical shortage') return 'bg-red-50/70 hover:bg-red-100/70 font-medium';
                 if (row.status === 'Low') return 'bg-amber-50/60 hover:bg-amber-100/60';

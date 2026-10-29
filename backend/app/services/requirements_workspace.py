@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import io
 import re
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 from uuid import UUID, uuid4
 
 import openpyxl
@@ -83,6 +83,7 @@ DEPARTMENT_DISPLAY_NAMES = {
     "QAD": "QAD",
     "ACCOUNTS": "Accounts",
     "SALES": "Sales",
+    "DEPARTMENTAL": "Departmental",
 }
 
 DEPARTMENT_TAB_ALIASES: dict[str, list[str]] = {
@@ -93,6 +94,13 @@ DEPARTMENT_TAB_ALIASES: dict[str, list[str]] = {
     "QAD": ["qad", "quality", "qa", "quality assurance"],
     "ACCOUNTS": ["accounts", "account", "finance"],
     "SALES": ["sales", "purchase ,stores&admin", "stores&admin", "stores admin", "stores and admin", "purchase stores admin"],
+    "DEPARTMENTAL": [
+        "departmental",
+        "departmental consumables",
+        "department indents",
+        "departmental indents",
+        "departments",
+    ],
 }
 
 
@@ -140,6 +148,8 @@ def _normalize_plant_identifier(val: Optional[str]) -> str:
         "QA": "QAD",
         "ACCOUNTS": "ACCOUNTS",
         "SALES": "SALES",
+        "DEPARTMENTAL": "DEPARTMENTAL",
+        "DEPARTMENTAL_CONSUMABLES": "DEPARTMENTAL",
     }
     return roman_map.get(cleaned, cleaned)
 
@@ -964,7 +974,6 @@ def _normalize_header(hdr: Any) -> str:
     if hdr is None:
         return ""
     text = str(hdr).strip().lower()
-    import re
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return " ".join(text.split())
 
@@ -1042,27 +1051,30 @@ def _parse_departmental_sheet_all_months(
     """Dynamically parses a departmental consumable indent worksheet across all historical months.
 
     Detects all month/year columns present alongside Item Id., Item Description,
-    Part No. (doc ref), and Unit.
+    Part No. (doc ref), and Unit using memory-efficient streaming.
     """
     dept_display = DEPARTMENT_DISPLAY_NAMES.get(dept_key, dept_key)
     proc_name = "MAINTENANCE" if dept_key == "PMD" else "DEPARTMENT_INDENT"
 
     if hasattr(ws, "iter_rows"):
-        all_rows = list(ws.iter_rows(values_only=True))
+        header_rows = list(ws.iter_rows(min_row=1, max_row=10, values_only=True))
     else:
-        all_rows = [
+        header_rows = [
             [ws.cell(r, c).value for c in range(1, min(40, (ws.max_column or 0) + 1))]
-            for r in range(1, (ws.max_row or 0) + 1)
+            for r in range(1, min(10, (ws.max_row or 0)) + 1)
         ]
 
     month_cols: dict[int, tuple[int, int]] = {}
     header_row_idx: Optional[int] = None
     col_map: dict[str, int] = {}
 
-    max_scan_row = min(10, len(all_rows))
-    for r_idx_0 in range(max_scan_row):
-        row_cells = all_rows[r_idx_0]
+    for r_idx_0, row_cells in enumerate(header_rows):
         for c_idx, val in enumerate(row_cells):
+            if val is None:
+                continue
+            norm_val = str(val).strip().lower()
+            if "planning period" in norm_val or "exported" in norm_val or "knl" in norm_val:
+                continue
             parsed_m = _parse_month_col_header(val)
             if parsed_m and c_idx not in month_cols:
                 month_cols[c_idx] = parsed_m
@@ -1078,8 +1090,10 @@ def _parse_departmental_sheet_all_months(
                 row_map.setdefault("description", c_idx)
             elif any(k == text or k in text for k in ["unit", "uom"]):
                 row_map.setdefault("unit", c_idx)
-            elif any(k in text for k in ["part no", "part number", "doc ref", "partno"]):
+            elif any(k in text for k in ["part no", "part number", "doc ref", "partno", "part doc ref"]):
                 row_map.setdefault("part_no", c_idx)
+            elif any(k in text for k in ["location", "department", "dept"]):
+                row_map.setdefault("dept", c_idx)
 
         if "item_id" in row_map or "description" in row_map:
             header_row_idx = r_idx_0
@@ -1089,14 +1103,23 @@ def _parse_departmental_sheet_all_months(
     desc_col = col_map.get("description", 1)
     unit_col = col_map.get("unit", 2)
     part_col = col_map.get("part_no", None)
+    dept_col = col_map.get("dept", None)
 
-    start_row = (header_row_idx + 1) if header_row_idx is not None else 3
+    start_row_1based = (header_row_idx + 2) if header_row_idx is not None else 4
     results_by_period: dict[tuple[int, int], list[dict[str, Any]]] = {
         period: [] for period in month_cols.values()
     }
 
-    for r_idx_0 in range(start_row, len(all_rows)):
-        row_vals = all_rows[r_idx_0]
+    if hasattr(ws, "iter_rows"):
+        row_stream = ws.iter_rows(min_row=start_row_1based, values_only=True)
+    else:
+        row_stream = (
+            [ws.cell(r, c).value for c in range(1, min(40, (ws.max_column or 0) + 1))]
+            for r in range(start_row_1based, (ws.max_row or 0) + 1)
+        )
+
+    for r_offset, row_vals in enumerate(row_stream):
+        r_idx_0 = (start_row_1based - 1) + r_offset
         if not any(v is not None and str(v).strip() != "" for v in row_vals):
             continue
 
@@ -1104,10 +1127,12 @@ def _parse_departmental_sheet_all_months(
         raw_desc = row_vals[desc_col] if desc_col < len(row_vals) else None
         raw_unit = row_vals[unit_col] if unit_col < len(row_vals) else None
         raw_part = row_vals[part_col] if (part_col is not None and part_col < len(row_vals)) else None
+        raw_dept = row_vals[dept_col] if (dept_col is not None and dept_col < len(row_vals)) else None
 
         item_str = str(raw_item or "").strip()
         desc_str = str(raw_desc or "").strip()
         part_str = str(raw_part or "").strip() if raw_part else ""
+        dept_str = str(raw_dept or "").strip() if raw_dept else ""
 
         if not item_str and not desc_str:
             continue
@@ -1123,6 +1148,14 @@ def _parse_departmental_sheet_all_months(
         part_no = part_str if part_str and part_str != "DEPARTMENT_INDENT" else "DEPARTMENT_INDENT"
         doc_ref = part_str if part_str and part_str != "DEPARTMENT_INDENT" else None
 
+        if dept_str and (dept_key == "DEPARTMENTAL" or not dept_key):
+            norm_dept = _normalize_plant_identifier(dept_str)
+            row_dept_display = DEPARTMENT_DISPLAY_NAMES.get(norm_dept, dept_str)
+        else:
+            row_dept_display = dept_display
+
+        row_proc_name = "MAINTENANCE" if _normalize_plant_identifier(row_dept_display) == "PMD" else "DEPARTMENT_INDENT"
+
         for c_idx, (m, y) in month_cols.items():
             raw_qty = row_vals[c_idx] if c_idx < len(row_vals) else None
             try:
@@ -1135,23 +1168,23 @@ def _parse_departmental_sheet_all_months(
                 "planning_month": m,
                 "planning_year": y,
                 "planning_period": f"{y:04d}-{m:02d}",
-                "part_name": dept_display,
+                "part_name": row_dept_display,
                 "part_number": part_no,
                 "doc_ref": doc_ref,
                 "consumable_code": code_val,
                 "consumable_name": name_val,
-                "process_name": proc_name,
+                "process_name": row_proc_name,
                 "part_thickness": "0.0000",
                 "process_count": 1,
                 "production_order_qty": "0.0000",
                 "scheduled_consumable_qty": format(qty_dec, ".4f"),
-                "plant": dept_display,
+                "plant": row_dept_display,
                 "unit": unit_str,
                 "required_qty": format(qty_dec, ".4f"),
                 "gross_requirement": format(qty_dec, ".4f"),
                 "rule_type": "PLANT_REQUEST",
                 "status": "Normal",
-                "remarks": f"Departmental indent: {dept_display}",
+                "remarks": f"Departmental indent: {row_dept_display}",
             }
             results_by_period[(m, y)].append(rec)
 
@@ -1163,7 +1196,8 @@ def _parse_departmental_sheet(
 ) -> list[dict[str, Any]]:
     """Dynamically parses a departmental consumable indent worksheet.
 
-    Scans first 10 rows for target month column and item/description/unit/qty headers.
+    Scans first 10 rows for target month column and item/description/unit/qty headers
+    using memory-efficient streaming.
     """
     month_abbr = calendar.month_abbr[month].lower()
     month_full = calendar.month_name[month].lower()
@@ -1184,16 +1218,14 @@ def _parse_departmental_sheet(
     col_map: dict[str, int] = {}
 
     if hasattr(ws, "iter_rows"):
-        all_rows = [list(r[:40]) for r in ws.iter_rows(values_only=True)]
+        header_rows = [list(r[:40]) for r in ws.iter_rows(min_row=1, max_row=10, values_only=True)]
     else:
-        all_rows = [
+        header_rows = [
             [ws.cell(r, c).value for c in range(1, min(40, (ws.max_column or 0) + 1))]
-            for r in range(1, (ws.max_row or 0) + 1)
+            for r in range(1, min(10, (ws.max_row or 0)) + 1)
         ]
 
-    max_scan_row = min(10, len(all_rows))
-    for r_idx_0 in range(max_scan_row):
-        row_cells = all_rows[r_idx_0]
+    for r_idx_0, row_cells in enumerate(header_rows):
         r = r_idx_0 + 1
 
         # 1. Target month column search
@@ -1202,6 +1234,8 @@ def _parse_departmental_sheet(
                 if val is None:
                     continue
                 norm_val = str(val).strip().lower()
+                if "planning period" in norm_val or "exported" in norm_val or "knl" in norm_val:
+                    continue
                 if any(t in norm_val for t in month_targets) or (month_abbr in norm_val and year_short in norm_val):
                     target_month_col = c_idx
                     break
@@ -1218,6 +1252,10 @@ def _parse_departmental_sheet(
                 row_map.setdefault("description", c_idx)
             elif any(k == text or k in text for k in ["unit", "uom"]):
                 row_map.setdefault("unit", c_idx)
+            elif any(k in text for k in ["part no", "part number", "doc ref", "partno", "part doc ref"]):
+                row_map.setdefault("part_no", c_idx)
+            elif any(k in text for k in ["location", "department", "dept"]):
+                row_map.setdefault("dept", c_idx)
             elif any(k == text or k in text for k in ["qty", "quantity", "req qty", "requested qty"]):
                 row_map.setdefault("qty", c_idx)
 
@@ -1240,13 +1278,24 @@ def _parse_departmental_sheet(
     desc_col = col_map.get("description", 1)
     unit_col = col_map.get("unit", 2)
     qty_col = col_map.get("qty", 3)
+    part_col = col_map.get("part_no", None)
+    dept_col = col_map.get("dept", None)
 
     dept_display = DEPARTMENT_DISPLAY_NAMES.get(dept_key, dept_key)
-    proc_name = "MAINTENANCE" if dept_key == "PMD" else "DEPARTMENT_INDENT"
+
+    start_row_1based = header_row_idx + 1
+    if hasattr(ws, "iter_rows"):
+        row_stream = ws.iter_rows(min_row=start_row_1based, values_only=True)
+    else:
+        row_stream = (
+            [ws.cell(r, c).value for c in range(1, min(40, (ws.max_column or 0) + 1))]
+            for r in range(start_row_1based, (ws.max_row or 0) + 1)
+        )
 
     parsed_rows: list[dict[str, Any]] = []
-    for r_idx in range(header_row_idx + 1, len(all_rows) + 1):
-        row_vals = all_rows[r_idx - 1]
+    for r_offset, row_tuple in enumerate(row_stream):
+        r_idx = start_row_1based + r_offset
+        row_vals = list(row_tuple[:40]) if row_tuple else []
         if not any(v is not None and str(v).strip() != "" for v in row_vals):
             continue
 
@@ -1254,9 +1303,13 @@ def _parse_departmental_sheet(
         raw_desc = row_vals[desc_col] if desc_col < len(row_vals) else None
         raw_unit = row_vals[unit_col] if unit_col < len(row_vals) else None
         raw_qty = row_vals[qty_col] if qty_col < len(row_vals) else None
+        raw_part = row_vals[part_col] if (part_col is not None and part_col < len(row_vals)) else None
+        raw_dept = row_vals[dept_col] if (dept_col is not None and dept_col < len(row_vals)) else None
 
         item_str = str(raw_item or "").strip()
         desc_str = str(raw_desc or "").strip()
+        part_str = str(raw_part or "").strip() if raw_part else ""
+        dept_str = str(raw_dept or "").strip() if raw_dept else ""
 
         # Skip headers or summary lines
         item_lower = item_str.lower()
@@ -1276,25 +1329,36 @@ def _parse_departmental_sheet(
         code_val = item_str if item_str else desc_str
         name_val = desc_str if desc_str else item_str
 
+        if dept_str and (dept_key == "DEPARTMENTAL" or not dept_key):
+            norm_dept = _normalize_plant_identifier(dept_str)
+            row_dept_display = DEPARTMENT_DISPLAY_NAMES.get(norm_dept, dept_str)
+        else:
+            row_dept_display = dept_display
+
+        row_proc_name = "MAINTENANCE" if _normalize_plant_identifier(row_dept_display) == "PMD" else "DEPARTMENT_INDENT"
+        part_no = part_str if part_str and part_str != "DEPARTMENT_INDENT" else "DEPARTMENT_INDENT"
+        doc_ref = part_str if part_str and part_str != "DEPARTMENT_INDENT" else None
+
         parsed_rows.append(
             {
                 "row_index": r_idx,
-                "part_name": dept_display,
-                "part_number": "DEPARTMENT_INDENT",
+                "part_name": row_dept_display,
+                "part_number": part_no,
+                "doc_ref": doc_ref,
                 "consumable_code": code_val,
                 "consumable_name": name_val,
-                "process_name": proc_name,
+                "process_name": row_proc_name,
                 "part_thickness": "0.0000",
                 "process_count": 1,
                 "production_order_qty": "0.0000",
                 "scheduled_consumable_qty": format(qty_dec, ".4f"),
-                "plant": dept_display,
+                "plant": row_dept_display,
                 "unit": unit_str,
                 "required_qty": format(qty_dec, ".4f"),
                 "gross_requirement": format(qty_dec, ".4f"),
                 "rule_type": "PLANT_REQUEST",
                 "status": "Normal",
-                "remarks": f"Departmental indent: {dept_display}",
+                "remarks": f"Departmental indent: {row_dept_display}",
                 "is_valid": True,
                 "errors": [],
             }
@@ -1311,6 +1375,19 @@ def inspect_excel_file(
         wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     except Exception as e:
         raise ApplicationError("INVALID_EXCEL_FILE", f"Could not read Excel file: {str(e)}", 400)
+
+    try:
+        return _inspect_excel_file_core(wb, filename, month, year, planning_period, session)
+    finally:
+        try:
+            wb.close()
+        except Exception:
+            pass
+
+
+def _inspect_excel_file_core(
+    wb, filename: str, month: int, year: int, planning_period: str, session
+) -> RequirementExcelInspectResponse:
 
     # 1. Scan for departmental worksheets across the workbook
     dept_preview_rows: list[dict[str, Any]] = []
@@ -2640,6 +2717,7 @@ def export_requirements_excel(
     status_filter: Optional[str] = None,
     search: Optional[str] = None,
     record_ids: Optional[list[str]] = None,
+    scope: Optional[str] = None,
 ) -> bytes:
     records = calculate_workspace_requirements(
         session,
@@ -2654,13 +2732,17 @@ def export_requirements_excel(
     if record_ids:
         records = [r for r in records if r.id in record_ids]
 
+    is_dept_scope = bool(scope and scope.strip().lower() == "departmental")
+    if is_dept_scope:
+        records = [r for r in records if is_department_unit(r.plant)]
+
     period_str = planning_period or (f"{year:04d}-{month:02d}" if month and year else "All Periods")
     month_name = calendar.month_name[month] if month and 1 <= month <= 12 else ""
     period_label = f"{month_name} {year}" if month_name and year else period_str
 
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Consumable Requirements"
+    ws.title = "Departmental Consumables" if is_dept_scope else "Consumable Requirements"
 
     # Color palette
     navy_fill = PatternFill(start_color="1B3A5C", end_color="1B3A5C", fill_type="solid")
@@ -2680,119 +2762,204 @@ def export_requirements_excel(
         bottom=Side(style="thin", color="CBD5E1"),
     )
 
-    # Row 1: Title
-    ws.cell(row=1, column=1, value="KNL CONSUMABLE REQUIREMENTS PLANNING").font = title_font
-    # Row 2: Planning Period Metadata
-    ws.cell(
-        row=2,
-        column=1,
-        value=f"Planning Period: {period_label}  |  Exported: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}  |  Records: {len(records)}",
-    ).font = meta_font
-
-    ws.row_dimensions[1].height = 24
-    ws.row_dimensions[2].height = 18
-
-    # Row 4: Group Headers
-    # Col 1: #
-    # Col 2-3: FOR COMPONENT (Used For - Part Name, Used Part No.)
-    # Col 4-10: FOR CONSUMABLES (Consumable Item ID, Consumable Name, Process Name, Part Thickness, Number of Processes, Production Order Qty, Scheduled Consumable Qty)
-    # Col 11-15: INVENTORY & STATUS (Unit, Stock Qty, Shortage Qty, Status, Remarks)
+    def to_num(val: Any) -> float:
+        if val is None:
+            return 0.0
+        try:
+            return float(str(val).replace(",", "").strip())
+        except Exception:
+            return 0.0
 
     group_row = 4
     col_row = 5
-
+    ws.row_dimensions[1].height = 24
+    ws.row_dimensions[2].height = 18
     ws.row_dimensions[group_row].height = 22
     ws.row_dimensions[col_row].height = 24
 
-    ws.cell(row=group_row, column=1, value="")
-    ws.merge_cells(start_row=group_row, start_column=2, end_row=group_row, end_column=3)
-    ws.cell(row=group_row, column=2, value="FOR COMPONENT").fill = navy_fill
-    ws.cell(row=group_row, column=2).font = group_header_font
-    ws.cell(row=group_row, column=2).alignment = Alignment(horizontal="center", vertical="center")
+    if is_dept_scope:
+        # Row 1: Title
+        ws.cell(row=1, column=1, value="KNL DEPARTMENTAL & MAINTENANCE CONSUMABLE REQUIREMENTS").font = title_font
+        # Row 2: Metadata
+        ws.cell(
+            row=2,
+            column=1,
+            value=f"Planning Period: {period_label}  |  Exported: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}  |  Records: {len(records)}",
+        ).font = meta_font
 
-    ws.merge_cells(start_row=group_row, start_column=4, end_row=group_row, end_column=10)
-    ws.cell(row=group_row, column=4, value="FOR CONSUMABLES").fill = steel_fill
-    ws.cell(row=group_row, column=4).font = group_header_font
-    ws.cell(row=group_row, column=4).alignment = Alignment(horizontal="center", vertical="center")
+        # Row 4: Group Headers (13 cols total)
+        # Col 1: #
+        # Col 2-6: DEPARTMENT & ITEM DETAILS (Location/Dept, Item Id., Item Description, Part No., Unit)
+        # Col 7-8: PLANNING & CONSUMPTION (Historical Avg, Required Qty)
+        # Col 9-13: INVENTORY & OPERATIONAL STATUS (Stock Qty, GRN Received, Shortage Qty, Status, Remarks)
+        ws.cell(row=group_row, column=1, value="")
+        ws.merge_cells(start_row=group_row, start_column=2, end_row=group_row, end_column=6)
+        ws.cell(row=group_row, column=2, value="DEPARTMENT & ITEM DETAILS").fill = navy_fill
+        ws.cell(row=group_row, column=2).font = group_header_font
+        ws.cell(row=group_row, column=2).alignment = Alignment(horizontal="center", vertical="center")
 
-    ws.merge_cells(start_row=group_row, start_column=11, end_row=group_row, end_column=15)
-    ws.cell(row=group_row, column=11, value="INVENTORY & STATUS").fill = navy_fill
-    ws.cell(row=group_row, column=11).font = group_header_font
-    ws.cell(row=group_row, column=11).alignment = Alignment(horizontal="center", vertical="center")
+        ws.merge_cells(start_row=group_row, start_column=7, end_row=group_row, end_column=8)
+        ws.cell(row=group_row, column=7, value="PLANNING & CONSUMPTION").fill = steel_fill
+        ws.cell(row=group_row, column=7).font = group_header_font
+        ws.cell(row=group_row, column=7).alignment = Alignment(horizontal="center", vertical="center")
 
-    headers = [
-        "#",
-        "Used For – Part Name",
-        "Used Part No. (Production Order)",
-        "Consumable Item ID",
-        "Consumable Name",
-        "Process Name",
-        "Part Thickness (mm)",
-        "Number of Processes",
-        "Production Order for Selected Month",
-        "Scheduled Consumable Quantity for Selected Month",
-        "Unit",
-        "Stock Qty",
-        "Shortage Qty",
-        "Status",
-        "Remarks",
-    ]
+        ws.merge_cells(start_row=group_row, start_column=9, end_row=group_row, end_column=13)
+        ws.cell(row=group_row, column=9, value="INVENTORY & OPERATIONAL STATUS").fill = navy_fill
+        ws.cell(row=group_row, column=9).font = group_header_font
+        ws.cell(row=group_row, column=9).alignment = Alignment(horizontal="center", vertical="center")
 
-    for col_num, h_text in enumerate(headers, start=1):
-        cell = ws.cell(row=col_row, column=col_num, value=h_text)
-        cell.fill = navy_fill if col_num in (1, 2, 3, 11, 12, 13, 14, 15) else steel_fill
-        cell.font = col_header_font
-        cell.border = thin_border
-        cell.alignment = Alignment(
-            horizontal="center" if col_num in (1, 8, 11, 14) else "right" if col_num in (7, 9, 10, 12, 13) else "left",
-            vertical="center",
-            wrap_text=True,
-        )
-
-    # Data Rows
-    for r_idx, row in enumerate(records, start=1):
-        current_row = col_row + r_idx
-        ws.row_dimensions[current_row].height = 20
-
-        # Numeric conversions for Excel
-        def to_num(val: str) -> float:
-            try:
-                return float(val.replace(",", "").strip())
-            except Exception:
-                return 0.0
-
-        row_data = [
-            r_idx,
-            row.part_name,
-            row.part_number,
-            row.consumable_code,
-            row.consumable_name,
-            row.process_name,
-            to_num(row.part_thickness),
-            row.process_count,
-            to_num(row.production_order_qty),
-            to_num(row.scheduled_consumable_qty),
-            row.unit,
-            to_num(row.stock_qty),
-            to_num(row.shortage_qty),
-            row.status,
-            row.remarks or "",
+        dept_headers = [
+            "#",
+            "Location/Dept",
+            "Item Id.",
+            "Item Description",
+            "Part No.",
+            "Unit",
+            "Historical Avg (Active Mos)",
+            f"Required Qty ({period_label})",
+            "Stock Qty (T-2)",
+            "GRN Received",
+            "Shortage Qty",
+            "Status",
+            "Remarks",
         ]
 
-        for col_num, val in enumerate(row_data, start=1):
-            cell = ws.cell(row=current_row, column=col_num, value=val)
-            cell.font = data_font
+        for col_num, h_text in enumerate(dept_headers, start=1):
+            cell = ws.cell(row=col_row, column=col_num, value=h_text)
+            cell.fill = navy_fill if col_num in (1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13) else steel_fill
+            cell.font = col_header_font
             cell.border = thin_border
+            cell.alignment = Alignment(
+                horizontal="center" if col_num in (1, 2, 6, 12) else "right" if col_num in (7, 8, 9, 10, 11) else "left",
+                vertical="center",
+                wrap_text=True,
+            )
 
-            if col_num == 1:
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-            elif col_num in (7, 9, 10, 12, 13):
-                cell.alignment = Alignment(horizontal="right", vertical="center")
-                cell.number_format = "#,##0.0000"
-            elif col_num in (8, 11, 14):
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-            else:
-                cell.alignment = Alignment(horizontal="left", vertical="center")
+        for r_idx, row in enumerate(records, start=1):
+            current_row = col_row + r_idx
+            ws.row_dimensions[current_row].height = 20
+            part_ref = getattr(row, "doc_ref", None) or getattr(row, "part_number", None) or ""
+            if part_ref == "DEPARTMENT_INDENT":
+                part_ref = ""
+
+            row_data = [
+                r_idx,
+                row.plant,
+                row.consumable_code,
+                row.consumable_name,
+                part_ref,
+                row.unit,
+                to_num(getattr(row, "historical_avg_qty", "0.0000")),
+                to_num(row.scheduled_consumable_qty),
+                to_num(row.stock_qty),
+                to_num(getattr(row, "grn_received_qty", "0.0000")),
+                to_num(row.shortage_qty),
+                row.status,
+                row.remarks or "",
+            ]
+
+            for col_num, val in enumerate(row_data, start=1):
+                cell = ws.cell(row=current_row, column=col_num, value=val)
+                cell.font = data_font
+                cell.border = thin_border
+                if col_num in (1, 2, 6, 12):
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                elif col_num in (7, 8, 9, 10, 11):
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                    cell.number_format = "#,##0.0000"
+                else:
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    else:
+        # Standard Production Consumables Export (15 cols)
+        ws.cell(row=1, column=1, value="KNL CONSUMABLE REQUIREMENTS PLANNING").font = title_font
+        ws.cell(
+            row=2,
+            column=1,
+            value=f"Planning Period: {period_label}  |  Exported: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}  |  Records: {len(records)}",
+        ).font = meta_font
+
+        ws.cell(row=group_row, column=1, value="")
+        ws.merge_cells(start_row=group_row, start_column=2, end_row=group_row, end_column=3)
+        ws.cell(row=group_row, column=2, value="FOR COMPONENT").fill = navy_fill
+        ws.cell(row=group_row, column=2).font = group_header_font
+        ws.cell(row=group_row, column=2).alignment = Alignment(horizontal="center", vertical="center")
+
+        ws.merge_cells(start_row=group_row, start_column=4, end_row=group_row, end_column=10)
+        ws.cell(row=group_row, column=4, value="FOR CONSUMABLES").fill = steel_fill
+        ws.cell(row=group_row, column=4).font = group_header_font
+        ws.cell(row=group_row, column=4).alignment = Alignment(horizontal="center", vertical="center")
+
+        ws.merge_cells(start_row=group_row, start_column=11, end_row=group_row, end_column=15)
+        ws.cell(row=group_row, column=11, value="INVENTORY & STATUS").fill = navy_fill
+        ws.cell(row=group_row, column=11).font = group_header_font
+        ws.cell(row=group_row, column=11).alignment = Alignment(horizontal="center", vertical="center")
+
+        headers = [
+            "#",
+            "Used For – Part Name",
+            "Used Part No. (Production Order)",
+            "Consumable Item ID",
+            "Consumable Name",
+            "Process Name",
+            "Part Thickness (mm)",
+            "Number of Processes",
+            "Production Order for Selected Month",
+            "Scheduled Consumable Quantity for Selected Month",
+            "Unit",
+            "Stock Qty",
+            "Shortage Qty",
+            "Status",
+            "Remarks",
+        ]
+
+        for col_num, h_text in enumerate(headers, start=1):
+            cell = ws.cell(row=col_row, column=col_num, value=h_text)
+            cell.fill = navy_fill if col_num in (1, 2, 3, 11, 12, 13, 14, 15) else steel_fill
+            cell.font = col_header_font
+            cell.border = thin_border
+            cell.alignment = Alignment(
+                horizontal="center" if col_num in (1, 8, 11, 14) else "right" if col_num in (7, 9, 10, 12, 13) else "left",
+                vertical="center",
+                wrap_text=True,
+            )
+
+        for r_idx, row in enumerate(records, start=1):
+            current_row = col_row + r_idx
+            ws.row_dimensions[current_row].height = 20
+
+            row_data = [
+                r_idx,
+                row.part_name,
+                row.part_number,
+                row.consumable_code,
+                row.consumable_name,
+                row.process_name,
+                to_num(row.part_thickness),
+                row.process_count,
+                to_num(row.production_order_qty),
+                to_num(row.scheduled_consumable_qty),
+                row.unit,
+                to_num(row.stock_qty),
+                to_num(row.shortage_qty),
+                row.status,
+                row.remarks or "",
+            ]
+
+            for col_num, val in enumerate(row_data, start=1):
+                cell = ws.cell(row=current_row, column=col_num, value=val)
+                cell.font = data_font
+                cell.border = thin_border
+
+                if col_num == 1:
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                elif col_num in (7, 9, 10, 12, 13):
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                    cell.number_format = "#,##0.0000"
+                elif col_num in (8, 11, 14):
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                else:
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
 
     # Column widths
     for col in ws.columns:
@@ -2947,12 +3114,18 @@ def ingest_mrp_grn(
     else:
         try:
             wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-            ws = wb.active
-            if ws is None:
-                ws = wb.worksheets[0]
-            for row in ws.iter_rows(values_only=True):
-                if any(row is not None and str(c).strip() for c in row if c is not None):
-                    raw_rows.append(list(row))
+            try:
+                ws = wb.active
+                if ws is None:
+                    ws = wb.worksheets[0]
+                for row in ws.iter_rows(values_only=True):
+                    if any(row is not None and str(c).strip() for c in row if c is not None):
+                        raw_rows.append(list(row))
+            finally:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
         except Exception as exc:
             raise ApplicationError("INVALID_EXCEL_FORMAT", f"Unable to parse Excel file: {str(exc)}", 400)
 

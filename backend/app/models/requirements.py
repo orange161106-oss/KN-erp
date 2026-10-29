@@ -141,6 +141,8 @@ class MonthlyRequirementRecord(Base):
         Index("ix_monthly_req_consumable", "consumable_code"),
         Index("ix_monthly_req_part", "part_number"),
         Index("ix_monthly_req_plant_period", "plant_id", "planning_month", "planning_year"),
+        Index("ix_monthly_req_month_year", "planning_month", "planning_year"),
+        Index("ix_monthly_req_plant", "plant"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)

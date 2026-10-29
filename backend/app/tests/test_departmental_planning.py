@@ -24,6 +24,7 @@ from app.services.requirements_workspace import (
     calculate_workspace_requirements,
     create_departmental_row,
     ensure_operational_units,
+    export_requirements_excel,
     get_monthly_plan_metadata,
     import_monthly_requirements,
     inspect_excel_file,
@@ -562,4 +563,81 @@ def test_query_bound_invariants_for_departmental_requirements(db, catalog):
         assert len(queries) <= 4
     finally:
         event.remove(db.get_bind(), "before_cursor_execute", capture)
+
+
+def test_departmental_excel_export_and_reingest_roundtrip(db, catalog):
+    """Verifies that departmental requirements can be exported in clean 13-col Excel format and re-imported."""
+    user = catalog[0]
+
+    # 1. Seed departmental items for Tool Room and PMD
+    create_tr = DepartmentalRowCreateRequest(
+        month=10,
+        year=2026,
+        plant="Tool Room",
+        consumable_code="TR-CUT-01",
+        consumable_name="Solid Carbide Endmill",
+        part_number="KNL/TR/DI/101",
+        unit="NOS",
+        scheduled_consumable_qty=Decimal("12.0000"),
+        remarks="Tool room milling cutter",
+    )
+    create_departmental_row(db, user.id, create_tr)
+
+    create_pmd = DepartmentalRowCreateRequest(
+        month=10,
+        year=2026,
+        plant="PMD",
+        consumable_code="PMD-GREASE-02",
+        consumable_name="High Temp Bearing Grease",
+        part_number="KNL/PMD/DI/202",
+        unit="KGS",
+        scheduled_consumable_qty=Decimal("35.0000"),
+        remarks="Maintenance grease indent",
+    )
+    create_departmental_row(db, user.id, create_pmd)
+
+    # 2. Export with scope="departmental"
+    excel_bytes = export_requirements_excel(db, month=10, year=2026, scope="departmental")
+    assert isinstance(excel_bytes, bytes)
+    assert len(excel_bytes) > 0
+
+    # 3. Inspect exported workbook structure
+    wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
+    assert "Departmental Consumables" in wb.sheetnames
+    ws = wb["Departmental Consumables"]
+    assert ws.cell(1, 1).value == "KNL DEPARTMENTAL & MAINTENANCE CONSUMABLE REQUIREMENTS"
+
+    # Header in row 5
+    headers = [ws.cell(5, c).value for c in range(1, 14)]
+    assert headers[0] == "#"
+    assert headers[1] == "Location/Dept"
+    assert headers[2] == "Item Id."
+    assert headers[3] == "Item Description"
+    assert headers[4] == "Part No."
+    assert headers[5] == "Unit"
+    assert headers[6] == "Historical Avg (Active Mos)"
+    assert "Required Qty" in str(headers[7])
+
+    # 4. Re-ingest through inspect_excel_file
+    inspected = inspect_excel_file(excel_bytes, "dept_export_test.xlsx", 10, 2026, db)
+    assert inspected.error_count == 0
+    assert len(inspected.preview_rows) >= 2
+
+    tr_preview = next((r for r in inspected.preview_rows if r["consumable_code"] == "TR-CUT-01"), None)
+    assert tr_preview is not None
+    assert tr_preview["plant"] == "Tool Room"
+    assert tr_preview["consumable_name"] == "Solid Carbide Endmill"
+    assert tr_preview["part_number"] == "KNL/TR/DI/101"
+    assert tr_preview["doc_ref"] == "KNL/TR/DI/101"
+    assert tr_preview["unit"] == "NOS"
+    assert Decimal(tr_preview["scheduled_consumable_qty"]) == Decimal("12.0000")
+
+    pmd_preview = next((r for r in inspected.preview_rows if r["consumable_code"] == "PMD-GREASE-02"), None)
+    assert pmd_preview is not None
+    assert pmd_preview["plant"] == "PMD"
+    assert pmd_preview["consumable_name"] == "High Temp Bearing Grease"
+    assert pmd_preview["part_number"] == "KNL/PMD/DI/202"
+    assert pmd_preview["unit"] == "KGS"
+    assert Decimal(pmd_preview["scheduled_consumable_qty"]) == Decimal("35.0000")
+
 
