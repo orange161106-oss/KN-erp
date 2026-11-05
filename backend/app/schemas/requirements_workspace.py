@@ -38,6 +38,25 @@ class RequirementWorkspaceRecord(BaseModel):
     status: str = "Normal"  # 'Normal', 'Low', 'Critical shortage', 'Calculated', 'Configuration required'
     remarks: Optional[str] = None
 
+    # Demand Source Breakdown (Production + Plant & Department Requests)
+    production_qty: str = "0.0000"
+    plant_1_qty: str = "0.0000"
+    plant_2_qty: str = "0.0000"
+    plant_3_qty: str = "0.0000"
+    plant_4_qty: str = "0.0000"
+    plant_5_qty: str = "0.0000"
+    tool_room_qty: str = "0.0000"
+    pmd_qty: str = "0.0000"
+    sales_qty: str = "0.0000"
+    npd_qty: str = "0.0000"
+    hrd_qty: str = "0.0000"
+    qad_qty: str = "0.0000"
+    total_request_qty: str = "0.0000"
+    total_requirement_qty: str = "0.0000"
+    demand_source_type: str = "PRODUCTION"  # 'PRODUCTION', 'REQUEST', or 'PRODUCTION_AND_REQUEST'
+    unit_conflict: bool = False
+    unit_conflict_details: Optional[str] = None
+
     # Month-End Overwrite & MRP Balance Tracking
     opening_stock: str = "0.0000"
     grn_received_qty: str = "0.0000"
@@ -77,6 +96,8 @@ class MonthlyPlanMetadata(BaseModel):
     source_workflow: Optional[str] = None
     grn_reconciled: bool = False
     last_grn_synced_at: Optional[datetime] = None
+    total_items_count: int = 0
+    listed_items_count: int = 0
 
 
 class MRPGRNUploadResponse(BaseModel):

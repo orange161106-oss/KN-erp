@@ -15,6 +15,7 @@ MODULES = [
     "prd",
     "requirements",
     "inventory",
+    "requests",
 ]
 
 ACTIONS = ["create", "read", "update", "delete", "import", "export"]
@@ -30,6 +31,7 @@ ROLE_MODULE_PERMISSIONS: Dict[str, Dict[str, List[str]]] = {
         "prd": ["create", "read", "update", "delete", "import", "export"],
         "requirements": ["create", "read", "update", "delete", "import", "export"],
         "inventory": ["create", "read", "update", "delete", "import", "export"],
+        "requests": ["create", "read", "update", "delete", "import", "export"],
     },
     "PLANNER": {
         "grns": ["create", "read", "update", "delete", "import", "export"],
@@ -40,6 +42,7 @@ ROLE_MODULE_PERMISSIONS: Dict[str, Dict[str, List[str]]] = {
         "prd": ["create", "read", "update", "delete", "import", "export"],
         "requirements": ["create", "read", "update", "delete", "import", "export"],
         "inventory": ["read", "export"],
+        "requests": ["create", "read", "update", "delete", "import", "export"],
     },
     "PURCHASE": {
         "grns": ["create", "read", "update", "delete", "import", "export"],
@@ -50,6 +53,7 @@ ROLE_MODULE_PERMISSIONS: Dict[str, Dict[str, List[str]]] = {
         "prd": ["read", "export"],
         "requirements": ["create", "read", "update", "delete", "import", "export"],
         "inventory": ["create", "read", "update", "delete", "import", "export"],
+        "requests": ["create", "read", "update", "delete", "import", "export"],
     },
     "STORE": {
         "grns": ["create", "read", "update", "delete", "import", "export"],
@@ -60,6 +64,7 @@ ROLE_MODULE_PERMISSIONS: Dict[str, Dict[str, List[str]]] = {
         "prd": ["read"],
         "requirements": ["read", "export"],
         "inventory": ["create", "read", "update", "delete", "import", "export"],
+        "requests": ["create", "read", "update", "delete", "import", "export"],
     },
     "PLANT_INCHARGE": {
         "grns": ["create", "read", "update", "delete", "import", "export"],
@@ -70,6 +75,7 @@ ROLE_MODULE_PERMISSIONS: Dict[str, Dict[str, List[str]]] = {
         "prd": ["read", "export"],
         "requirements": ["create", "read", "update", "delete", "import", "export"],
         "inventory": ["read", "export"],
+        "requests": ["create", "read", "update", "delete", "import", "export"],
     },
     "APPROVER": {
         "grns": ["read", "export"],
@@ -90,6 +96,7 @@ ROLE_MODULE_PERMISSIONS: Dict[str, Dict[str, List[str]]] = {
         "prd": ["read", "export"],
         "requirements": ["read", "export"],
         "inventory": ["read", "export"],
+        "requests": ["read", "export"],
     },
 }
 

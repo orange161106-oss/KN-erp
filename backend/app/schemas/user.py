@@ -55,6 +55,10 @@ class UserPermissionFlags(BaseModel):
     goods_receipts_create: bool = False
     goods_receipts_update: bool = False
     goods_receipts_delete: bool = False
+    requests_read: bool = False
+    requests_create: bool = False
+    requests_update: bool = False
+    requests_delete: bool = False
 
     # Plant Access Flags
     can_access_plant_1: bool = False
@@ -161,6 +165,10 @@ class UserUpdate(BaseModel):
     goods_receipts_create: Optional[bool] = None
     goods_receipts_update: Optional[bool] = None
     goods_receipts_delete: Optional[bool] = None
+    requests_read: Optional[bool] = None
+    requests_create: Optional[bool] = None
+    requests_update: Optional[bool] = None
+    requests_delete: Optional[bool] = None
 
     # Optional Plant Access Flags
     can_access_plant_1: Optional[bool] = None

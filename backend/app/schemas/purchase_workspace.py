@@ -58,6 +58,24 @@ class PurchaseWorkspaceRecord(BaseModel):
     calculation_details: Optional[str] = None
     calculation_sources: dict = Field(default_factory=dict)
     input_issues: list[str] = Field(default_factory=list)
+    # Demand Source Breakdown (Production + Plant & Department Requests)
+    production_qty: Optional[Decimal] = Decimal("0.0000")
+    plant_1_qty: Optional[Decimal] = Decimal("0.0000")
+    plant_2_qty: Optional[Decimal] = Decimal("0.0000")
+    plant_3_qty: Optional[Decimal] = Decimal("0.0000")
+    plant_4_qty: Optional[Decimal] = Decimal("0.0000")
+    plant_5_qty: Optional[Decimal] = Decimal("0.0000")
+    tool_room_qty: Optional[Decimal] = Decimal("0.0000")
+    pmd_qty: Optional[Decimal] = Decimal("0.0000")
+    sales_qty: Optional[Decimal] = Decimal("0.0000")
+    npd_qty: Optional[Decimal] = Decimal("0.0000")
+    hrd_qty: Optional[Decimal] = Decimal("0.0000")
+    qad_qty: Optional[Decimal] = Decimal("0.0000")
+    total_request_qty: Optional[Decimal] = Decimal("0.0000")
+    total_requirement_qty: Optional[Decimal] = Decimal("0.0000")
+    demand_source_type: str = "PRODUCTION"  # 'PRODUCTION', 'REQUEST', 'PRODUCTION_AND_REQUEST'
+    unit_conflict: bool = False
+    unit_conflict_details: Optional[str] = None
     approval_status: Optional[str] = None
     approval_id: Optional[UUID] = None
     status: str
@@ -72,6 +90,8 @@ class PurchaseWorkspaceResponse(BaseModel):
     plan_metadata: MonthlyPlanMetadata
     records: list[PurchaseWorkspaceRecord]
     notice: Optional[str] = None
+    total_items_count: int = 0
+    listed_items_count: int = 0
 
 
 class PurchaseSubmitRequest(BaseModel):

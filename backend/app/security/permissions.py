@@ -29,6 +29,8 @@ def check_permissions(user: CurrentUser, required: frozenset[str]) -> None:
             return
         if "requirements." in code and any(getattr(user, f"requirements_{op}", False) for op in ("read", "create", "update", "delete")):
             return
+        if ("requests." in code or "requests" in code) and any(getattr(user, f"requests_{op}", False) for op in ("read", "create", "update", "delete")):
+            return
         if "grns" in code and any(getattr(user, f"goods_receipts_{op}", False) for op in ("read", "create", "update", "delete")):
             return
         if "orders" in code and (

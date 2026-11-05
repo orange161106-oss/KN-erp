@@ -103,7 +103,7 @@ def current_user(session: Session, token: str, settings: Settings) -> CurrentUse
         crud_modules = [
             "masters", "production_mappings", "consumption_norms",
             "prd_planning", "requirements", "plant_workflow",
-            "inventory", "purchase", "purchase_orders", "goods_receipts",
+            "inventory", "purchase", "purchase_orders", "goods_receipts", "requests",
         ]
         crud_flags = {
             f"{module}_{op}": getattr(user, f"{module}_{op}", False)

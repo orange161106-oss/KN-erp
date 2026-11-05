@@ -17,6 +17,10 @@ from app.models.masters import Customer, CustomerAlias, Product
 from app.models.prd import ImportBatch, ImportError, PlanningVersion, PRDOrderHeader, PRDOrderItem, PRDRecord
 from app.models.plant_workflow import PlantConfirmation, RequirementAdjustment, UserPlant
 from app.models.production import Plant, Process, Route, RouteStep
+from app.models.requirement_requests import (
+    RequirementRequest,
+    RequirementRequestBatch,
+)
 from app.models.requirements import (
     AggregatedRequirement,
     CalculatedRequirement,

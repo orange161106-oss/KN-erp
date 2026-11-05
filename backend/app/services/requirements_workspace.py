@@ -184,6 +184,7 @@ def calculate_workspace_requirements(
     consumable_filter: Optional[str] = None,
     status_filter: Optional[str] = None,
     search: Optional[str] = None,
+    show_all: bool = False,
 ) -> list[RequirementWorkspaceRecord]:
     """Retrieve requirements for the given planning month and year.
 
@@ -216,6 +217,11 @@ def calculate_workspace_requirements(
     central = bool(period_row and (period_row[1] or {}).get('workflow') == basic_planning.WORKFLOW)
     has_mrr = bool(period_row and (period_row[2] or 0) > 0)
     monthly_rows = [] if central else session.scalars(query.order_by(MonthlyRequirementRecord.row_index, MonthlyRequirementRecord.created_at)).all()
+
+    m_val = month or (int(target_period.split('-')[1]) if target_period and '-' in target_period else 10)
+    y_val = year or (int(target_period.split('-')[0]) if target_period and '-' in target_period else 2026)
+    from app.services.requirement_requests import get_active_requirement_requests_map
+    req_map = get_active_requirement_requests_map(session, m_val, y_val) if (m_val and y_val) else {}
 
     results: list[RequirementWorkspaceRecord] = []
 
@@ -380,6 +386,23 @@ def calculate_workspace_requirements(
                         grn_date=mrr_dt,
                         created_at=row.created_at,
                         updated_at=row.updated_at,
+                        production_qty=format(row.calculated_qty, ".4f"),
+                        plant_1_qty=format(req_map.get(material.id, {}).get('P1', Decimal('0')), ".4f") if material else "0.0000",
+                        plant_2_qty=format(req_map.get(material.id, {}).get('P2', Decimal('0')), ".4f") if material else "0.0000",
+                        plant_3_qty=format(req_map.get(material.id, {}).get('P3', Decimal('0')), ".4f") if material else "0.0000",
+                        plant_4_qty=format(req_map.get(material.id, {}).get('P4', Decimal('0')), ".4f") if material else "0.0000",
+                        plant_5_qty=format(req_map.get(material.id, {}).get('P5', Decimal('0')), ".4f") if material else "0.0000",
+                        tool_room_qty=format(req_map.get(material.id, {}).get('TOOL_ROOM', Decimal('0')), ".4f") if material else "0.0000",
+                        pmd_qty=format(req_map.get(material.id, {}).get('PMD', Decimal('0')), ".4f") if material else "0.0000",
+                        sales_qty=format(req_map.get(material.id, {}).get('SALES', Decimal('0')), ".4f") if material else "0.0000",
+                        npd_qty=format(req_map.get(material.id, {}).get('NPD', Decimal('0')), ".4f") if material else "0.0000",
+                        hrd_qty=format(req_map.get(material.id, {}).get('HRD', Decimal('0')), ".4f") if material else "0.0000",
+                        qad_qty=format(req_map.get(material.id, {}).get('QAD', Decimal('0')), ".4f") if material else "0.0000",
+                        total_request_qty=format(req_map.get(material.id, {}).get('TOTAL', Decimal('0')), ".4f") if material else "0.0000",
+                        total_requirement_qty=format(row.calculated_qty + req_map.get(material.id, {}).get('TOTAL', Decimal('0')), ".4f") if material else format(row.calculated_qty, ".4f"),
+                        demand_source_type=("PRODUCTION_AND_REQUEST" if req_map.get(material.id, {}).get('TOTAL', Decimal('0')) > Decimal('0') else "PRODUCTION") if material else "PRODUCTION",
+                        unit_conflict=req_map.get(material.id, {}).get('has_unit_conflict', False) if material else False,
+                        unit_conflict_details=req_map.get(material.id, {}).get('unit_conflict_details') if material else None,
                     )
                 )
 
@@ -439,6 +462,75 @@ def calculate_workspace_requirements(
                     )
                 )
 
+            # Include non-production items that have active department/plant requests
+            prod_cons_ids = {r.consumable_id for r in requirements if r.consumable_id}
+            req_cons_list = session.scalars(select(Consumable).where(Consumable.id.in_(list(req_map.keys())))).all() if req_map else []
+            req_cons_by_id = {c.id: c for c in req_cons_list}
+            for cons_id, r_info in req_map.items():
+                if cons_id in prod_cons_ids:
+                    continue
+                r_total = r_info.get('TOTAL', Decimal('0'))
+                if r_total <= Decimal('0') and not show_all:
+                    continue
+                mat = req_cons_by_id.get(cons_id)
+                if not mat:
+                    continue
+                tl = mat.output_per_unit
+                rt = mat.rule_type if mat.rule_type else ('TOOL_LIFE' if (tl and tl > 1) else 'PRODUCTION_RATE')
+                if (rt == 'TOOL_LIFE' or (tl and tl > 1)) and tl and tl > 0:
+                    eff = Decimal(str(math.ceil(r_total / tl)))
+                else:
+                    eff = r_total
+                results.append(
+                    RequirementWorkspaceRecord(
+                        id=f"REQ:{version.id}:{cons_id}",
+                        plan_id=str(version.id),
+                        planning_period=version.planning_period,
+                        planning_month=m_val,
+                        planning_year=y_val,
+                        revision=version.revision_label,
+                        part_name="Plant / Department Consumables",
+                        part_number="REQUEST",
+                        consumable_code=mat.code,
+                        consumable_name=mat.name,
+                        process_name="Plant/Dept Request",
+                        part_thickness="0.0000",
+                        process_count=1,
+                        production_order_qty="0.0000",
+                        scheduled_consumable_qty=format(r_total, ".4f"),
+                        output_per_unit=str(int(tl) if tl == int(tl) else tl) if tl is not None else None,
+                        plant="Central / All Plants",
+                        process="Department Request",
+                        description=mat.name,
+                        unit=mat.purchasing_unit or "NOS",
+                        required_qty=format(eff, ".4f"),
+                        stock_qty="0.0000",
+                        shortage_qty="0.0000",
+                        po_pending_qty="0.0000",
+                        msl="0.0000",
+                        status="Calculated",
+                        remarks="Submitted plant/department requests",
+                        production_qty="0.0000",
+                        plant_1_qty=format(r_info.get('P1', Decimal('0')), ".4f"),
+                        plant_2_qty=format(r_info.get('P2', Decimal('0')), ".4f"),
+                        plant_3_qty=format(r_info.get('P3', Decimal('0')), ".4f"),
+                        plant_4_qty=format(r_info.get('P4', Decimal('0')), ".4f"),
+                        plant_5_qty=format(r_info.get('P5', Decimal('0')), ".4f"),
+                        tool_room_qty=format(r_info.get('TOOL_ROOM', Decimal('0')), ".4f"),
+                        pmd_qty=format(r_info.get('PMD', Decimal('0')), ".4f"),
+                        sales_qty=format(r_info.get('SALES', Decimal('0')), ".4f"),
+                        npd_qty=format(r_info.get('NPD', Decimal('0')), ".4f"),
+                        hrd_qty=format(r_info.get('HRD', Decimal('0')), ".4f"),
+                        qad_qty=format(r_info.get('QAD', Decimal('0')), ".4f"),
+                        total_request_qty=format(r_total, ".4f"),
+                        total_requirement_qty=format(r_total, ".4f"),
+                        demand_source_type="REQUEST",
+                        unit_conflict=r_info.get('has_unit_conflict', False),
+                        unit_conflict_details=r_info.get('unit_conflict_details'),
+                        created_at=datetime.now(timezone.utc),
+                    )
+                )
+
             # Include store receipts and standalone GRN intake items from MonthlyRequirementRecord
             added_codes = {r.consumable_code.strip().upper() for r in results if r.consumable_code}
             for m in mrr_records:
@@ -494,6 +586,22 @@ def calculate_workspace_requirements(
 
     # Filter predicate
     def matches(record: RequirementWorkspaceRecord) -> bool:
+        if not show_all:
+            try:
+                tot_req = Decimal(str(record.total_requirement_qty or record.required_qty or '0'))
+            except Exception:
+                tot_req = Decimal('0')
+            has_stock_problem = False
+            try:
+                if record.stock_qty not in ('Unavailable', None):
+                    stk = Decimal(str(record.stock_qty))
+                    msl = Decimal(str(record.msl)) if record.msl not in ('Unavailable', None) else Decimal('0')
+                    if stk < 0 or stk < msl:
+                        has_stock_problem = True
+            except Exception:
+                has_stock_problem = True
+            if tot_req <= Decimal('0') and not has_stock_problem:
+                return False
         if plant_filter and plant_filter.upper() != "ALL" and plant_filter.lower() not in record.plant.lower():
             return False
         if consumable_filter and consumable_filter.upper() != "ALL":
@@ -523,11 +631,15 @@ def calculate_workspace_requirements(
     return [r for r in results if matches(r)]
 
 
-def load_workspace_view(session, month, year, *, plant=None, consumable=None, status=None, search=None):
+def load_workspace_view(session, month, year, *, plant=None, consumable=None, status=None, search=None, show_all: bool = False):
     """Use one authenticated request/connection for a period's metadata and rows."""
-    return {'plan_metadata': get_monthly_plan_metadata(session, month, year),
-        'records': calculate_workspace_requirements(session, month=month, year=year,
-            plant_filter=plant, consumable_filter=consumable, status_filter=status, search=search)}
+    meta = get_monthly_plan_metadata(session, month, year)
+    records = calculate_workspace_requirements(session, month=month, year=year,
+        plant_filter=plant, consumable_filter=consumable, status_filter=status, search=search, show_all=show_all)
+    all_cons_count = session.scalar(select(func.count(Consumable.id)).where(Consumable.is_active == True)) or 0
+    meta.total_items_count = all_cons_count
+    meta.listed_items_count = len(records)
+    return {'plan_metadata': meta, 'records': records}
 
 
 def _normalize_header(hdr: Any) -> str:
@@ -1372,6 +1484,7 @@ def export_requirements_excel(
     status_filter: Optional[str] = None,
     search: Optional[str] = None,
     record_ids: Optional[list[str]] = None,
+    show_all: bool = False,
 ) -> bytes:
     records = calculate_workspace_requirements(
         session,
@@ -1382,6 +1495,7 @@ def export_requirements_excel(
         consumable_filter=consumable_filter,
         status_filter=status_filter,
         search=search,
+        show_all=show_all,
     )
     if record_ids:
         records = [r for r in records if r.id in record_ids]
@@ -1463,6 +1577,13 @@ def export_requirements_excel(
         "Number of Processes",
         "Production Order for Selected Month",
         "Scheduled Consumable Quantity for Selected Month",
+        "Production Qty",
+        "Plant 1", "Plant 2", "Plant 3", "Plant 4", "Plant 5",
+        "Tool Room", "PMD", "Sales", "NPD", "HRD", "QAD",
+        "Total Request Qty",
+        "Total Requirement",
+        "Demand Type",
+        "Unit Conflict",
         "Output per Unit",
         "Required Qty",
         "Unit",
@@ -1514,6 +1635,15 @@ def export_requirements_excel(
             row.process_count,
             to_num(row.production_order_qty),
             to_num(row.scheduled_consumable_qty),
+            to_num(row.production_qty),
+            to_num(row.plant_1_qty), to_num(row.plant_2_qty), to_num(row.plant_3_qty),
+            to_num(row.plant_4_qty), to_num(row.plant_5_qty),
+            to_num(row.tool_room_qty), to_num(row.pmd_qty), to_num(row.sales_qty),
+            to_num(row.npd_qty), to_num(row.hrd_qty), to_num(row.qad_qty),
+            to_num(row.total_request_qty),
+            to_num(row.total_requirement_qty),
+            row.demand_source_type,
+            ("YES (" + (row.unit_conflict_details or "") + ")") if row.unit_conflict else "NO",
             tool_life_num,
             to_num(row.required_qty),
             row.unit,

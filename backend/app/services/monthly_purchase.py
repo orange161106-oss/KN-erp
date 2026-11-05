@@ -54,7 +54,8 @@ class MonthlyPurchaseInputs:
         master, unit = self.masters.get(material_id, (None, None))
         if not master or not master.is_active:
             issues.append('Active consumable master is required.')
-        if not unit or not unit.is_active or unit.id != unit_id or not _unit_matches(unit.code, uom):
+        unit_match = bool(unit and (_unit_matches(unit.code, uom) or (master and _unit_matches(master.purchasing_unit, uom))))
+        if not unit or not unit.is_active or not unit_match:
             issues.append('Saved requirement unit must match the active Stock Unit in Product Master.')
         code = normalize_item_id_key(master.code) if master else ''
         lines = self.lines.get(code, [])
@@ -76,7 +77,7 @@ class MonthlyPurchaseInputs:
                     else:
                         stock_issues.append(f'Closing quantity is blank in the {self.stock_period} stock statement; enter a verified balance (including zero).')
                 if any(not _unit_matches(line.unit, uom) for line in lines):
-                    stock_issues.append(f'Stock statement unit does not match the calculation unit {uom}; review the {self.stock_period} statement.')
+                    info_notes.append(f'Stock statement unit differs from calculation unit {uom}')
                 if any(line.consumable_id and line.consumable_id != material_id for line in lines):
                     stock_issues.append(f'Stock statement item mapping needs review in the {self.stock_period} statement.')
                 issues.extend(stock_issues)
@@ -86,9 +87,20 @@ class MonthlyPurchaseInputs:
         param, flag = resolve_stock_parameter_for_item(self.limits.get(code, []))
         if self.parameters and flag:
             issues.append(flag)
-        msl, moq = (param.min_stock_level, param.min_order_qty) if param else (None, None)
-        if param and (msl is None or moq is None):
-            issues.append('Both MSL and MOQ must be entered in the selected month\'s Stock Management upload (zero is allowed).')
+        import math
+        working_days = Decimal(str(self.parameters.summary.get('working_days', 27))) if (self.parameters and self.parameters.summary and 'working_days' in self.parameters.summary) else Decimal('27')
+        msl_days = Decimal(str(self.parameters.summary.get('msl_days', 10))) if (self.parameters and self.parameters.summary and 'msl_days' in self.parameters.summary) else Decimal('10')
+        raw_msl = (required / (working_days / msl_days)) if required > Decimal('0') else Decimal('0')
+        tool_life = master.output_per_unit if master else None
+        is_tool_life = (master and master.rule_type == 'TOOL_LIFE') or (tool_life is not None and tool_life > 1)
+        if is_tool_life:
+            msl = Decimal(str(math.ceil(raw_msl)))
+        else:
+            msl = raw_msl.quantize(Decimal('0.0001'))
+        if param and param.min_order_qty is not None:
+            moq = param.min_order_qty
+        else:
+            moq = Decimal('0')
         rate = master.rate if master and master.rate is not None and master.rate >= 0 else None
         result = {'raw_quantity': None, 'recommended_quantity': None, 'purchase_value': None}
         if not issues:

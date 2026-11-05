@@ -35,6 +35,7 @@ def get_purchase_workspace(
     status: Optional[str] = Query(None),
     view: str = Query('normal', pattern='^(normal|md)$'),
     treat_missing_as_zero: bool = Query(True, description="Treat missing stock statement items as zero stock"),
+    show_all: bool = Query(False, description="Show all consumables regardless of requirement or stock status"),
 ):
     return service.list_purchase_workspace(
         session,
@@ -45,6 +46,7 @@ def get_purchase_workspace(
         current_user=current_user,
         view=view,
         treat_missing_as_zero=treat_missing_as_zero,
+        show_all=show_all,
     )
 
 
@@ -77,6 +79,7 @@ def export_purchase_workspace(
     record_ids: Annotated[list[str] | None, Query()] = None,
     view: Optional[str] = Query(None, pattern='^(normal|md|recommendations)?$'),
     treat_missing_as_zero: bool = Query(True, description="Treat missing stock statement items as zero stock"),
+    show_all: bool = Query(False, description="Show all consumables regardless of requirement or stock status"),
 ):
     excel_bytes = service.export_purchase_workspace_excel(
         session,
@@ -88,6 +91,7 @@ def export_purchase_workspace(
         current_user=current_user,
         view=view,
         treat_missing_as_zero=treat_missing_as_zero,
+        show_all=show_all,
     )
     if view == "md":
         filename = f"purchase_md_view_{year:04d}_{month:02d}.xlsx"

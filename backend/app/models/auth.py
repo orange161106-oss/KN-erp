@@ -98,6 +98,12 @@ class User(Base):
     goods_receipts_update: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     goods_receipts_delete: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
+    # 11. Plant & Department Consumable Requests
+    requests_read: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    requests_create: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    requests_update: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    requests_delete: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
     # Plant Access Flags (5 Plants)
     can_access_plant_1: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     can_access_plant_2: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())

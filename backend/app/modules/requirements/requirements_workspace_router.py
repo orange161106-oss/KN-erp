@@ -82,10 +82,11 @@ def get_requirements_workspace_root(
 def get_workspace_view(user: CanReadRequirements, session: Annotated[Session, Depends(get_db)],
     month: int = Query(..., ge=1, le=12), year: int = Query(..., ge=2020, le=2050),
     plant: str | None = None, consumable: str | None = None,
-    status: str | None = None, search: str | None = None):
+    status: str | None = None, search: str | None = None,
+    show_all: bool = Query(False)):
     _check_central_scope(session, user, month, year)
     return service.load_workspace_view(session, month, year, plant=plant,
-        consumable=consumable, status=status, search=search)
+        consumable=consumable, status=status, search=search, show_all=show_all)
 
 
 @router.get("/plan-metadata", response_model=MonthlyPlanMetadata)
@@ -111,6 +112,7 @@ def get_requirements_workspace_records(
     consumable: Optional[str] = None,
     status: Optional[str] = None,
     search: Optional[str] = None,
+    show_all: bool = Query(False),
 ):
     """Retrieve monthly requirement records for the selected planning period."""
     _check_central_scope(session, user, month, year, planning_period)
@@ -123,6 +125,7 @@ def get_requirements_workspace_records(
         consumable_filter=consumable,
         status_filter=status,
         search=search,
+        show_all=show_all,
     )
 
 
@@ -236,6 +239,7 @@ def export_requirements_workspace(
     status: Optional[str] = None,
     search: Optional[str] = None,
     record_ids: Annotated[list[str] | None, Query()] = None,
+    show_all: bool = Query(False),
 ):
     _check_central_scope(session, user, month, year, planning_period)
     excel_bytes = service.export_requirements_excel(
@@ -248,6 +252,7 @@ def export_requirements_workspace(
         status_filter=status,
         search=search,
         record_ids=record_ids,
+        show_all=show_all,
     )
     period_label = planning_period or (f"{year:04d}_{month:02d}" if month and year else "all")
     return Response(

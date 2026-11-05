@@ -100,6 +100,12 @@ class CurrentUser(BaseModel):
     goods_receipts_update: bool = False
     goods_receipts_delete: bool = False
 
+    # Plant & Department Consumable Requests
+    requests_read: bool = False
+    requests_create: bool = False
+    requests_update: bool = False
+    requests_delete: bool = False
+
     # Plant Scope Access
     can_access_plant_1: bool = False
     can_access_plant_2: bool = False
