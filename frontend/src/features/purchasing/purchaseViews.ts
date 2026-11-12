@@ -42,7 +42,7 @@ export const normalViewColumns = (month: number, year: number): PurchaseViewColu
   ];
 };
 
-export const mdViewColumns = (month: number, year: number): PurchaseViewColumn[] => {
+export const mdViewColumns = (month: number, year: number, revision = 'R1'): PurchaseViewColumn[] => {
   const current = new Date(year, month - 1).toLocaleString('en', { month: 'short' });
   const previous = new Date(year, month - 2).toLocaleString('en', { month: 'short' });
   const prevYear = month === 1 ? year - 1 : year;
@@ -73,13 +73,13 @@ export const mdViewColumns = (month: number, year: number): PurchaseViewColumn[]
     column('Max stock level', field('max_stock_level')),
     column('Minimum order qty.', field('minimum_order_qty')),
     column('Lead time to supply in days', field('lead_time_days')),
-    column('Sch. Qty. as per assy R1', sourceField('production_qty')),
+    column(`Sch. Qty. as per assy ${revision}`, sourceField('production_qty')),
     column('Purchasing Unit', field('unit')),
-    column('Sch. Qty. Cons. Itemwise R1', sourceField('required_qty')),
+    column(`Sch. Qty. Cons. Itemwise ${revision}`, sourceField('required_qty')),
     column(`Opening stock ${current}'${String(year).slice(-2)}`, field('stock_qty')),
     column('Req. Qty.', field('required_qty')),
-    column('Order Qty R1', field('system_recommended_qty')),
-    column('Order Value R1', field('purchase_value')),
+    column(`Order Qty ${revision}`, field('system_recommended_qty')),
+    column(`Order Value ${revision}`, field('purchase_value')),
   ];
   const remaining = [
     'Receipt qty. R1', 'Receipt value R1', 'Sch. Qty. as per assy R2',
