@@ -76,6 +76,26 @@ async function write<T>(endpoint: string, method: string, data?: unknown, timeou
   finally { ++readGeneration; pendingReads.clear(); }
 }
 
+export async function fetchWithAuth(endpoint: string, options: RequestInit = {}): Promise<Response> {
+  const requestToken = accessToken;
+  const headers: Record<string, string> = {
+    ...((options.headers as Record<string, string>) || {}),
+  };
+  if (requestToken && !headers.Authorization && !headers.authorization) {
+    headers.Authorization = `Bearer ${requestToken}`;
+  }
+  const url = endpoint.startsWith('http') ? endpoint : `${BASE_URL}${endpoint}`;
+  const response = await fetch(url, {
+    ...options,
+    headers,
+  });
+  if (response.status === 401 && requestToken === accessToken) {
+    setAccessToken(null);
+    unauthorizedHandler?.();
+  }
+  return response;
+}
+
 export const apiClient = {
   get: read,
   getBlob: (endpoint: string, timeoutMs = 60000) => request<Blob>(endpoint, 'GET', undefined, timeoutMs, 'blob'),
@@ -84,4 +104,5 @@ export const apiClient = {
   patch: <T>(endpoint: string, data?: unknown) => write<T>(endpoint, 'PATCH', data),
   delete: <T>(endpoint: string, data?: unknown) => write<T>(endpoint, 'DELETE', data),
   postFormData: <T>(endpoint: string, data: FormData, timeoutMs?: number) => write<T>(endpoint, 'POST', data, timeoutMs),
+  fetchWithAuth,
 };

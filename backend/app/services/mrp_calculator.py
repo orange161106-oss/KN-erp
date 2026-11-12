@@ -92,7 +92,13 @@ def run_monthly_aggregation(db: Session, month: int, year: int) -> AggregationRu
     stmt = (
         select(
             RequirementLineItem.consumable_id,
-            func.sum(RequirementLineItem.requested_qty).label("total_gross_qty"),
+            func.sum(
+                func.coalesce(
+                    func.nullif(RequirementLineItem.approved_qty, 0.0),
+                    RequirementLineItem.requested_qty,
+                    0.0,
+                )
+            ).label("total_gross_qty"),
         )
         .where(RequirementLineItem.plan_id.in_(approved_plan_ids))
         .group_by(RequirementLineItem.consumable_id)

@@ -19,7 +19,8 @@ def _unit_matches(left, right):
 
 
 class MonthlyPurchaseInputs:
-    def __init__(self, session, *, month, year, material_ids):
+    def __init__(self, session, *, month, year, material_ids, treat_missing_as_zero: bool = True):
+        self.treat_missing_as_zero = treat_missing_as_zero
         self.stock_period = f'{year - 1 if month == 1 else year:04d}-{12 if month == 1 else month - 1:02d}'
         self.parameter_period = f'{year:04d}-{month:02d}'
         prev_year, prev_month = map(int, self.stock_period.split('-'))
@@ -58,13 +59,22 @@ class MonthlyPurchaseInputs:
         code = normalize_item_id_key(master.code) if master else ''
         lines = self.lines.get(code, [])
         stock = None
+        info_notes = []
         if self.statement:
             if not lines:
-                issues.append(f'Item is missing from the {self.stock_period} stock statement; missing is not zero stock.')
+                if self.treat_missing_as_zero:
+                    stock = Decimal('0')
+                    info_notes.append('Stock: 0 (item not in stock statement)')
+                else:
+                    issues.append(f'Item is missing from the {self.stock_period} stock statement; missing is not zero stock.')
             else:
                 stock_issues = []
-                if any(line.closing_qty is None for line in lines):
-                    stock_issues.append(f'Closing quantity is blank in the {self.stock_period} stock statement; enter a verified balance (including zero).')
+                has_blank_closing = any(line.closing_qty is None for line in lines)
+                if has_blank_closing:
+                    if self.treat_missing_as_zero:
+                        info_notes.append('Stock: 0 (blank closing quantity in stock statement)')
+                    else:
+                        stock_issues.append(f'Closing quantity is blank in the {self.stock_period} stock statement; enter a verified balance (including zero).')
                 if any(not _unit_matches(line.unit, uom) for line in lines):
                     stock_issues.append(f'Stock statement unit does not match the calculation unit {uom}; review the {self.stock_period} statement.')
                 if any(line.consumable_id and line.consumable_id != material_id for line in lines):
@@ -72,7 +82,7 @@ class MonthlyPurchaseInputs:
                 issues.extend(stock_issues)
                 if not stock_issues:
                     # SUMIF in Plan!S4. Apply shared stock once after consolidating product demand.
-                    stock = sum((line.closing_qty for line in lines), Decimal('0'))
+                    stock = sum(((line.closing_qty if line.closing_qty is not None else Decimal('0')) for line in lines), Decimal('0'))
         param, flag = resolve_stock_parameter_for_item(self.limits.get(code, []))
         if self.parameters and flag:
             issues.append(flag)
@@ -105,7 +115,9 @@ class MonthlyPurchaseInputs:
                         'positive gap is raised to MOQ; otherwise zero. Pending POs are not deducted. '
                         'No pack rounding or maximum cap. MSL/MOQ: uploaded Stock Management '
                         f'{self.parameter_period} ({self.parameters.source_filename if self.parameters else "not uploaded"}); '
-                        f'stock file: {self.statement.source_filename if self.statement else "not uploaded"}. ' + (' '.join(issues) if issues else
+                        f'stock file: {self.statement.source_filename if self.statement else "not uploaded"}. ' +
+                        ('; '.join(info_notes) + '. ' if info_notes else '') +
+                        (' '.join(issues) if issues else
                         f'{msl} + {required} − {stock} = {result["raw_quantity"]}; order {result["recommended_quantity"]}.') +
                         (' Rate is missing in Product Master; purchase value is unavailable.' if rate is None else '')),
                     calculation_sources={

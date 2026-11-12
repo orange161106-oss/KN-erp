@@ -21,6 +21,7 @@ class NormImportRowInput(BaseModel):
     process_count: str | None = None
     reference_production_qty: str | None = None
     reference_schedule_qty: str | None = None
+    output_per_unit: str | None = None
 
 
 class NormImportError(BaseModel):

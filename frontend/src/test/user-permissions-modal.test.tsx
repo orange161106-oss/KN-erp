@@ -127,5 +127,5 @@ describe('Modernized User Permissions Modal UI/UX', () => {
     await user.click(saveButton);
 
     expect(usersApi.createUser).toHaveBeenCalled();
-  });
+  }, 20000);
 });

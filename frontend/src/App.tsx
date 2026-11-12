@@ -91,6 +91,8 @@ function Application() {
           
           <Route path="/plant-workflow" element={<Navigate to="/requirements" replace />} />
           <Route path="/plant-workflow/*" element={<Navigate to="/requirements" replace />} />
+          <Route path="/plant-review" element={<Navigate to="/requirements" replace />} />
+          <Route path="/plant-review/*" element={<Navigate to="/requirements" replace />} />
           
           <Route path="/inventory" element={
             <ProtectedRoute isAllowed={canInventory}><Inventory /></ProtectedRoute>

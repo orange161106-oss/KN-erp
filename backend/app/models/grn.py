@@ -1,10 +1,10 @@
-"""Immutable receipts imported from the authoritative existing ERP."""
 from datetime import datetime
 from decimal import Decimal
+from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, Uuid, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
@@ -66,4 +66,33 @@ class GoodsReceiptRecord(Base):
     created_by: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class GRNRecord(Base):
+    __tablename__ = 'grn_records'
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    grn_no: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    grn_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    vendor_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    uploaded_by: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+
+    line_items: Mapped[list["GRNLineItem"]] = relationship("GRNLineItem", back_populates="grn", cascade="all, delete-orphan")
+
+
+class GRNLineItem(Base):
+    __tablename__ = 'grn_line_items'
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    grn_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey('grn_records.id', ondelete='CASCADE'), nullable=False, index=True)
+    consumable_id: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey('consumables.id', ondelete='SET NULL'), nullable=True, index=True)
+    item_code: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    received_qty: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default='0.0')
+    unit_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default='0.0')
+    total_amount: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default='0.0')
+
+    grn: Mapped["GRNRecord"] = relationship("GRNRecord", back_populates="line_items")
+    consumable: Mapped[Optional["Consumable"]] = relationship("Consumable")  # noqa: F821
+
 

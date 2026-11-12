@@ -11,6 +11,7 @@ from app.schemas.auth import CurrentUser
 from app.schemas.requirement_loading import MonthlyWorkspace
 from app.schemas.requirements_workspace import (
     MonthlyPlanMetadata,
+    MRPGRNUploadResponse,
     RequirementBatchUpdateRequest,
     RequirementBatchUpdateResponse,
     RequirementBulkDeleteRequest,
@@ -40,6 +41,7 @@ def _check_central_scope(session, user, month=None, year=None, planning_period=N
         raise ApplicationError('CENTRAL_REVIEW_REQUIRED', 'Central plans are reviewed by Super Admin.', 403)
 
 
+
 router = APIRouter(prefix="/requirements/workspace", tags=["requirements-workspace"])
 CanReadRequirements = Annotated[CurrentUser, Depends(require_feature_flag("requirements_read"))]
 CanUpdateRequirements = Annotated[CurrentUser, Depends(require_feature_flag("requirements_update"))]
@@ -52,6 +54,28 @@ def require_requirements_delete(user: Annotated[CurrentUser, Depends(get_current
 
 
 CanDeleteRequirements = Annotated[CurrentUser, Depends(require_requirements_delete)]
+
+
+@router.get("", include_in_schema=True)
+@router.get("/", include_in_schema=True)
+def get_requirements_workspace_root(
+    session: Annotated[Session, Depends(get_db)],
+    month: Optional[int] = Query(None, ge=1, le=12),
+    year: Optional[int] = Query(None, ge=2020, le=2050),
+    planning_period: Optional[str] = None,
+):
+    """Workspace root endpoint returning HTTP 200 with workspace status and plan metadata."""
+    m = month or 10
+    y = year or 2026
+    target_period = planning_period or f"{y:04d}-{m:02d}"
+    meta = service.get_monthly_plan_metadata(session, month=m, year=y)
+    return {
+        "status": "ok",
+        "workspace": "requirements",
+        "planning_period": target_period,
+        "database": "ok",
+        "plan_metadata": meta,
+    }
 
 
 @router.get('/view', response_model=MonthlyWorkspace)
@@ -138,6 +162,28 @@ def post_import_monthly_requirements(
         "inserted_count": count,
         "plan_metadata": meta,
     }
+
+
+@router.post("/upload-grn", response_model=MRPGRNUploadResponse)
+def post_upload_mrp_grn(
+    user: CanUpdateRequirements,
+    session: Annotated[Session, Depends(get_db)],
+    file: UploadFile = File(...),
+    plant_id: Optional[str] = Form(None),
+    planning_month: int = Form(...),
+    planning_year: int = Form(...),
+):
+    """Ingests store GRN file and performs month-end overwrite upsert."""
+    content = file.file.read()
+    return service.ingest_mrp_grn(
+        session=session,
+        file_bytes=content,
+        filename=file.filename or "grn_upload.xlsx",
+        plant_id=plant_id,
+        planning_month=planning_month,
+        planning_year=planning_year,
+        current_user_id=user.id,
+    )
 
 
 @router.put("/records", response_model=RequirementBatchUpdateResponse)
@@ -253,16 +299,30 @@ def get_requirements_issues(
 def export_requirements_issues(
     user: CanReadRequirements,
     session: Annotated[Session, Depends(get_db)],
-    month: int = Query(..., ge=1, le=12),
-    year: int = Query(..., ge=2020, le=2050),
+    month: Optional[int] = Query(None, ge=1, le=12),
+    year: Optional[int] = Query(None, ge=2020, le=2050),
+    period: Optional[str] = Query(None),
 ):
     """Export calculation errors and missing norms as CSV."""
+    if period and (month is None or year is None):
+        delim = "-" if "-" in period else "_"
+        parts = period.strip().split(delim)
+        if len(parts) == 2:
+            try:
+                year = int(parts[0])
+                month = int(parts[1])
+            except ValueError:
+                pass
+    if month is None or year is None:
+        raise ApplicationError("INVALID_PARAMETERS", "Both month and year (or period=YYYY-MM) are required.", 400)
+
     _check_central_scope(session, user, month, year)
     csv_bytes = service.export_period_calculation_issues_csv(session, month=month, year=year)
+    period_label = f"{year:04d}_{month:02d}"
     return Response(
         content=csv_bytes,
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="Requirement_Issues_{year:04d}_{month:02d}.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="Requirement_Issues_{period_label}.csv"'},
     )
 
 

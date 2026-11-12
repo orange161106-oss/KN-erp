@@ -14,3 +14,4 @@ dist/
 .vitest/
 coverage/
 node_modules/
+scratch/

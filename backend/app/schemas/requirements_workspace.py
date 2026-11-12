@@ -23,6 +23,7 @@ class RequirementWorkspaceRecord(BaseModel):
     process_count: int = 1  # Number of Processes
     production_order_qty: str = "0.0000"  # Production Order for Selected Month
     scheduled_consumable_qty: str = "0.0000"  # Scheduled Consumable Quantity for Selected Month
+    output_per_unit: Optional[str] = None  # Output per Unit / Tool Life
 
     # Group 3: Inventory, Unit & Operational Status
     plant: str = "Plant 1"
@@ -36,6 +37,18 @@ class RequirementWorkspaceRecord(BaseModel):
     msl: str = "0.0000"
     status: str = "Normal"  # 'Normal', 'Low', 'Critical shortage', 'Calculated', 'Configuration required'
     remarks: Optional[str] = None
+
+    # Month-End Overwrite & MRP Balance Tracking
+    opening_stock: str = "0.0000"
+    grn_received_qty: str = "0.0000"
+    consumed_qty: str = "0.0000"
+    closing_stock: str = "0.0000"
+    gross_requirement: str = "0.0000"
+    net_order_requirement: str = "0.0000"
+    last_synced_at: Optional[datetime] = None
+    grn_source_file: Optional[str] = None
+    invoice_no: Optional[str] = None
+    grn_date: Optional[datetime] = None
 
     # Metadata & Auditing
     created_at: Optional[datetime] = None
@@ -62,6 +75,16 @@ class MonthlyPlanMetadata(BaseModel):
     record_count: int = 0
     issue_count: int = 0
     source_workflow: Optional[str] = None
+    grn_reconciled: bool = False
+    last_grn_synced_at: Optional[datetime] = None
+
+
+class MRPGRNUploadResponse(BaseModel):
+    status: str = "success"
+    updated_count: int
+    inserted_count: int
+    period: str
+    consumables_updated_count: int = 0
 
 
 class RequirementRowError(BaseModel):

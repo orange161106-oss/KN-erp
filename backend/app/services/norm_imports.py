@@ -40,6 +40,7 @@ FIELDS = {
     "process_count": ("No.of Process", "No of Process", "Process Count", "No. of Process"),
     "reference_production_qty": ("Prd. Order", "Prd Order", "Prd. Order.", "Prd Order."),
     "reference_schedule_qty": ("Sch", "Schedule"),
+    "output_per_unit": ("Output / Unit", "Output/ Unit", "Output/Unit", "Tool Life", "Output per Unit"),
 }
 REQUIRED = {"part_number", "consumable_code", "process_name", "process_count"}
 S_NO_ALIASES = {"sno", "slno", "serialno", "serialnumber"}
@@ -524,6 +525,16 @@ def confirm(db, filename, content, review, actor_id):
             params['is_general'] = bool(row.is_general)
             params['sch_overridden'] = False
 
+            c_mat = next((c for c in catalog[Consumable] if str(c.id) == str(row.consumable_id)), None)
+            tool_life_val = None
+            if getattr(row, 'output_per_unit', None):
+                try:
+                    tool_life_val = Decimal(str(row.output_per_unit).strip())
+                except Exception:
+                    pass
+            if tool_life_val is None and c_mat and c_mat.output_per_unit:
+                tool_life_val = c_mat.output_per_unit
+
             norm = ConsumptionNorm(
                 id=uuid4(),
                 rule_type=RuleType.PRODUCTION_RATE.value,
@@ -531,6 +542,7 @@ def confirm(db, filename, content, review, actor_id):
                 process_id=UUID(row.process_id) if row.process_id else None,
                 consumable_id=UUID(row.consumable_id),
                 unit_id=UUID(row.unit_id),
+                output_per_unit=tool_life_val,
                 plant_id=None,
                 parameters=params,
                 version=max((item.version for item in prior_versions), default=0) + 1,

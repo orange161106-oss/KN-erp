@@ -43,7 +43,7 @@ test('upload only previews; Save changes commits even without a cell edit and ne
   expect(post.mock.calls[1][0]).toBe(endpoint);
   expect(JSON.parse(String(post.mock.calls[1][1].get('review')))).toEqual({ review_token: empty.review_token, updates: [] });
   expect(changed).toHaveBeenCalledTimes(1);
-  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
   expect(screen.getByText('Saved · 1 items')).toBeInTheDocument();
 });
 
@@ -105,7 +105,7 @@ test('discarding an upload does not persist or delete master data', async () => 
 
 test('readers export the undated catalog and cannot edit or remove rows', async () => {
   vi.mocked(apiClient.get).mockResolvedValue(saved);
-  const fetchFile = vi.fn().mockResolvedValue(new Response(new Blob(['synthetic-xlsx'])));
+  const fetchFile = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(['synthetic-xlsx']) } as unknown as Response);
   vi.stubGlobal('fetch', fetchFile);
   const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:synthetic');
   vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});

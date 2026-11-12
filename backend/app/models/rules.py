@@ -1,8 +1,9 @@
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, JSON, String, Uuid, func, true
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Uuid, func, true
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -28,6 +29,7 @@ class ConsumptionNorm(Base):
     process_id: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("processes.id", ondelete="RESTRICT"), nullable=True, index=True)
     plant_id: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("plants.id", ondelete="RESTRICT"), nullable=True, index=True)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    output_per_unit: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4), nullable=True)
     parameters: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     unit_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("units.id", ondelete="RESTRICT"), nullable=False)
     rounding_policy: Mapped[str] = mapped_column(String(32), default="NONE", nullable=False)

@@ -61,8 +61,8 @@ def sources(db, catalog, *, stocks=(('20', 'NOS'),), msl='10', moq='50', month=1
     return statement, parameters, parameter
 
 
-def show(db):
-    return list_purchase_workspace(db, month=10, year=2026)
+def show(db, **kwargs):
+    return list_purchase_workspace(db, month=10, year=2026, **kwargs)
 
 
 def test_shared_stock_applied_once_after_product_demand_and_export_uses_same_rule(db, catalog):
@@ -107,8 +107,19 @@ def test_shared_stock_applied_once_after_product_demand_and_export_uses_same_rul
 ])
 def test_missing_values_or_incompatible_units_are_explicit(db, catalog, stocks, msl, moq, issue):
     calculated(db, catalog); sources(db, catalog, stocks=stocks, msl=msl, moq=moq)
-    row = show(db).records[0]
+    row = show(db, treat_missing_as_zero=False).records[0]
     assert row.system_recommended_qty is None and any(issue in text for text in row.input_issues)
+
+
+def test_treat_missing_as_zero_calculates_with_zero_stock(db, catalog):
+    """When treat_missing_as_zero is True (default), missing or blank stock is treated as 0 and calculated."""
+    calculated(db, catalog)
+    sources(db, catalog, stocks=(), msl='10', moq='50')
+    row = show(db, treat_missing_as_zero=True).records[0]
+    assert row.stock_qty == D('0')
+    assert row.system_recommended_qty == D('240')  # MSL 10 + Req 230 - Stock 0 = 240
+    assert 'Stock: 0 (item not in stock statement)' in row.calculation_details
+
 
 
 def test_ambiguous_limits_and_duplicate_active_batches_cannot_be_chosen_silently(db, catalog):
