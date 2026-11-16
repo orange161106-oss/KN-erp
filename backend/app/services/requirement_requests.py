@@ -44,6 +44,14 @@ SHEET_SOURCE_MAPPINGS = {
     'npd': ('DEPARTMENT', 'NPD'),
     'hrd': ('DEPARTMENT', 'HRD'),
     'qad': ('DEPARTMENT', 'QAD'),
+    # Phase 4: Verified Auxiliary Demand Sheets
+    'powder coating area': ('AUXILIARY', 'POWDER_COATING'),
+    'packing material': ('AUXILIARY', 'PACKAGING'),
+    'packing list for al parts': ('AUXILIARY', 'PACKAGING'),
+    'packing': ('AUXILIARY', 'PACKAGING'),
+    'label & ribbon printing list': ('AUXILIARY', 'LABELS'),
+    'shot blasting ': ('AUXILIARY', 'SHOT_BLASTING'),
+    'shot blasting': ('AUXILIARY', 'SHOT_BLASTING'),
 }
 
 MONTH_NAMES = {
@@ -594,6 +602,7 @@ def get_active_requirement_requests_map(
                 "NPD": Decimal("0"),
                 "HRD": Decimal("0"),
                 "QAD": Decimal("0"),
+                "AUXILIARY": Decimal("0"),
                 "TOTAL": Decimal("0"),
                 "units": {},
                 "purchasing_unit": purchasing_unit,
@@ -603,6 +612,8 @@ def get_active_requirement_requests_map(
         bucket = by_consumable[consumable_id]
         if source_code in bucket:
             bucket[source_code] += qty
+        elif source_code in ('POWDER_COATING', 'PACKAGING', 'LABELS', 'SHOT_BLASTING', 'AUXILIARY'):
+            bucket['AUXILIARY'] += qty
         bucket["units"][source_code] = unit
 
     # Evaluate unit conflict per consumable and calculate total
@@ -613,6 +624,7 @@ def get_active_requirement_requests_map(
             bucket["P1"] + bucket["P2"] + bucket["P3"] + bucket["P4"] + bucket["P5"]
             + bucket["TOOL_ROOM"] + bucket["PMD"] + bucket["SALES"]
             + bucket["NPD"] + bucket["HRD"] + bucket["QAD"]
+            + bucket["AUXILIARY"]
         )
         bucket["raw_sum"] = raw_total
         bucket["TOTAL"] = raw_total

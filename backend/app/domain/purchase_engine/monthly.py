@@ -3,6 +3,13 @@
 This monthly rule is separate from the timed M5.1 receipt assessment. Inputs are
 already in the requirement's stock unit. Pending POs and pack multiples are not
 operands in the supplied company formula.
+
+Formula:
+    Net Need = MSL + Required - Closing Stock
+    Order Qty = IF(Net Need > 0, MAX(Net Need, MOQ), 0)
+
+MOQ is the Minimum Order Quantity (a floor for positive demand), NOT an order multiple.
+Do NOT use CEILING(Net Need / MOQ) * MOQ.
 """
 from decimal import Decimal, localcontext
 
@@ -24,7 +31,10 @@ def calculate_monthly_purchase(*, required: Decimal, closing_stock: Decimal,
         raise ValueError('Rate must be a nonnegative exact decimal when supplied.')
     with localcontext() as ctx:
         ctx.prec = 80
+        # Net Need = MSL + Required - Closing Stock
         gap = msl + required - closing_stock
+        # Order Qty = IF(Net Need > 0, MAX(Net Need, MOQ), 0)
+        # MOQ is Minimum Order Quantity, not an order-multiple packaging increment.
         quantity = max(gap, moq) if gap > 0 else Decimal('0')
         if abs(gap) >= Decimal('1e14') or quantity >= Decimal('1e14'):
             raise ValueError('Monthly purchase quantity exceeds supported precision.')

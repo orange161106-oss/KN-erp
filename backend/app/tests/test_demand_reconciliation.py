@@ -138,9 +138,9 @@ def test_t1_t5_acceptance_tests(mem_db):
     g = records["ABK100003QC"]
     assert g.total_requirement_qty == Decimal("9170.0000")
     assert g.stock_qty == Decimal("345.0000")
-    assert round(g.minimum_stock_level, 1) == Decimal("3396.3")
+    assert g.minimum_stock_level == Decimal("3397")
     assert g.minimum_order_qty == Decimal("500.0000")
-    assert round(g.system_recommended_qty, 1) == Decimal("12221.3")
+    assert g.system_recommended_qty == Decimal("12222")
     assert g.unit_conflict is True
     assert "Sets" in g.unit_conflict_details
 
@@ -157,7 +157,7 @@ def test_t1_t5_acceptance_tests(mem_db):
     assert soap.hrd_qty == Decimal("910.0000")
     assert soap.total_requirement_qty == Decimal("910.0000")
     assert soap.stock_qty == Decimal("2450.0000")
-    assert round(soap.minimum_stock_level, 0) == Decimal("337")
+    assert soap.minimum_stock_level == Decimal("338")
     assert soap.system_recommended_qty == Decimal("0.0000")
 
     # T4 BBG000090QC
@@ -173,9 +173,9 @@ def test_t1_t5_acceptance_tests(mem_db):
     cot = records["GAQ000023QC"]
     assert cot.total_requirement_qty == Decimal("67.0000")
     assert cot.stock_qty == Decimal("0.0000")
-    assert round(cot.minimum_stock_level, 1) == Decimal("24.8")
+    assert cot.minimum_stock_level == Decimal("25")
     assert cot.minimum_order_qty == Decimal("10.0000")
-    assert round(cot.system_recommended_qty, 1) == Decimal("91.8")
+    assert cot.system_recommended_qty == Decimal("92")
 
 
 def test_t9_per_source_sum_equals_total(mem_db):

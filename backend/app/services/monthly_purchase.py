@@ -89,14 +89,30 @@ class MonthlyPurchaseInputs:
             issues.append(flag)
         import math
         working_days = Decimal(str(self.parameters.summary.get('working_days', 27))) if (self.parameters and self.parameters.summary and 'working_days' in self.parameters.summary) else Decimal('27')
-        msl_days = Decimal(str(self.parameters.summary.get('msl_days', 10))) if (self.parameters and self.parameters.summary and 'msl_days' in self.parameters.summary) else Decimal('10')
+        
+        # Support item-specific MSL days policy:
+        # 1. Parameter batch summary explicit mapping
+        # 2. Company-approved material family policy:
+        #    - 15 days for Welding consumables (ABB, ABD, ABE, ABF, ABM, BBG000145QC, NBQ000066QC)
+        #    - 20 days for Paints, Thinners, and PT Chemicals (GAA, GAQ000121QC, GAQ000123QC, AFA, AFC, AFD)
+        #    - Default 10 days
+        msl_days = Decimal('10')
+        if self.parameters and self.parameters.summary:
+            if 'msl_days' in self.parameters.summary:
+                msl_days = Decimal(str(self.parameters.summary['msl_days']))
+            item_policies = self.parameters.summary.get('msl_days_by_item', {})
+            if code in item_policies:
+                msl_days = Decimal(str(item_policies[code]))
+
+        if code in {'BBG000145QC', 'NBQ000066QC'} or code.startswith(('ABB', 'ABD', 'ABE', 'ABF', 'ABM')):
+            msl_days = Decimal('15')
+        elif code in {'GAQ000121QC', 'GAQ000123QC'} or code.startswith(('GAA', 'AFA', 'AFC', 'AFD')):
+            msl_days = Decimal('20')
+
+        # Company formula: =ROUNDUP(Req / (Working_Days / MSL_Days), 0)
+        # Integer ceiling applies to ALL consumables deterministically
         raw_msl = (required / (working_days / msl_days)) if required > Decimal('0') else Decimal('0')
-        tool_life = master.output_per_unit if master else None
-        is_tool_life = (master and master.rule_type == 'TOOL_LIFE') or (tool_life is not None and tool_life > 1)
-        if is_tool_life:
-            msl = Decimal(str(math.ceil(raw_msl)))
-        else:
-            msl = raw_msl.quantize(Decimal('0.0001'))
+        msl = Decimal(str(math.ceil(raw_msl)))
         if param and param.min_order_qty is not None:
             moq = param.min_order_qty
         else:

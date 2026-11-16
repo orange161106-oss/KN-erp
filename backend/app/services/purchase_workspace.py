@@ -157,14 +157,74 @@ def _central_workspace(session, version, meta, *, month, year, search, status_fi
         npd = r_info.get('NPD', Decimal('0.0000'))
         hrd = r_info.get('HRD', Decimal('0.0000'))
         qad = r_info.get('QAD', Decimal('0.0000'))
-        total_request_qty = r_info.get('TOTAL', Decimal('0.0000'))
-        gross_sch = _q4(prod_qty + total_request_qty)
+        auxiliary_qty = r_info.get('AUXILIARY', Decimal('0.0000'))
         
-        if prod_qty > Decimal('0') and total_request_qty > Decimal('0'):
+        # Direct Plant and Department Requests
+        direct_plant_requests = _q4(p1 + p2 + p3 + p4 + p5)
+        direct_dept_requests = _q4(tool_room + pmd + sales + npd + hrd + qad)
+        direct_requests = _q4(direct_plant_requests + direct_dept_requests)
+        total_request_qty = direct_requests
+
+        # Un-divided Gross Scheduled Demand (matches KNL Plan Col AC)
+        gross_sch = _q4(prod_qty + direct_requests + auxiliary_qty)
+
+        tool_life = material.output_per_unit
+        # Rule type resolution: respect material.rule_type, only consider machining tools as TOOL_LIFE
+        is_machining_tool = (material.type_of_material == 'Cutting Tools' or 
+                             (material.code and material.code.startswith(('AAC', 'AAG', 'AAH', 'BAC', 'BAA', 'BAB', 'BAD', 'BAE', 'BAF', 'BAG', 'BAH', 'BAI', 'BAJ', 'BAK'))))
+        
+        if material and material.rule_type:
+            rule_type = material.rule_type
+        elif is_machining_tool and tool_life and tool_life > 1:
+            rule_type = 'TOOL_LIFE'
+        else:
+            rule_type = 'DIRECT'
+
+        # Separate demand source calculations:
+        # A. Production Demand: apply approved formula only to production operations
+        effective_prod = Decimal('0.0000')
+        is_output_missing = False
+
+        if prod_qty > Decimal('0'):
+            if rule_type == 'TOOL_LIFE':
+                if tool_life is None or tool_life <= Decimal('0'):
+                    is_output_missing = True
+                    effective_prod = Decimal('0.0000')
+                else:
+                    effective_prod = _q4(math.ceil(prod_qty / tool_life))
+            elif rule_type == 'AREA_COVERAGE':
+                if tool_life is None or tool_life <= Decimal('0'):
+                    is_output_missing = True
+                    effective_prod = Decimal('0.0000')
+                else:
+                    effective_prod = _q4(round(prod_qty / tool_life))
+            elif rule_type == 'PACKING_RATIO':
+                if tool_life and tool_life > Decimal('0'):
+                    effective_prod = _q4(math.ceil(prod_qty / tool_life))
+                else:
+                    effective_prod = prod_qty
+            else:
+                effective_prod = prod_qty
+
+        # B & C. Plant/Dept Demand and Consolidation:
+        # Direct requests and auxiliary demand are NEVER divided by tool life or output_per_unit.
+        if is_output_missing and direct_requests == Decimal('0') and auxiliary_qty == Decimal('0'):
+            effective_required = None
+        else:
+            effective_required = _q4(effective_prod + direct_requests + auxiliary_qty)
+
+        # Traced Demand Source Classification
+        has_prod = (prod_qty > Decimal('0') or effective_prod > Decimal('0'))
+        has_req = (direct_requests > Decimal('0'))
+        has_aux = (auxiliary_qty > Decimal('0'))
+
+        if has_prod and (has_req or has_aux):
             demand_source_type = 'PRODUCTION_AND_REQUEST'
-        elif total_request_qty > Decimal('0'):
+        elif has_req:
             demand_source_type = 'REQUEST'
-        elif prod_qty > Decimal('0'):
+        elif has_aux:
+            demand_source_type = 'AUXILIARY'
+        elif has_prod:
             demand_source_type = 'PRODUCTION'
         else:
             demand_source_type = 'NONE'
@@ -176,33 +236,13 @@ def _central_workspace(session, version, meta, *, month, year, search, status_fi
         approval, report, supplier = previous if previous else (None, {}, None)
         status = 'REQUIREMENT_REVIEW_REQUIRED' if not approved else 'ASSESSMENT_REQUIRED'
         remarks = 'Requirement: review issues, then use the Recalculate menu to approve the plan.' if not approved else 'Requirement: Recalculate menu, Stock and purchase assessment. Select verified stock and supplier rules.'
-        
-        tool_life = material.output_per_unit
-        rule_type = material.rule_type if material and material.rule_type else ('TOOL_LIFE' if (tool_life and tool_life > 1) else 'PRODUCTION_RATE')
-        is_tool_life = rule_type == 'TOOL_LIFE' or (tool_life is not None and tool_life > 1)
-        is_output_missing = False
-
-        if is_tool_life:
-            if tool_life is None or tool_life <= Decimal('0'):
-                is_output_missing = True
-                effective_required = None
-            else:
-                effective_required = _q4(math.ceil(gross_sch / tool_life))
-        elif rule_type == 'AREA_COVERAGE':
-            if tool_life is None or tool_life <= Decimal('0'):
-                is_output_missing = True
-                effective_required = None
-            else:
-                effective_required = _q4(round(gross_sch / tool_life))
-        else:
-            effective_required = gross_sch
 
         if approval:
             status = 'SUBMITTED'
             remarks = f'Latest traced purchase assessment is {approval.status}. Stock and incoming quantities are the saved assessment evidence.'
             calculated = dict(calculation_basis=approval.rule_version,
                 calculation_details='Saved submitted assessment; original quantities and stock sources are retained.')
-        elif is_output_missing:
+        elif is_output_missing and effective_required is None:
             status = 'OUTPUT_PER_UNIT_MISSING'
             remarks = 'Output per Unit missing'
             calculated = dict(
@@ -224,6 +264,8 @@ def _central_workspace(session, version, meta, *, month, year, search, status_fi
             if not supplier and material and material.supplier_id:
                 supplier = all_suppliers_map.get(material.supplier_id)
             remarks = calculated['calculation_details']
+            if is_output_missing and effective_required is not None:
+                remarks = f'Output per Unit missing for production demand ({prod_qty}). Direct requests ({direct_requests}) fulfilled. ' + remarks
             if approved and calculated['recommended_quantity'] is None:
                 status = 'MONTHLY_INPUTS_REQUIRED'
             elif approved and calculated['recommended_quantity'] == 0:
@@ -283,7 +325,7 @@ def _central_workspace(session, version, meta, *, month, year, search, status_fi
             hrd_qty=hrd,
             qad_qty=qad,
             total_request_qty=total_request_qty,
-            total_requirement_qty=gross_sch,
+            total_requirement_qty=effective_required if effective_required is not None else Decimal('0'),
             demand_source_type=demand_source_type,
             unit_conflict=unit_conflict,
             unit_conflict_details=unit_conflict_details,
