@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from '../../api/client';
 import DataTable from '../../components/DataTable';
 import type { ColumnDef } from '../../components/DataTable';
@@ -8,6 +8,8 @@ import NormImportWorkspace from './NormImportWorkspace';
 import { downloadNormFile } from './normFiles';
 import { NORM_ENDPOINT } from './types';
 import type { ConsumptionNorm, NormReferenceData } from './types';
+
+const EngineeringInputWorkspace = lazy(() => import('./EngineeringInputWorkspace'));
 
 const RULE_TYPES = ['PRODUCTION_RATE', 'AREA_COVERAGE', 'PACKING_RATIO', 'TOOL_LIFE', 'FIXED_QUANTITY', 'PLANT_REQUEST', 'MAINTENANCE', 'MIN_MAX'];
 const REFERENCE_FIELDS = ['part_number', 'part_name', 'used_part_number', 'thickness', 'process_count', 'reference_production_qty', 'reference_schedule_qty', 'sch', 'prd_order', 'is_general', 'sch_overridden', 'output_per_unit'] as const;
@@ -91,6 +93,7 @@ export default function ConsumptionNorms() {
   const [reason, setReason] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showEngineeringInputs, setShowEngineeringInputs] = useState(false);
   const [epoch, setEpoch] = useState(0);
   const pending = useRef(false);
   const requestId = useRef(0);
@@ -274,6 +277,7 @@ export default function ConsumptionNorms() {
     <section className="space-y-3 rounded-xl border bg-white p-4">
       <div className="flex flex-wrap gap-2">
         {canCreate && <><button className={`${button} bg-burnt-orange text-white`} type="button" disabled={busy || dirty || loading} onClick={() => setShowImport(true)}>Upload Excel / CSV</button>
+          <button className={button} type="button" disabled={busy || dirty || loading} onClick={() => setShowEngineeringInputs(true)}>Engineering input workbook</button>
           <button className={button} type="button" disabled={busy || dirty || loading} onClick={() => setShowCreate(value => !value)}>Add new norm</button></>}
         <button type="button" className={button} disabled={busy} onClick={() => void download('template', 'xlsx')}>Download Excel template</button>
         <button type="button" className={button} disabled={busy} onClick={() => void download('template', 'csv')}>Download CSV template</button>
@@ -306,6 +310,9 @@ export default function ConsumptionNorms() {
       {message && <p role="status" className="rounded bg-green-50 p-3 text-green-800">{message}</p>}
     </section>
     {showCreate && canCreate && <NormSetup onCancel={() => setShowCreate(false)} onCreated={async () => { await loadNorms(); setShowCreate(false); setMessage('Consumption norm saved.'); }}/>}
+    {showEngineeringInputs && canCreate && <Suspense fallback={<div role="status" className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/30">Loading workbook review…</div>}>
+      <EngineeringInputWorkspace onClose={() => setShowEngineeringInputs(false)} onSaved={value => setMessage(value)}/>
+    </Suspense>}
     <section className="h-[520px] min-h-0 flex flex-col overflow-hidden rounded-xl border bg-white">
       <DataTable key={epoch} virtualize columns={columns} data={visible} originalData={original} selectedIds={selected} onSelectionChange={setSelected}
         canUpdate={canUpdate && !busy && !loading} canCreate={false} canDelete={false} isLoading={loading || busy}

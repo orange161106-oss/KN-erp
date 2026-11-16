@@ -22,7 +22,7 @@ from app.schemas.rules import (
 )
 from app.schemas.norm_imports import NormImportCorrections, NormImportReview, NormImportPreview, NormImportResult
 from app.core.errors import ApplicationError
-from app.services import norm_imports
+from app.services import norm_imports, engineering_input_staging
 from app.security.dependencies import get_current_user
 from app.services.rules import (
     calculate_single_item_requirement,
@@ -79,6 +79,23 @@ def confirm_norm_import(session: Annotated[Session, Depends(get_db)],
     if checked.mode == "SUPERSEDE":
         require_norm_permission("update")(current_user)
     return norm_imports.confirm(session, file.filename or "", file.file.read(norm_imports.MAX_BYTES + 1), checked, current_user.id)
+
+
+@router.post("/engineering-inputs/preview", dependencies=[Depends(require_norm_permission("create"))])
+def preview_engineering_inputs(session: Annotated[Session, Depends(get_db)], file: UploadFile = File(...)):
+    return engineering_input_staging.preview(file.filename or "", file.file.read(engineering_input_staging.MAX_BYTES + 1), session)
+
+
+@router.post("/engineering-inputs", dependencies=[Depends(require_norm_permission("create"))])
+def stage_engineering_inputs(session: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)], file: UploadFile = File(...)):
+    return engineering_input_staging.save_staging(session, file.filename or "",
+        file.file.read(engineering_input_staging.MAX_BYTES + 1), current_user.id)
+
+
+@router.get("/engineering-inputs/latest", dependencies=[Depends(require_norm_permission("read"))])
+def get_latest_engineering_inputs(session: Annotated[Session, Depends(get_db)]):
+    return engineering_input_staging.latest_staging(session)
 
 
 @router.post("/bulk-update", response_model=ConsumptionNormBatchResponse, dependencies=[Depends(require_norm_permission("update"))])

@@ -7,6 +7,12 @@ import { TableSkeletonRows } from '../../components/ui/Skeleton';
 import HorizontalTableScroll from '../../components/ui/HorizontalTableScroll';
 
 type ActiveTab = 'consumables' | 'assemble' | 'sales_parts';
+type ConsumableCategoryTab = 'production' | 'plant_machinery' | 'stationary' | 'other';
+const CONSUMABLE_CATEGORY_TABS: Array<{ key: ConsumableCategoryTab; label: string; matches: string[] }> = [
+  { key: 'production', label: 'Production Consumables', matches: ['production consumables'] },
+  { key: 'plant_machinery', label: 'Plant And Machinery Consumables', matches: ['plant & machinery maintenance', 'plant and machinery maintenance'] },
+  { key: 'stationary', label: 'Stationary', matches: ['stationary', 'stationery'] },
+];
 
 // ---------------------------------------------------------------------------
 // Type Definitions
@@ -93,6 +99,7 @@ export default function Products() {
   );
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('consumables');
+  const [activeConsumableCategory, setActiveConsumableCategory] = useState<ConsumableCategoryTab>('production');
   const [rowMenu, setRowMenu] = useState<(RowMenuTarget & { x: number; y: number; field?: string }) | null>(null);
   const [inlineEditor, setInlineEditor] = useState<InlineEditor | null>(null);
   const [inlineSaving, setInlineSaving] = useState(false);
@@ -585,6 +592,19 @@ export default function Products() {
     });
   }, [consumables, consumableFilters]);
 
+  const consumableCategoryRows = useMemo(() => {
+    const byCategory = new Map<ConsumableCategoryTab, ConsumableRow[]>();
+    for (const tab of CONSUMABLE_CATEGORY_TABS) {
+      const categoryNames = new Set(tab.matches.map(value => value.trim().toLocaleLowerCase()));
+      byCategory.set(tab.key, filteredConsumables.filter(row => categoryNames.has((row.category || '').trim().toLocaleLowerCase())));
+    }
+    const known = new Set(CONSUMABLE_CATEGORY_TABS.flatMap(tab => tab.matches.map(value => value.trim().toLocaleLowerCase())));
+    const unmatched = filteredConsumables.filter(row => !known.has((row.category || '').trim().toLocaleLowerCase()));
+    if (unmatched.length) byCategory.set('other', unmatched);
+    return byCategory;
+  }, [filteredConsumables]);
+  const visibleConsumables = consumableCategoryRows.get(activeConsumableCategory) ?? [];
+
   const filteredAssembleRows = useMemo(() => {
     return assembleRows.filter((r) => {
       return (
@@ -775,6 +795,23 @@ export default function Products() {
       {/* ========================================================================= */}
       {activeTab === 'consumables' && (
         <div className="space-y-6">
+          <div role="tablist" aria-label="Consumable categories" className="flex flex-wrap gap-2 rounded-lg border border-erp-dark-vanilla/30 bg-white p-2">
+            {CONSUMABLE_CATEGORY_TABS.map(tab => {
+              const count = consumableCategoryRows.get(tab.key)?.length ?? 0;
+              return <button key={tab.key} type="button" role="tab" aria-selected={activeConsumableCategory === tab.key}
+                onClick={() => { if (leaveInlineEditor()) setActiveConsumableCategory(tab.key); }}
+                className={`rounded-lg border px-4 py-2 text-xs font-semibold transition-colors ${activeConsumableCategory === tab.key
+                  ? 'border-erp-orange bg-erp-orange text-white shadow-xs' : 'border-erp-dark-vanilla/30 bg-white text-erp-chocolate hover:bg-erp-vanilla/40'}`}>
+                {tab.label} <span className={`ml-1 rounded-full px-2 py-0.5 ${activeConsumableCategory === tab.key ? 'bg-white/20' : 'bg-erp-vanilla/70'}`}>{count}</span>
+              </button>;
+            })}
+            {consumableCategoryRows.has('other') && <button type="button" role="tab" aria-selected={activeConsumableCategory === 'other'}
+              onClick={() => { if (leaveInlineEditor()) setActiveConsumableCategory('other'); }}
+              className={`rounded-lg border px-4 py-2 text-xs font-semibold ${activeConsumableCategory === 'other'
+                ? 'border-erp-orange bg-erp-orange text-white' : 'border-erp-dark-vanilla/30 bg-white text-erp-chocolate'}`}>
+              Other / Unclassified <span className="ml-1 rounded-full bg-erp-vanilla/70 px-2 py-0.5">{consumableCategoryRows.get('other')?.length ?? 0}</span>
+            </button>}
+          </div>
           {/* Horizontal Single Consumable Intake Panel */}
           {isAdmin && (
             <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
@@ -978,9 +1015,9 @@ export default function Products() {
           <div className="bg-white rounded-xl p-6 border border-erp-dark-vanilla/30 shadow-md">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-sm font-bold text-erp-chocolate">List of Consumables Table</h3>
+                <h3 className="text-sm font-bold text-erp-chocolate">{CONSUMABLE_CATEGORY_TABS.find(tab => tab.key === activeConsumableCategory)?.label ?? 'Other / Unclassified'} Table</h3>
                 <p className="text-xs text-erp-chocolate/70 mt-0.5">
-                  Showing {filteredConsumables.length} of {consumables.length} consumables. Use header filters below to narrow results. {isAdmin && 'Double-click a cell to edit, or right-click for cell and row actions.'}
+                  Showing {visibleConsumables.length} of {consumableCategoryRows.get(activeConsumableCategory)?.length ?? 0} items in this category. Use header filters below to narrow results. {isAdmin && 'Double-click a cell to edit, or right-click for cell and row actions.'}
                 </p>
               </div>
               <div className="flex items-center gap-3">
@@ -1118,8 +1155,8 @@ export default function Products() {
                 <tbody className="divide-y divide-gray-100 font-mono">
                   {loading ? (
                     <TableSkeletonRows rows={7} columns={8} />
-                  ) : filteredConsumables.length > 0 ? (
-                    filteredConsumables.map((row) => <React.Fragment key={row.id}>
+                  ) : visibleConsumables.length > 0 ? (
+                    visibleConsumables.map((row) => <React.Fragment key={row.id}>
                       <tr
                         key={row.id}
                         tabIndex={isAdmin ? 0 : undefined} aria-haspopup={isAdmin ? 'menu' : undefined}
@@ -1183,7 +1220,7 @@ export default function Products() {
                   ) : (
                     <tr>
                       <td colSpan={8} className="p-8 text-center text-erp-chocolate/60 italic font-sans">
-                        No consumables match your search filters or the master table is empty.
+                        No items match this category and the current search filters.
                       </td>
                     </tr>
                   )}

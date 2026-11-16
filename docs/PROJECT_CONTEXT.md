@@ -900,5 +900,31 @@ Verification:
 - **Promotion to Main**: Created Release Pull Request #37 (`develop` -> `main`) and merged via API (`466f841`). Production branch
   `main` is fully updated with all verified milestone features, reconciliation workbooks, and test coverage.
 
+## Product Master consumable category tabs — 2026-11-13
+
+Product Master `List of Consumables` now separates records into workbook-aligned category tabs:
+`Production Consumables`, `Plant And Machinery Consumables`, and `Stationary`. Category matching is
+case-insensitive and accepts the workbook's `Stationary` spelling plus `Stationery`. Any records
+with other or blank categories remain available in a conditional `Other / Unclassified` tab. This is
+a presentation filter over the existing consumable catalog; the catalog data, bulk upload, inline
+editing, row actions, and the separate assembly and sales-part tabs retain their existing workflows.
+
+## Engineering input workbook staging — 2026-11-17
+
+The current `KNL_Engineering_Input_Collection_Form.xlsx` contains 16 Process Verification rows, 62
+Tool Life Details rows, and 141 Product Consumable BOM rows. Source values are incomplete: the
+engineering decisions and approvals are blank; tool-life rating and measurement basis are blank; BOM
+consumable codes, norms, UOMs, and approval fields are blank. The current workbook therefore has 219
+pending rows and zero rows ready for review. The Engineering Input Workbook action in Consumption
+Norms previews and stages every populated row in the existing `ImportBatch` record, including original
+sheet, Excel row, reference, and source values. It checks supplied product, consumable, process, plant,
+and unit values against active masters; flags invalid numbers/dates, duplicate source scopes, unit
+mismatches, and existing active norms. These checks do not change data. Missing values remain blank;
+pending and rejected rows are retained and never sent to calculations. This staging workflow does not
+create or update Product Master, Consumption Norms, Requirement calculations, or purchase calculations.
+Only separately reviewed, complete inputs may be used by those existing workflows. Do not infer
+formulas or use scheduled production reference quantities as engineering rules. The October planning
+baseline and history remain unchanged.
+
 
 
